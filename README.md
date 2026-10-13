@@ -14,81 +14,32 @@ keep it above other windows, drag to move, and double-click to close.
 
 ### 中文
 
-打开应用，点击「截图并置顶」，在任意显示器上拖动框选区域，
-松手后在原位生成贴图，保持框选时的大小。
-拖动贴图可移动位置，点击右上角 × 或双击图片可关闭。
-框选时按 Esc 取消。主窗口可以最小化；关闭主窗口会退出应用。
+- 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶。
+- 拖动贴图可移动；双击或点击 × 关闭。框选时按 Esc 取消。
 
-默认快捷键：macOS 为 **⌘⇧2**，Windows / Linux X11 为 **Ctrl+Shift+2**。
-点击「修改快捷键」，按下新的组合键即可保存，Esc 取消修改。
-组合键需要包含 Ctrl、Alt，或 macOS 的 Command 键；注册失败时保留旧快捷键。
-设置保存在本机，重启后继续使用。
-快捷键被占用或桌面不支持时，从窗口点击截图即可。
-应用自动覆盖所有显示器，每次截图都会刷新屏幕布局，无需选择屏幕。
-一次框选位于一个显示器内；可以把鼠标移到任意屏幕后开始框选。
-框选使用独立的无边框选区层，不进入系统全屏或切换桌面。
-截图保留当时屏幕上可见的内容，包括主窗口和已有贴图。
-可以先最小化主窗口，再用快捷键截图。
+默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
+点击「修改快捷键」可更换。
 
-「主题」默认跟随系统，也可固定为浅色或深色。
-「图标」默认跟随主题：浅色使用极简线条，深色使用深色金属；
-也可手动固定任一图标。界面会显示当前图标预览，设置在重启后保留。
-已有的快捷键设置会自动兼容，不需要重新设置。
-图标设置作用于运行中的应用：macOS 的 Dock 图标，以及 Windows/Linux 的窗口图标。
-安装文件和桌面快捷方式使用极简线条图标，任务栏展示方式由桌面系统决定。
+主题默认跟随系统，图标默认跟随主题；均可在主窗口修改，设置自动保存。
 
-macOS 首次截图时需要屏幕录制权限。在「系统设置 → 隐私与安全性 →
-屏幕录制」（较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，
-然后重新启动应用。
-本地更新复用固定签名证书，避免每次构建都被识别为新的应用。
-首次从临时签名切换到证书签名时仍需要重新授权，之后更新沿用同一身份。
-更名保留原应用标识、设置目录和签名证书，无需重新设置快捷键或主题。
-
-应用读取后的截图数据留在本机内存里，取消框选或关闭贴图后释放。
-不保存历史、不上传截图，没有 OCR、标注或录屏。
+macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制」
+（较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，再重新打开应用。
 
 ### English
 
-Open the app and click **“截图并置顶” (Capture and pin)**. Drag to select a region
-on any monitor, then release to create a floating pin at the original position
-and displayed size. Drag the pin to move it; click **×** in
-the top-right corner or double-click the image to close it. Press **Esc** while
-selecting to cancel. You can minimize the main window; closing it quits the app.
+- Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
+  region on any monitor; release to pin it in place.
+- Drag a pin to move it; double-click or click **×** to close. Press **Esc** to
+  cancel a selection.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
-Click **“修改快捷键” (Change shortcut)** and press a new combination to save it;
-press **Esc** to cancel. Include Ctrl, Alt, or Command on macOS. If registration
-fails, the previous shortcut stays active. Settings are stored locally and
-loaded when the app restarts.
-If the shortcut is unavailable or already in use, click the capture button.
-All monitors are covered automatically and the layout is refreshed on each
-capture. Each selection stays within one monitor; move the pointer to any
-monitor before starting your drag. Separate borderless selection layers avoid
-native fullscreen and desktop transitions. Captures include everything visible
-at that moment, including the main window and existing pins. Minimize the main
-window before using the shortcut if you want to keep it out of the capture.
+Click **“修改快捷键” (Change shortcut)** to change it.
 
-**“主题” (Theme)** follows the system by default; you can also choose Light or Dark.
-**“图标” (Icon)** follows the active theme by default: Minimal lines in light mode
-and Dark metal in dark mode. You can also fix either icon independently of the
-theme. The UI previews the active icon. Preferences survive restarts and existing
-shortcut settings are preserved.
-Icon selection updates the running application's macOS Dock icon or Windows/Linux
-window icons. Installed files and desktop launchers use Minimal lines; taskbar
-presentation depends on the desktop environment.
+Theme follows the system and icons follow the theme by default. Change either
+in the main window; settings are saved automatically.
 
-On macOS, allow Snip2Pin in System Settings → Privacy & Security → Screen
-Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
-Screen-recording permission is required for the first capture.
-Local updates reuse a fixed signing certificate. Switching from an ad-hoc build
-to a certificate-signed build requires permission once for the new identity;
-later updates retain that identity.
-The rename preserves the app ID, settings directory, and certificate, retaining
-existing preferences and the signing identity associated with permissions.
-
-Once read by the app, screenshot data stays in local memory and is released when
-you cancel a selection or close its pin. The app does not retain capture history
-or upload screenshots, and has no OCR, annotation, or recording features.
+On first use on macOS, allow Snip2Pin in System Settings → Privacy & Security →
+Screen Recording (Screen & System Audio Recording on newer macOS), then reopen it.
 
 ## Platform support
 
