@@ -1,59 +1,96 @@
 # SnipSprig · 小贴图
 
-A tiny native macOS menu-bar app: capture a region and keep it floating above
-other windows. Built with Swift 6 and AppKit, without third-party dependencies.
+A small Rust desktop app for Windows, macOS, and Linux. Capture a region,
+keep it above other windows, drag to move, and double-click to close.
 
 ## 使用
 
-1. 打开 `SnipSprig.app`，点击「开始截图」。
-2. 首次使用时，在系统设置里允许 SnipSprig 的屏幕录制权限，然后重新打开应用。
-3. 按 **⌘⇧2**，拖动框选区域，松手后截图自动置顶。
+打开应用，点击「截图并置顶」，拖动框选区域，松手后生成贴图。
+拖动贴图可移动位置，点击右上角 × 或双击图片可关闭。
+框选时按 Esc 取消。主窗口可以最小化；关闭主窗口会退出应用。
 
-拖动贴图可移动位置。点击右上角 **×** 关闭，也可以直接双击图片。
-框选时按 **Esc** 取消。菜单栏里的图钉可以开始截图、关闭全部贴图或退出。
-关闭说明窗口后，应用仍在菜单栏运行。
+快捷键：macOS 为 **⌘⇧2**，Windows / Linux X11 为 **Ctrl+Shift+2**。
+快捷键被占用或桌面不支持时，从窗口点击截图即可。
+多显示器时，可以在主窗口选择要截图的屏幕；该屏幕的画面会在
+当前窗口所在的屏幕上全屏显示，供你框选。
 
-截图临时保存在本机私有临时目录，读取后立即删除；贴图关闭后释放图片。
-应用不会上传截图，也不保存截图历史。全局快捷键不需要辅助功能权限。
-如果快捷键被其他应用占用，请从菜单栏开始截图。
+应用读取后的截图数据留在本机内存里，取消框选或关闭贴图后释放。
+不保存历史、不上传截图，没有 OCR、标注或录屏。
 
-## Build
+## Platform support
 
-Requirements: macOS 13+, Swift 6+ (Xcode or Command Line Tools).
+| Platform | Support |
+| --- | --- |
+| Windows 10/11 | Capture, floating pins, global shortcut |
+| macOS 13+ | Capture, floating pins, global shortcut; screen-recording permission required |
+| Linux X11 | Capture, floating pins, global shortcut; a desktop/window manager is required |
+| Linux Wayland | GUI and desktop-supported capture; pinning and global shortcuts depend on the compositor |
+
+On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
+Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
+An app built locally is ad-hoc signed; it is not Apple-notarized.
+
+Wayland does not expose a universal always-on-top or global-shortcut API.
+Use your compositor's window rules/shortcut settings, or an X11 session, when
+these features are required. Wayland capture also depends on the desktop's
+screenshot/Portal support. Do not assume all compositors behave identically.
+Some Wayland capture backends use a temporary screenshot file, which xcap
+removes after reading. The app itself does not retain files or a capture history.
+
+## Development
+
+Install [Rust](https://rustup.rs/). The toolchain is pinned to 1.99.0.
+All application code is Rust; egui/eframe renders native windows and xcap captures
+screens. No webview, JavaScript runtime, network service, or external screenshot
+command is required.
+
+Ubuntu/Debian build dependencies:
 
 ```sh
-bash scripts/test.sh
-bash scripts/build.sh
-open dist/SnipSprig.app
+sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libxkbcommon-dev libfontconfig1-dev fonts-noto-cjk
 ```
-
-The test runner uses Swift Testing and handles missing macro search paths in
-some Command Line Tools releases using that toolchain's own plugin.
-The build script builds for the host Mac's architecture. The generated app is ad-hoc
-signed for local use; a Developer ID signature and notarization are needed for
-broader distribution. Build output is in `dist/` and is not committed.
-
-To inspect a floating demo without capturing any screen content:
 
 ```sh
-open -n dist/SnipSprig.app --args --demo
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo run --locked
+cargo build --locked --release
 ```
 
-## Project structure
+Binary output: `target/release/snipsprig` (`snipsprig.exe` on Windows).
+Package a Mac app with `bash packaging/macos/build.sh`.
+
+For a safe GUI check using generated pixels instead of desktop content:
+
+```sh
+cargo run --locked -- --demo
+```
+
+In demo mode, click the capture button and select part of the generated grid.
+This exercises capture transitions, cropping, and pin windows without requesting
+screen access.
+
+## Structure
 
 ```text
-Sources/
-  SnipSprig/        App lifecycle, menu bar, global shortcut, floating UI
-  SnipSprigKit/     Capture process lifecycle and screenshot placement
-Tests/             Geometry, cancellation, cleanup, and concurrency tests
-Resources/         App bundle metadata
-scripts/           Build, package, and generate the app icon
-AGENTS.md          Development rules and validation expectations
+src/
+  capture.rs       Monitor adapter, in-memory capture, validated cropping
+  geometry.rs      Viewport-to-pixel conversion and aspect-preserving sizing
+  session.rs       Single-capture gate and stale-result rejection
+  app.rs           Event-driven capture/window lifecycle
+  platform.rs      Global shortcut and local font/icon adapters
+  ui/              Launcher, selection overlay, floating pin
+tests/             Generated-image and state-transition tests
+packaging/         macOS bundle script and Linux desktop entry
+AGENTS.md          Scope, cleanup rules, and validation requirements
 ```
 
-`CaptureRunner` runs macOS's native `screencapture` selection UI asynchronously,
-then returns image data and removes the private temporary directory. AppKit
-creates a non-activating floating panel for each image. Each panel is released
-when closed. All UI state is isolated to the main actor.
+Capture happens on a worker after app windows are hidden. The selected image is
+uploaded to a texture; full-screen capture buffers are released after selection.
+Pins are independent borderless windows. Removing a pin releases its texture.
+Platform permission errors restore the launcher with a visible message.
 
-No OCR, annotations, recording, cloud upload, account system, or auto-launch.
+CI runs format, Clippy, tests, and release builds on Windows, macOS, and Linux.
+CI artifacts contain the corresponding platform binary/app. CI uses generated
+test data and does not verify real desktop permission prompts or compositor rules.

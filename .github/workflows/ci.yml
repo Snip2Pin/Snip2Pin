@@ -1,4 +1,4 @@
-name: macOS
+name: Cross-platform CI
 on:
   push:
   pull_request:
@@ -7,19 +7,46 @@ permissions:
   contents: read
 
 jobs:
-  test-and-build:
-    runs-on: macos-15
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Swift toolchain
-        run: swift --version
-      - name: Test
-        run: bash scripts/test.sh
-      - name: Package app
-        run: bash scripts/build.sh
-      - name: Preserve executable permissions in archive
-        run: ditto -c -k --sequesterRsrc --keepParent dist/SnipSprig.app dist/SnipSprig-macOS.zip
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libxkbcommon-dev libfontconfig1-dev
+      - name: Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --locked
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: bash packaging/macos/build.sh
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          target/release/snipsprig --write-icon dist/io.github.rensilin.snipsprig.png
+          tar -czf dist/SnipSprig-Linux.tar.gz -C target/release snipsprig -C ../../packaging/linux io.github.rensilin.snipsprig.desktop -C ../../dist io.github.rensilin.snipsprig.png
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Compress-Archive -Path target/release/snipsprig.exe -DestinationPath dist/SnipSprig-Windows.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: SnipSprig-macOS
-          path: dist/SnipSprig-macOS.zip
+          name: SnipSprig-${{ runner.os }}
+          path: dist/SnipSprig-*
+          if-no-files-found: error

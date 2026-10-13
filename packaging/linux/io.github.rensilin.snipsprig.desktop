@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=SnipSprig
+Comment=Capture a region and keep it floating on screen
+Exec=snipsprig
+Icon=io.github.rensilin.snipsprig
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+StartupWMClass=io.github.rensilin.snipsprig

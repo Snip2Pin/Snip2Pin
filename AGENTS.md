@@ -1,60 +1,60 @@
 # SnipSprig
 
-SnipSprig is a small native macOS menu-bar app. Its entire user workflow is
-capture a region, keep the image above other windows, move it, and close it.
+## 项目原则
 
-## Scope
+- 保持项目简洁，只做框选截图、置顶贴图、拖动和关闭。
+- 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
+- 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
+- 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
+- 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
+- 只有用户主动操作时才截图，不在启动或后台自动截图。
+- 截图留在本机内存中，关闭贴图后释放，不上传、不写入日志。
+- 系统截图后端若生成临时文件，应在读取后立即清理，不保留截图历史。
+- 尊重系统权限和桌面限制，不绕过屏幕录制、Portal 或安全设置。
 
-- Keep the interface small. Do not add accounts, network calls, analytics,
-  history, annotations, OCR, cloud storage, or launch-at-login without a request.
-- Screen capture is user initiated. Never capture at startup or in the background.
-- Never bypass macOS screen-recording permission or change privacy settings.
-- Screenshot data stays local. Delete temporary captures as soon as they are read.
-- Never commit actual screenshots, secrets, signed credentials, or build outputs.
+## Structure
 
-## Layout
-
-- `Sources/SnipSprig/`: AppKit UI, menu-bar lifecycle, and Carbon hotkey adapter.
-- `Sources/SnipSprigKit/`: capture process lifecycle and pure window geometry.
-- `Tests/SnipSprigKitTests/`: deterministic behavior and capture cleanup checks.
-- `Resources/Info.plist`: stable bundle identity and minimum macOS version.
-- `scripts/build.sh`: reproducible local app packaging and ad-hoc signing.
-- `scripts/test.sh`: portable Swift Testing runner, including CLT macro loading.
-- `scripts/make-icon.swift`: programmatic app icon, no downloaded assets.
-- `.github/workflows/ci.yml`: tests and packaging on macOS.
+- `src/capture.rs`: monitor enumeration and in-memory screen capture.
+- `src/geometry.rs`: validated pixel selection, cropping, and fit calculations.
+- `src/app.rs`: capture state machine, events, and window lifecycle.
+- `src/ui/`: launcher, selection overlay, and floating image views.
+- `src/platform.rs`: keyboard shortcut and local system-font adapters.
+- `tests/`: deterministic checks using generated images.
+- `packaging/`: platform packaging metadata and scripts.
+- `.github/workflows/ci.yml`: format, Clippy, tests, and builds on all three OSes.
 
 ## Development
 
-Requires macOS 13+ and Swift 6+ from Xcode or Command Line Tools.
+Use the pinned Rust toolchain and commit `Cargo.lock`. Keep dependencies small.
+Use published crates instead of unpinned Git branches. Avoid unsafe code,
+production unwrap, hidden background work, and blocking the UI.
+Capture runs on a worker; only the UI thread creates or changes windows.
+Cancellation and closing a pin must release image data and textures.
+Use events and state transitions instead of idle polling.
+
+Use dedicated file patch tools for text edits. Programmatic transformation is
+appropriate only when the transformation itself is complex; state the reason and
+show the resulting diff. Keep code, comments, README, and this file consistent.
+
+## Validation
 
 ```sh
-bash scripts/test.sh
-swift build -c release
-bash scripts/build.sh
-open dist/SnipSprig.app
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --locked --release
+git diff --check
 ```
 
-Use Swift 6 concurrency checking. Keep AppKit state on `@MainActor`.
-Capture must not block the main run loop. Keep subprocess arguments as an array;
-never invoke a shell with interpolated user data. Retain a single capture at a
-time. Clean temporary directories on cancellation, errors, and successful capture.
+Cover reverse drag, DPI conversion, empty and out-of-bounds selections, image
+release, and capture/cancel transitions. Never make CI capture a real desktop or
+require privacy permission. Use generated demo images for visual checks.
+Distinguish compile/test coverage from interactive checks on Windows, macOS,
+Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
-Use focused file patches for text edits. Keep changes confined to the request.
-Add tests for behavioral risks such as cancellation, cleanup, off-screen window
-placement, and negative multi-monitor coordinates; do not mirror UI implementation.
+Do not commit screenshots, credentials, toolchains, caches, or build output.
+Keep macOS bundle ID `io.github.rensilin.snipsprig` stable. Ad-hoc signing does
+not mean an app is notarized for distribution.
 
-## Validation and delivery
-
-Run `bash scripts/test.sh` and `bash scripts/build.sh` after code changes. Check
-`git diff --check`. Verify the app bundle with `codesign --verify --strict`.
-For UI changes, launch the app and inspect the real window. `--demo` uses a
-generated reference image to check floating windows without capturing private
-screen content. Test real capture only after the user grants screen-recording
-access. Report clearly if a live capture was not verified.
-
-Keep the bundle identifier `io.github.rensilin.snipsprig` stable across updates so
-screen-recording permission is associated with the same app identity.
-Local builds are ad-hoc signed, not Apple-notarized distribution builds.
-
-Do not push or publish changes unless the user has authorized that work. This
-initial task explicitly authorizes creation and pushing of this GitHub repository.
+The initial task authorizes creation and pushing of this GitHub repository.
+Do not infer permission to publish releases or change repository visibility.
