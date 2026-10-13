@@ -36,7 +36,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     eframe::run_native(
         "SnipSprig",
-        options,
+        platform::window_options(options),
         Box::new(|cc| Ok(Box::new(app::SnipSprig::new(cc)))),
     )?;
     Ok(())

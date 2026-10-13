@@ -3309,6 +3309,7 @@ dependencies = [
  "global-hotkey",
  "image",
  "objc2-core-graphics",
+ "winit",
  "xcap",
 ]
 

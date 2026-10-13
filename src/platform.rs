@@ -12,6 +12,20 @@ pub const SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl + Shift + 2"
 };
 
+pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
+    // XWayland preserves window-level requests that native Wayland cannot make.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let mut options = options;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+        return options;
+    }
+    options
+}
+
 pub struct Shortcut {
     manager: GlobalHotKeyManager,
     key: HotKey,

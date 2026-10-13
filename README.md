@@ -24,13 +24,15 @@ keep it above other windows, drag to move, and double-click to close.
 | Windows 10/11 | Capture, floating pins, global shortcut |
 | macOS 13+ | Capture, floating pins, global shortcut; screen-recording permission required |
 | Linux X11 | Capture, floating pins, global shortcut; a desktop/window manager is required |
-| Linux Wayland | GUI and desktop-supported capture; pinning and global shortcuts depend on the compositor |
+| Linux Wayland | Uses XWayland for window-level requests when available; capture and global shortcuts depend on the desktop |
 
 On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
 Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
 An app built locally is ad-hoc signed; it is not Apple-notarized.
 
-Wayland does not expose a universal always-on-top or global-shortcut API.
+On Linux with an X11 display (including XWayland), the app uses the X11 window
+backend so floating pins can request always-on-top through the window manager.
+Pure Wayland does not expose a universal always-on-top or global-shortcut API.
 Use your compositor's window rules/shortcut settings, or an X11 session, when
 these features are required. Wayland capture also depends on the desktop's
 screenshot/Portal support. Do not assume all compositors behave identically.
@@ -47,7 +49,7 @@ command is required.
 Ubuntu/Debian build dependencies:
 
 ```sh
-sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libxkbcommon-dev libfontconfig1-dev fonts-noto-cjk
+sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libxkbcommon-dev libfontconfig1-dev fonts-noto-cjk
 ```
 
 ```sh
