@@ -28,6 +28,12 @@ jobs:
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
       - name: Format
         run: cargo fmt --all -- --check
+      - name: macOS packaging scripts
+        if: runner.os == 'macOS'
+        run: |
+          bash -n packaging/macos/build.sh packaging/macos/signing.sh packaging/macos/test-signing.sh
+          rustfmt --check packaging/macos/tests/signing.rs
+          plutil -lint packaging/macos/Info.plist
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests

@@ -14,6 +14,10 @@
 - 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
 - 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
+- macOS 本地安装必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名。
+- 更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。
+- 签名私钥放在独立的本地钥匙串，不进入仓库；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
+- 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
 - Linux 有 X11 显示服务时优先使用 X11/XWayland 窗口后端，保留置顶能力。
 - 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
 - 只有用户主动操作时才截图，不在启动或后台自动截图。
@@ -82,8 +86,10 @@ Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
 Do not commit screenshots, credentials, toolchains, caches, or build output.
-Keep macOS bundle ID `io.github.rensilin.snipsprig` stable. Ad-hoc signing does
-not mean an app is notarized for distribution.
+Keep macOS bundle ID `io.github.rensilin.snipsprig` stable. Local certificate
+signing is for development; it does not mean an app is notarized for distribution.
+`build.sh --install` performs a local development update. Distribution packaging
+requires `--release` and a Developer ID identity, only on an explicit release request.
 
 The initial task authorizes creation and pushing of this GitHub repository.
 Do not infer permission to publish releases or change repository visibility.

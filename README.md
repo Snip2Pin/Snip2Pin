@@ -38,6 +38,8 @@ keep it above other windows, drag to move, and double-click to close.
 macOS 首次截图时需要屏幕录制权限。在「系统设置 → 隐私与安全性 →
 屏幕录制」（较新系统称为「屏幕与系统音频录制」）中允许 SnipSprig，
 然后重新启动应用。
+本地更新复用固定签名证书，避免每次构建都被识别为新的应用。
+首次从临时签名切换到证书签名时仍需要重新授权，之后更新沿用同一身份。
 
 应用读取后的截图数据留在本机内存里，取消框选或关闭贴图后释放。
 不保存历史、不上传截图，没有 OCR、标注或录屏。
@@ -75,6 +77,9 @@ presentation depends on the desktop environment.
 On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
 Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
 Screen-recording permission is required for the first capture.
+Local updates reuse a fixed signing certificate. Switching from an ad-hoc build
+to a certificate-signed build requires permission once for the new identity;
+later updates retain that identity.
 
 Once read by the app, screenshot data stays in local memory and is released when
 you cancel a selection or close its pin. The app does not retain capture history
@@ -89,7 +94,8 @@ or upload screenshots, and has no OCR, annotation, or recording features.
 | Linux X11 | Capture, floating pins, global shortcut; a desktop/window manager is required |
 | Linux Wayland | Uses XWayland for window-level requests when available; capture and global shortcuts depend on the desktop |
 
-A macOS app built locally is ad-hoc signed; it is not Apple-notarized.
+Local macOS builds use a fixed development signing certificate; they are not
+Apple-notarized.
 
 On Linux with an X11 display (including XWayland), the app uses the X11 window
 backend so floating pins can request always-on-top through the window manager.
@@ -136,6 +142,28 @@ Development builds use `target/debug/snipsprig` (`snipsprig.exe` on Windows).
 Version changes, tags, distribution packages, and published releases require an
 explicit release request. CI validates ordinary pushes and pull requests without
 packaging or publishing an application.
+
+For local macOS installation, create a development identity once. Its key and
+password stay in a private, app-specific keychain directory outside the repository;
+the normal keychain search list is preserved. Trust the certificate only for code
+signing by `/usr/bin/codesign`, using the macOS confirmation when requested:
+
+```sh
+bash packaging/macos/signing.sh --setup
+security add-trusted-cert -r trustRoot -p codeSign -a /usr/bin/codesign \
+  -k "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/identity.keychain-db" \
+  "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/certificate.pem"
+bash packaging/macos/test-signing.sh
+bash packaging/macos/build.sh --install
+```
+
+Keep this identity for future updates. The installer rejects a different signing
+identity, keeps the app's bundle ID and version, and refreshes only this app's
+Finder/Launchpad metadata. It does not stop the running application; reopen it
+yourself to use the update. `SNIPSPRIG_SIGN_IDENTITY` and optional
+`SNIPSPRIG_SIGN_KEYCHAIN` can select an existing signing identity instead.
+The default build is a development bundle; only `--release` creates a distribution
+archive, and it requires a Developer ID signing identity.
 
 SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
 Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
