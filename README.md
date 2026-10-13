@@ -1,7 +1,9 @@
 # SnipSprig · 小贴图
 
-<img src="assets/icons/line.svg" width="96" alt="Light icon: minimal lines" />
-<img src="assets/icons/metal.svg" width="96" alt="Dark icon: dark metal" />
+<p>
+  <img src="assets/icons/line.svg" width="96" alt="Light icon: minimal lines" />
+  <img src="assets/icons/metal.svg" width="96" alt="Dark icon: dark metal" />
+</p>
 
 A small Rust desktop app for Windows, macOS, and Linux. Capture a region,
 keep it above other windows, drag to move, and double-click to close.
