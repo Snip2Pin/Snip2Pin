@@ -216,6 +216,7 @@ impl Preferences {
 }
 
 pub fn path() -> Option<PathBuf> {
+    // Keep the historical data directory so renaming the app preserves preferences.
     directories::ProjectDirs::from("io.github", "rensilin", "SnipSprig")
         .map(|dirs| dirs.config_dir().join("preferences.toml"))
 }

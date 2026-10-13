@@ -1,5 +1,5 @@
 use eframe::egui::{Event, Key, Modifiers};
-use snipsprig::{
+use snip2pin::{
     icon::{self, Variant},
     settings::{Binding, Icon, Preferences, Theme},
 };
@@ -82,7 +82,7 @@ fn both_icon_assets_match_vectors_and_render_at_small_and_large_sizes() {
 #[test]
 fn shortcut_preference_survives_restart_and_invalid_files_are_reported() {
     let directory = std::env::temp_dir().join(format!(
-        "snipsprig-settings-{}-{}",
+        "snip2pin-settings-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

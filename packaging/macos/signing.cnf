@@ -4,7 +4,7 @@ distinguished_name = identity
 x509_extensions = codesign
 
 [identity]
-CN = SnipSprig Local Development
+CN = Snip2Pin Local Development
 
 [codesign]
 basicConstraints = critical,CA:false

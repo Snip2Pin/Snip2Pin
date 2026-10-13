@@ -1,7 +1,7 @@
 [Desktop Entry]
-Name=SnipSprig
+Name=Snip2Pin
 Comment=Capture a region and keep it floating on screen
-Exec=snipsprig
+Exec=snip2pin
 Icon=io.github.rensilin.snipsprig
 Terminal=false
 Type=Application

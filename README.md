@@ -1,4 +1,4 @@
-# SnipSprig · 小贴图
+# Snip2Pin · 小贴图
 
 <p>
   <img src="assets/icons/line.svg" width="96" alt="Light icon: minimal lines" />
@@ -7,6 +7,8 @@
 
 A small Rust desktop app for Windows, macOS, and Linux. Capture a region,
 keep it above other windows, drag to move, and double-click to close.
+
+**截图，原位置顶。 / Snip a region. Pin it in place.**
 
 ## 使用 / Usage
 
@@ -36,10 +38,11 @@ keep it above other windows, drag to move, and double-click to close.
 安装文件和桌面快捷方式使用极简线条图标，任务栏展示方式由桌面系统决定。
 
 macOS 首次截图时需要屏幕录制权限。在「系统设置 → 隐私与安全性 →
-屏幕录制」（较新系统称为「屏幕与系统音频录制」）中允许 SnipSprig，
+屏幕录制」（较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，
 然后重新启动应用。
 本地更新复用固定签名证书，避免每次构建都被识别为新的应用。
 首次从临时签名切换到证书签名时仍需要重新授权，之后更新沿用同一身份。
+更名保留原应用标识、设置目录和签名证书，无需重新设置快捷键或主题。
 
 应用读取后的截图数据留在本机内存里，取消框选或关闭贴图后释放。
 不保存历史、不上传截图，没有 OCR、标注或录屏。
@@ -74,12 +77,14 @@ Icon selection updates the running application's macOS Dock icon or Windows/Linu
 window icons. Installed files and desktop launchers use Minimal lines; taskbar
 presentation depends on the desktop environment.
 
-On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
+On macOS, allow Snip2Pin in System Settings → Privacy & Security → Screen
 Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
 Screen-recording permission is required for the first capture.
 Local updates reuse a fixed signing certificate. Switching from an ad-hoc build
 to a certificate-signed build requires permission once for the new identity;
 later updates retain that identity.
+The rename preserves the app ID, settings directory, and certificate, retaining
+existing preferences and the signing identity associated with permissions.
 
 Once read by the app, screenshot data stays in local memory and is released when
 you cancel a selection or close its pin. The app does not retain capture history
@@ -138,7 +143,7 @@ cargo build --locked
 git lfs fsck
 ```
 
-Development builds use `target/debug/snipsprig` (`snipsprig.exe` on Windows).
+Development builds use `target/debug/snip2pin` (`snip2pin.exe` on Windows).
 Version changes, tags, distribution packages, and published releases require an
 explicit release request. CI validates ordinary pushes and pull requests without
 packaging or publishing an application.
@@ -164,8 +169,10 @@ bash packaging/macos/build.sh --install
 Keep this identity for future updates. The installer rejects a different signing
 identity, keeps the app's bundle ID and version, and refreshes only this app's
 Finder/Launchpad metadata. It does not stop the running application; reopen it
-yourself to use the update. `SNIPSPRIG_SIGN_IDENTITY` and optional
-`SNIPSPRIG_SIGN_KEYCHAIN` can select an existing signing identity instead.
+yourself to use the update. `SNIP2PIN_SIGN_IDENTITY` and optional
+`SNIP2PIN_SIGN_KEYCHAIN` can select an existing signing identity instead.
+The historical `SnipSprig` directory and bundle ID are intentionally retained
+so renaming the app does not create a new settings or signing identity.
 The default build is a development bundle; only `--release` creates a distribution
 archive, and it requires a Developer ID signing identity.
 

@@ -5,11 +5,11 @@ use std::sync::{
 
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
-use snipsprig::settings::Binding;
+use snip2pin::settings::Binding;
 
 pub fn set_app_icon(
     ctx: &egui::Context,
-    variant: snipsprig::icon::Variant,
+    variant: snip2pin::icon::Variant,
     data: Arc<egui::IconData>,
 ) -> Result<(), String> {
     let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
@@ -25,14 +25,14 @@ pub fn set_app_icon(
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-fn set_dock_icon(variant: snipsprig::icon::Variant) -> Result<(), String> {
+fn set_dock_icon(variant: snip2pin::icon::Variant) -> Result<(), String> {
     use objc2::AnyThread;
     use objc2_app_kit::{
         NSApplication, NSBitmapFormat, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage,
     };
     use objc2_foundation::NSSize;
     let main_thread = objc2::MainThreadMarker::new().ok_or("图标必须在 UI 线程更新。")?;
-    let pixels = snipsprig::icon::render(variant, 256)?;
+    let pixels = snip2pin::icon::render(variant, 256)?;
     let row_len = pixels.width() as usize * 4;
     // SAFETY: Main-thread operation, bounded 256x256 RGBA pixels, valid color
     // space and matching layout. Null planes request memory owned by AppKit.
@@ -73,7 +73,7 @@ pub fn prepare_floating_windows() {
         let application = NSApplication::sharedApplication(main_thread);
         for window in application.windows() {
             let title = window.title().to_string();
-            if title == "SnipSprig · 框选" || title == "SnipSprig · 贴图" {
+            if title == "Snip2Pin · 框选" || title == "Snip2Pin · 贴图" {
                 let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
@@ -81,7 +81,7 @@ pub fn prepare_floating_windows() {
                 if window.collectionBehavior() != behavior {
                     window.setCollectionBehavior(behavior);
                 }
-                if title == "SnipSprig · 框选" {
+                if title == "Snip2Pin · 框选" {
                     // The demo is a regular small test window; it need not
                     // cover system UI or block other apps during development.
                     let level = if std::env::args().any(|argument| argument == "--demo") {
@@ -114,7 +114,7 @@ pub fn finish_capture(ctx: &egui::Context) {
         if let Some(main_thread) = objc2::MainThreadMarker::new() {
             let application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
             for window in application.windows() {
-                if window.title().to_string() == "SnipSprig · 框选" && window.isKeyWindow() {
+                if window.title().to_string() == "Snip2Pin · 框选" && window.isKeyWindow() {
                     window.resignKeyWindow();
                 }
             }

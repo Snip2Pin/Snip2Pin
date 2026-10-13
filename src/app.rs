@@ -10,7 +10,7 @@ use std::{
 };
 
 use eframe::egui::{self, ColorImage, TextureHandle, ViewportCommand, ViewportId};
-use snipsprig::{
+use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry::{self, Placement},
     icon::{self, Variant},
@@ -54,7 +54,7 @@ struct Pin {
     prepared: Arc<AtomicU8>,
 }
 
-pub struct SnipSprig {
+pub struct Snip2Pin {
     events: Receiver<Event>,
     sender: Sender<Event>,
     phase: Phase,
@@ -74,7 +74,7 @@ pub struct SnipSprig {
     demo: bool,
 }
 
-impl SnipSprig {
+impl Snip2Pin {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         platform::install_fonts(&cc.egui_ctx);
         let demo = std::env::args().any(|argument| argument == "--demo");
@@ -453,7 +453,7 @@ impl SnipSprig {
             ctx.show_viewport_deferred(
                 layer_id(display_id),
                 self.window_icon(egui::ViewportBuilder::default())
-                    .with_title("SnipSprig · 框选")
+                    .with_title("Snip2Pin · 框选")
                     .with_decorations(false)
                     .with_transparent(true)
                     .with_has_shadow(false)
@@ -515,7 +515,7 @@ impl SnipSprig {
             ctx.show_viewport_deferred(
                 ViewportId::from_hash_of(("pin", id)),
                 self.window_icon(egui::ViewportBuilder::default())
-                    .with_title("SnipSprig · 贴图")
+                    .with_title("Snip2Pin · 贴图")
                     .with_decorations(false)
                     .with_transparent(true)
                     .with_has_shadow(false)
@@ -557,7 +557,7 @@ impl SnipSprig {
     }
 }
 
-impl eframe::App for SnipSprig {
+impl eframe::App for Snip2Pin {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0; 4]
     }
@@ -659,9 +659,9 @@ fn texture(ctx: &egui::Context, name: &str, pixels: &image::RgbaImage) -> Textur
 mod tests {
     use super::*;
 
-    fn app() -> SnipSprig {
+    fn app() -> Snip2Pin {
         let (sender, events) = mpsc::channel();
-        SnipSprig {
+        Snip2Pin {
             sender,
             events,
             phase: Phase::Idle,

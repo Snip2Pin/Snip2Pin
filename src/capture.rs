@@ -69,7 +69,7 @@ pub fn desktop() -> Result<Vec<Snapshot>, String> {
     if !objc2_core_graphics::CGPreflightScreenCaptureAccess()
         && !objc2_core_graphics::CGRequestScreenCaptureAccess()
     {
-        return Err("需要屏幕录制权限。请在系统设置的「隐私与安全性 → 屏幕与系统音频录制」中允许 SnipSprig，再重新打开应用。".into());
+        return Err("需要屏幕录制权限。请在系统设置的「隐私与安全性 → 屏幕与系统音频录制」中允许 Snip2Pin，再重新打开应用。".into());
     }
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     if monitors.is_empty() {

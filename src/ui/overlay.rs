@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle};
-use snipsprig::geometry::{self, PixelRect};
+use snip2pin::geometry::{self, PixelRect};
 
 pub struct Selection {
     pub texture: TextureHandle,

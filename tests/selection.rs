@@ -1,5 +1,5 @@
 use image::{Rgba, RgbaImage};
-use snipsprig::{
+use snip2pin::{
     capture,
     geometry::{self, PixelRect},
     session::CaptureGate,

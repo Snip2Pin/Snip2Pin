@@ -3411,7 +3411,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "snipsprig"
+name = "snip2pin"
 version = "0.2.0"
 dependencies = [
  "directories",

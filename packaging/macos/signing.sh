@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SIGNING_DIR="${SNIPSPRIG_SIGNING_DIR:-$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing}"
+SIGNING_DIR="${SNIP2PIN_SIGNING_DIR:-$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing}"
 KEYCHAIN="$SIGNING_DIR/identity.keychain-db"
 CERTIFICATE="$SIGNING_DIR/certificate.pem"
 PASSWORD_FILE="$SIGNING_DIR/password.bin"
@@ -15,7 +15,7 @@ ensure_public_certificate() {
     local fingerprint
     fingerprint="$(openssl x509 -in "$CERTIFICATE" -noout -fingerprint -sha1)"
     fingerprint="${fingerprint#*=}"
-    if ! security find-certificate -a -Z -c 'SnipSprig Local Development' 2>/dev/null |
+    if ! security find-certificate -a -Z 2>/dev/null |
         grep -F "SHA-1 hash: ${fingerprint//:/}" >/dev/null; then
         # Trust evaluation needs a discoverable public certificate; the private key stays isolated.
         security add-certificates "$CERTIFICATE"
@@ -78,15 +78,15 @@ case "${1:-}" in
         ;;
     --sign)
         [[ $# -eq 2 ]] || { printf 'Usage: signing.sh --sign APP\n' >&2; exit 2; }
-        if [[ -n "${SNIPSPRIG_SIGN_IDENTITY:-}" ]]; then
-            [[ "$SNIPSPRIG_SIGN_IDENTITY" != '-' ]] || {
+        if [[ -n "${SNIP2PIN_SIGN_IDENTITY:-}" ]]; then
+            [[ "$SNIP2PIN_SIGN_IDENTITY" != '-' ]] || {
                 printf 'Ad-hoc signing loses privacy permissions on updates. Use a certificate.\n' >&2
                 exit 1
             }
-            SIGN_ARGS=(--sign "$SNIPSPRIG_SIGN_IDENTITY")
-            if [[ -n "${SNIPSPRIG_SIGN_KEYCHAIN:-}" ]]; then
-                prepare_signing_keychain "$SNIPSPRIG_SIGN_KEYCHAIN"
-                SIGN_ARGS+=(--keychain "$SNIPSPRIG_SIGN_KEYCHAIN")
+            SIGN_ARGS=(--sign "$SNIP2PIN_SIGN_IDENTITY")
+            if [[ -n "${SNIP2PIN_SIGN_KEYCHAIN:-}" ]]; then
+                prepare_signing_keychain "$SNIP2PIN_SIGN_KEYCHAIN"
+                SIGN_ARGS+=(--keychain "$SNIP2PIN_SIGN_KEYCHAIN")
             fi
         else
             [[ -f "$KEYCHAIN" && -f "$CERTIFICATE" && -f "$PASSWORD_FILE" ]] || {

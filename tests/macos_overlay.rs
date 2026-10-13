@@ -40,7 +40,7 @@ fn main() {
                 true,
             )
         };
-        window.setTitle(&NSString::from_str("SnipSprig · 框选"));
+        window.setTitle(&NSString::from_str("Snip2Pin · 框选"));
         platform::prepare_floating_windows();
         assert!(!window.isVisible());
         assert!(!application.isActive());

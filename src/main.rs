@@ -6,7 +6,7 @@ mod ui;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("SnipSprig: {error}");
+        eprintln!("Snip2Pin: {error}");
         std::process::exit(1);
     }
 }
@@ -18,21 +18,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .next()
             .ok_or("--write-icon needs an output path")?;
         let variant = match arguments.next().as_deref().unwrap_or("line") {
-            "line" => snipsprig::icon::Variant::Line,
-            "metal" => snipsprig::icon::Variant::Metal,
+            "line" => snip2pin::icon::Variant::Line,
+            "metal" => snip2pin::icon::Variant::Metal,
             _ => return Err("icon must be line or metal".into()),
         };
-        snipsprig::icon::render_vector(variant, 1024)?.save(path)?;
+        snip2pin::icon::render_vector(variant, 1024)?.save(path)?;
         return Ok(());
     }
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("SnipSprig · 小贴图")
+            .with_title("Snip2Pin · 小贴图")
             .with_app_id("io.github.rensilin.snipsprig")
             .with_inner_size([400.0, 380.0])
             .with_transparent(true)
             .with_icon(eframe::egui::IconData {
-                rgba: snipsprig::icon::render(snipsprig::icon::Variant::Line, 64)?.into_raw(),
+                rgba: snip2pin::icon::render(snip2pin::icon::Variant::Line, 64)?.into_raw(),
                 width: 64,
                 height: 64,
             })
@@ -41,9 +41,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     eframe::run_native(
-        "SnipSprig",
+        "Snip2Pin",
         platform::window_options(options),
-        Box::new(|cc| Ok(Box::new(app::SnipSprig::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::Snip2Pin::new(cc)))),
     )?;
     Ok(())
 }

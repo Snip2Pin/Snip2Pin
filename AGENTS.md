@@ -1,8 +1,8 @@
-# SnipSprig
+# Snip2Pin
 
 ## 项目原则
 
-- 保持项目简洁，只做框选截图、置顶贴图、拖动和关闭，支持修改截图快捷键、主题和图标。
+- 产品定位是截图 + Pin：框选截图、原位置顶、拖动和关闭；快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
@@ -89,6 +89,8 @@ Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 Do not commit screenshots, credentials, toolchains, caches, or build output.
 Keep macOS bundle ID `io.github.rensilin.snipsprig` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
+The Snip2Pin rename preserves the historical app ID, preference/signing directory,
+and existing certificate. Do not rename these identities or regenerate credentials.
 `build.sh --install` performs a local development update. Distribution packaging
 requires `--release` and a Developer ID identity, only on an explicit release request.
 

@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-use snipsprig::settings::{Icon, Preferences, Theme};
+use snip2pin::settings::{Icon, Preferences, Theme};
 
 pub enum Action {
     Capture,

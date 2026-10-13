@@ -2,14 +2,14 @@
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR"
-WORK_DIR="$(mktemp -d /private/tmp/snipsprig-signing-test.XXXXXX)"
+WORK_DIR="$(mktemp -d /private/tmp/snip2pin-signing-test.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 ORIGINAL_SEARCH_LIST="$(security list-keychains -d user)"
 for variant in first second; do
     APP="$WORK_DIR/$variant.app"
     mkdir -p "$APP/Contents/MacOS"
     rustc packaging/macos/tests/signing.rs --cfg "${variant}_build" \
-        -o "$APP/Contents/MacOS/snipsprig"
+        -o "$APP/Contents/MacOS/snip2pin"
     cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
     bash packaging/macos/signing.sh --sign "$APP"
 done
