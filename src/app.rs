@@ -151,9 +151,19 @@ impl SnipSprig {
         let sender = self.sender.clone();
         let ctx = ctx.clone();
         let demo = self.demo;
+        let demo_origin = ctx.input(|input| {
+            input
+                .viewport()
+                .outer_rect
+                .map(|rect| [rect.min.x, rect.min.y])
+        });
         std::thread::spawn(move || {
             let result = if demo {
-                Ok(vec![capture::demo()])
+                let mut snapshot = capture::demo();
+                if let Some(origin) = demo_origin {
+                    snapshot.display.origin = origin;
+                }
+                Ok(vec![snapshot])
             } else {
                 capture::desktop()
             };
@@ -164,8 +174,9 @@ impl SnipSprig {
 
     fn restore(&mut self, ctx: &egui::Context) {
         let was_selecting = matches!(self.phase, Phase::Selecting { .. });
-        for layer in self.layers.values_mut() {
+        for (&display_id, layer) in &mut self.layers {
             layer.selection = None;
+            ctx.request_repaint_of(layer_id(display_id));
         }
         self.phase = Phase::Idle;
         if was_selecting {
@@ -212,6 +223,9 @@ impl SnipSprig {
                     snapshots,
                     pending_pin: None,
                 };
+                for &display_id in self.layers.keys() {
+                    ctx.request_repaint_of(layer_id(display_id));
+                }
                 ctx.request_repaint_of(ViewportId::ROOT);
             }
             result => {
@@ -484,6 +498,11 @@ impl eframe::App for SnipSprig {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if matches!(self.phase, Phase::Selecting { .. })
+            && ui.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.restore(&ctx);
+        }
         let idle = matches!(self.phase, Phase::Idle);
         let action = launcher::show(
             ui,
@@ -670,6 +689,58 @@ mod tests {
                 .all(|command| matches!(command, ViewportCommand::SetTheme(_))),
             "unexpected root commands: {:?}",
             output.viewport_output[&ViewportId::ROOT].commands
+        );
+    }
+
+    #[test]
+    fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        app.layers.insert(
+            0,
+            Layer {
+                display: capture::demo().display,
+                selection: None,
+            },
+        );
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        let drain = || {
+            for _ in 0..4 {
+                let mut input = egui::RawInput {
+                    viewport_id: layer_id(0),
+                    ..Default::default()
+                };
+                input.viewports.insert(
+                    layer_id(0),
+                    egui::ViewportInfo {
+                        parent: Some(ViewportId::ROOT),
+                        ..Default::default()
+                    },
+                );
+                let mut output = ctx.run_ui(input, |_| {});
+                output.textures_delta.clear();
+            }
+        };
+        drain();
+        let repaints = Arc::new(Mutex::new(Vec::new()));
+        let observed = repaints.clone();
+        ctx.set_request_repaint_callback(move |info| {
+            observed.lock().expect("repaint log").push(info.viewport_id);
+        });
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![capture::demo()]), &ctx);
+        assert!(
+            repaints.lock().expect("repaint log").contains(&layer_id(0)),
+            "ready must paint the selection without waiting for pointer input"
+        );
+        drain();
+        repaints.lock().expect("repaint log").clear();
+        app.restore(&ctx);
+        assert!(
+            repaints.lock().expect("repaint log").contains(&layer_id(0)),
+            "cancel must clear the selection without waiting for pointer input"
         );
     }
 }

@@ -24,10 +24,14 @@ pub fn prepare_floating_windows() {
                         | NSWindowCollectionBehavior::FullScreenAuxiliary,
                 );
                 if title == "SnipSprig · 框选" {
-                    window.setLevel(
-                        isize::try_from(objc2_core_graphics::kCGMainMenuWindowLevel + 1)
-                            .unwrap_or(25),
-                    );
+                    // The demo is a regular small test window; it need not
+                    // cover system UI or block other apps during development.
+                    let level = if std::env::args().any(|argument| argument == "--demo") {
+                        0
+                    } else {
+                        (objc2_core_graphics::kCGMainMenuWindowLevel + 1) as isize
+                    };
+                    window.setLevel(level);
                 }
             }
         }
