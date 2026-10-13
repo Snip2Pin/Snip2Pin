@@ -3,7 +3,9 @@
 A small Rust desktop app for Windows, macOS, and Linux. Capture a region,
 keep it above other windows, drag to move, and double-click to close.
 
-## 使用
+## 使用 / Usage
+
+### 中文
 
 打开应用，点击「截图并置顶」，拖动框选区域，松手后生成贴图。
 拖动贴图可移动位置，点击右上角 × 或双击图片可关闭。
@@ -14,8 +16,33 @@ keep it above other windows, drag to move, and double-click to close.
 多显示器时，可以在主窗口选择要截图的屏幕；该屏幕的画面会在
 当前窗口所在的屏幕上全屏显示，供你框选。
 
+macOS 首次截图时需要屏幕录制权限。在「系统设置 → 隐私与安全性 →
+屏幕录制」（较新系统称为「屏幕与系统音频录制」）中允许 SnipSprig，
+然后重新启动应用。
+
 应用读取后的截图数据留在本机内存里，取消框选或关闭贴图后释放。
 不保存历史、不上传截图，没有 OCR、标注或录屏。
+
+### English
+
+Open the app and click **“截图并置顶” (Capture and pin)**. Drag to select a region,
+then release to create a floating pin. Drag the pin to move it; click **×** in
+the top-right corner or double-click the image to close it. Press **Esc** while
+selecting to cancel. You can minimize the main window; closing it quits the app.
+
+Shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
+If the shortcut is unavailable or already in use, click the capture button.
+With multiple monitors, choose the monitor to capture in the main window. Its
+captured image appears full-screen on the monitor containing the main window,
+where you can select a region.
+
+On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
+Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
+Screen-recording permission is required for the first capture.
+
+Once read by the app, screenshot data stays in local memory and is released when
+you cancel a selection or close its pin. The app does not retain capture history
+or upload screenshots, and has no OCR, annotation, or recording features.
 
 ## Platform support
 
@@ -26,9 +53,7 @@ keep it above other windows, drag to move, and double-click to close.
 | Linux X11 | Capture, floating pins, global shortcut; a desktop/window manager is required |
 | Linux Wayland | Uses XWayland for window-level requests when available; capture and global shortcuts depend on the desktop |
 
-On macOS, allow SnipSprig in System Settings → Privacy & Security → Screen
-Recording (called Screen & System Audio Recording on newer macOS), then relaunch.
-An app built locally is ad-hoc signed; it is not Apple-notarized.
+A macOS app built locally is ad-hoc signed; it is not Apple-notarized.
 
 On Linux with an X11 display (including XWayland), the app uses the X11 window
 backend so floating pins can request always-on-top through the window manager.
