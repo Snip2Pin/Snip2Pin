@@ -1,0 +1,25 @@
+name: macOS
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Swift toolchain
+        run: swift --version
+      - name: Test
+        run: bash scripts/test.sh
+      - name: Package app
+        run: bash scripts/build.sh
+      - name: Preserve executable permissions in archive
+        run: ditto -c -k --sequesterRsrc --keepParent dist/SnipSprig.app dist/SnipSprig-macOS.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SnipSprig-macOS
+          path: dist/SnipSprig-macOS.zip
