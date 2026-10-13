@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="base" x1="120" y1="80" x2="860" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#35BCA8"/>
+      <stop offset="1" stop-color="#087869"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="240" y1="240" x2="700" y2="800" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EAF7F2"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="600" y1="224" x2="760" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFAC82"/>
+      <stop offset="1" stop-color="#F26458"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#base)"/>
+  <path d="M272 190H750" stroke="#91E6D5" stroke-opacity=".25" stroke-width="3" stroke-linecap="round"/>
+  <g transform="rotate(-9 512 536)">
+    <rect x="234" y="306" width="568" height="480" rx="64" fill="#014E45" opacity=".19"/>
+    <rect x="222" y="278" width="568" height="480" rx="64" fill="url(#paper)"/>
+    <rect x="265" y="321" width="482" height="340" rx="30" fill="#D5ECE4"/>
+    <circle cx="368" cy="416" r="37" fill="#F8CD7C"/>
+    <path d="M265 604L400 478Q418 461 436 480L506 551L591 457Q611 434 631 457L747 585V631Q747 661 717 661H295Q265 661 265 631Z" fill="#6BBBA5"/>
+    <path d="M265 633L392 538Q410 525 429 541L506 606L591 535Q610 519 630 535L747 626V631Q747 661 717 661H295Q265 661 265 633Z" fill="#278F79"/>
+    <path d="M281 709H439" stroke="#A6CEBE" stroke-width="16" stroke-linecap="round"/>
+  </g>
+  <g transform="rotate(28 673 347)">
+    <path d="M673 400V543" stroke="#034F47" stroke-opacity=".15" stroke-width="29" stroke-linecap="round"/>
+    <path d="M673 396V529" stroke="#EDF7F3" stroke-width="20" stroke-linecap="round"/>
+    <path d="M615 273H731L715 349Q710 363 731 380L757 400Q770 417 750 427H596Q576 417 589 400L615 380Q636 363 631 349Z" fill="#AB3C3B" opacity=".15" transform="translate(5 12)"/>
+    <path d="M615 261H731L715 337Q710 351 731 368L757 388Q770 405 750 415H596Q576 405 589 388L615 368Q636 351 631 337Z" fill="url(#pin)"/>
+    <rect x="601" y="231" width="144" height="52" rx="26" fill="#FFB893"/>
+    <path d="M630 249H712" stroke="#FFE3C9" stroke-width="10" stroke-linecap="round"/>
+  </g>
+</svg>

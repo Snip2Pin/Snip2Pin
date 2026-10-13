@@ -17,16 +17,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let path = arguments
             .next()
             .ok_or("--write-icon needs an output path")?;
-        platform::icon(1024).save(path)?;
+        snipsprig::icon::render(1024)?.save(path)?;
         return Ok(());
     }
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("SnipSprig · 小贴图")
             .with_app_id("io.github.rensilin.snipsprig")
-            .with_inner_size([380.0, 240.0])
+            .with_inner_size([400.0, 380.0])
+            .with_transparent(true)
             .with_icon(eframe::egui::IconData {
-                rgba: platform::icon(64).into_raw(),
+                rgba: snipsprig::icon::render(64)?.into_raw(),
                 width: 64,
                 height: 64,
             })

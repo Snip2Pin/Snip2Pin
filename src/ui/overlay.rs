@@ -5,6 +5,7 @@ pub struct Selection {
     pub texture: TextureHandle,
     pub pixels: [u32; 2],
     pub start: Option<Pos2>,
+    pub focus_requested: bool,
 }
 
 pub enum Action {
@@ -13,6 +14,11 @@ pub enum Action {
 }
 
 pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
+    crate::platform::prepare_floating_windows();
+    if !selection.focus_requested {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+        selection.focus_requested = true;
+    }
     let bounds = ui.max_rect();
     ui.painter().image(
         selection.texture.id(),
@@ -22,7 +28,8 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
     );
     let response = ui.allocate_rect(bounds, Sense::drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+    if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
+    {
         return Some(Action::Cancel);
     }
     if response.drag_started() {
@@ -58,14 +65,16 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
         Pos2::new(bounds.center().x, bounds.min.y + 38.0),
         egui::vec2(340.0, 36.0),
     );
-    ui.painter()
-        .rect_filled(hint, 8, Color32::from_black_alpha(180));
-    ui.painter().text(
-        hint.center(),
-        egui::Align2::CENTER_CENTER,
-        "拖动框选区域，松手置顶 · Esc 取消",
-        egui::FontId::proportional(14.0),
-        Color32::WHITE,
-    );
+    if selection.start.is_none() {
+        ui.painter()
+            .rect_filled(hint, 8, Color32::from_black_alpha(180));
+        ui.painter().text(
+            hint.center(),
+            egui::Align2::CENTER_CENTER,
+            "拖动框选区域，松手置顶 · Esc 取消",
+            egui::FontId::proportional(14.0),
+            Color32::WHITE,
+        );
+    }
     None
 }

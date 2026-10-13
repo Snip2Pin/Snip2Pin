@@ -1,20 +1,32 @@
 use eframe::egui::{self, Color32, RichText};
-use snipsprig::capture::Display;
+use snipsprig::settings::Binding;
 
 pub enum Action {
     Capture,
     ClosePins,
+    RecordShortcut,
 }
 
-pub fn show(
-    ui: &mut egui::Ui,
-    displays: &[Display],
-    display_index: &mut usize,
-    pin_count: usize,
-    message: Option<&str>,
-    global_shortcut: bool,
-    demo: bool,
-) -> Option<Action> {
+pub struct Model<'a> {
+    pub pin_count: usize,
+    pub message: Option<&'a str>,
+    pub global_shortcut: bool,
+    pub binding: Binding,
+    pub recording: bool,
+    pub idle: bool,
+    pub demo: bool,
+}
+
+pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
+    let Model {
+        pin_count,
+        message,
+        global_shortcut,
+        binding,
+        recording,
+        idle,
+        demo,
+    } = model;
     ui.painter()
         .rect_filled(ui.max_rect(), 0, ui.visuals().panel_fill);
     let mut action = None;
@@ -23,29 +35,39 @@ pub fn show(
             ui.label(RichText::new("截一张，贴在眼前。").size(24.0).strong());
             ui.add_space(10.0);
             ui.label("框选后自动置顶，拖动移动，双击关闭。");
-            if displays.len() > 1 {
-                egui::ComboBox::from_id_salt("display")
-                    .selected_text(&displays[*display_index].name)
-                    .show_ui(ui, |ui| {
-                        for (index, display) in displays.iter().enumerate() {
-                            ui.selectable_value(display_index, index, &display.name);
-                        }
-                    });
-            }
+            ui.weak("自动覆盖所有屏幕，贴图留在框选原位。");
             ui.add_space(12.0);
-            if ui
-                .add_sized([200.0, 40.0], egui::Button::new("截图并置顶"))
-                .clicked()
-            {
-                action = Some(Action::Capture);
-            }
+            ui.add_enabled_ui(idle && !recording, |ui| {
+                if ui
+                    .add_sized([200.0, 40.0], egui::Button::new("截图并置顶"))
+                    .clicked()
+                {
+                    action = Some(Action::Capture);
+                }
+            });
             ui.add_space(8.0);
             let prefix = if global_shortcut {
                 "快捷键"
             } else {
                 "窗口内快捷键"
             };
-            ui.weak(format!("{prefix}  {}", crate::platform::SHORTCUT));
+            ui.weak(format!("{prefix}  {}", binding.label()));
+            if ui
+                .add_enabled(
+                    idle,
+                    egui::Button::new(if recording {
+                        "取消修改"
+                    } else {
+                        "修改快捷键"
+                    }),
+                )
+                .clicked()
+            {
+                action = Some(Action::RecordShortcut);
+            }
+            if recording {
+                ui.weak("按下新的组合键，Esc 取消。");
+            }
             if pin_count > 0
                 && ui
                     .small_button(format!("关闭全部贴图（{pin_count}）"))

@@ -1,16 +1,56 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 
 use eframe::egui;
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey, Modifiers},
-};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use snipsprig::settings::Binding;
 
-pub const SHORTCUT: &str = if cfg!(target_os = "macos") {
-    "Command + Shift + 2"
-} else {
-    "Ctrl + Shift + 2"
-};
+/// Selection windows can cover the menu bar and fullscreen applications without
+/// asking macOS to create a Space. All calls stay on the verified main thread.
+pub fn prepare_floating_windows() {
+    #[cfg(target_os = "macos")]
+    if let Some(main_thread) = objc2::MainThreadMarker::new() {
+        use objc2_app_kit::{NSApplication, NSWindowCollectionBehavior};
+        let application = NSApplication::sharedApplication(main_thread);
+        for window in application.windows() {
+            let title = window.title().to_string();
+            if title == "SnipSprig · 框选" || title == "SnipSprig · 贴图" {
+                window.setCollectionBehavior(
+                    NSWindowCollectionBehavior::CanJoinAllSpaces
+                        | NSWindowCollectionBehavior::Stationary
+                        | NSWindowCollectionBehavior::IgnoresCycle
+                        | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                );
+                if title == "SnipSprig · 框选" {
+                    window.setLevel(
+                        isize::try_from(objc2_core_graphics::kCGMainMenuWindowLevel + 1)
+                            .unwrap_or(25),
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn finish_capture(ctx: &egui::Context) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = ctx;
+        if let Some(main_thread) = objc2::MainThreadMarker::new() {
+            let application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
+            for window in application.windows() {
+                if window.title().to_string() == "SnipSprig · 框选" && window.isKeyWindow() {
+                    window.resignKeyWindow();
+                }
+            }
+            application.deactivate();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+}
 
 pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
     // XWayland preserves window-level requests that native Wayland cannot make.
@@ -29,27 +69,55 @@ pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
 pub struct Shortcut {
     manager: GlobalHotKeyManager,
     key: HotKey,
+    active_id: Arc<AtomicU32>,
+}
+
+pub fn global_shortcuts_supported() -> bool {
+    !(cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some())
 }
 
 impl Shortcut {
-    pub fn register(action: impl Fn() + Send + Sync + 'static) -> Result<Self, String> {
-        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    pub fn register(
+        binding: Binding,
+        action: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        if !global_shortcuts_supported() {
             return Err("Wayland 下请从应用窗口截图，或在桌面设置里配置启动快捷键。".into());
         }
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
-        let modifier = if cfg!(target_os = "macos") {
-            Modifiers::SUPER
-        } else {
-            Modifiers::CONTROL
-        };
-        let key = HotKey::new(Some(modifier | Modifiers::SHIFT), Code::Digit2);
+        let key = binding.0;
         manager.register(key).map_err(|error| error.to_string())?;
+        let active_id = Arc::new(AtomicU32::new(key.id()));
+        let handler_id = active_id.clone();
         GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-            if event.id == key.id() && event.state == HotKeyState::Pressed {
+            if event.id == handler_id.load(Ordering::Acquire) && event.state == HotKeyState::Pressed
+            {
                 action();
             }
         }));
-        Ok(Self { manager, key })
+        Ok(Self {
+            manager,
+            key,
+            active_id,
+        })
+    }
+
+    pub fn replace(&mut self, binding: Binding) -> Result<(), String> {
+        let key = binding.0;
+        if key == self.key {
+            return Ok(());
+        }
+        // Register first so a conflict leaves the existing shortcut working.
+        self.manager
+            .register(key)
+            .map_err(|error| format!("快捷键不可用，请换一个组合：{error}"))?;
+        if let Err(error) = self.manager.unregister(self.key) {
+            let _ = self.manager.unregister(key);
+            return Err(format!("更新快捷键失败：{error}"));
+        }
+        self.key = key;
+        self.active_id.store(key.id(), Ordering::Release);
+        Ok(())
     }
 }
 
@@ -81,24 +149,4 @@ pub fn install_fonts(ctx: &egui::Context) {
             break;
         }
     }
-}
-
-/// The same small card icon is used in windows and packaged app assets.
-pub fn icon(size: u32) -> image::RgbaImage {
-    image::RgbaImage::from_fn(size, size, |x, y| {
-        let x = x as f32 / size as f32;
-        let y = y as f32 / size as f32;
-        let inset = (x - 0.5).abs().max((y - 0.5).abs());
-        let corner =
-            ((x - 0.5).abs() - 0.28).max(0.0).powi(2) + ((y - 0.5).abs() - 0.28).max(0.0).powi(2);
-        if inset > 0.44 || corner > 0.16_f32.powi(2) {
-            image::Rgba([0, 0, 0, 0])
-        } else if (0.23..0.77).contains(&x) && (0.35..0.73).contains(&y) {
-            image::Rgba([240, 245, 239, 255])
-        } else if (0.45..0.55).contains(&x) && (0.23..0.46).contains(&y) {
-            image::Rgba([242, 213, 137, 255])
-        } else {
-            image::Rgba([48, (122.0 - y * 24.0) as u8, 91, 255])
-        }
-    })
 }

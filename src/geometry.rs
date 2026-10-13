@@ -44,13 +44,29 @@ pub fn selection(
     })
 }
 
-pub fn fit_size(pixels: [u32; 2], scale: f32, maximum: [f32; 2]) -> [f32; 2] {
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    let size = [pixels[0] as f32 / scale, pixels[1] as f32 / scale];
-    let ratio = (maximum[0] / size[0]).min(maximum[1] / size[1]).min(1.0);
-    [(size[0] * ratio).max(1.0), (size[1] * ratio).max(1.0)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub position: [f32; 2],
+    pub size: [f32; 2],
+}
+
+/// Preserve the selected region's desktop position and displayed size. Image
+/// dimensions and screen points are independent (Retina, mixed DPI, demo data).
+pub fn pin_placement(
+    rect: PixelRect,
+    pixels: [u32; 2],
+    screen_origin: [f32; 2],
+    screen_size: [f32; 2],
+) -> Placement {
+    let ratio = [
+        screen_size[0] / pixels[0] as f32,
+        screen_size[1] / pixels[1] as f32,
+    ];
+    Placement {
+        position: [
+            screen_origin[0] + rect.x as f32 * ratio[0],
+            screen_origin[1] + rect.y as f32 * ratio[1],
+        ],
+        size: [rect.width as f32 * ratio[0], rect.height as f32 * ratio[1]],
+    }
 }

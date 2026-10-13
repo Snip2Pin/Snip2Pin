@@ -12,9 +12,13 @@ eframe = { version = "0.36.2", default-features = false, features = ["accesskit"
 global-hotkey = "0.8.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 xcap = { version = "0.9.8", default-features = false }
+directories = "6.0"
+resvg = { version = "0.48.1", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["x11"] }

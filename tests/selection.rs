@@ -110,12 +110,18 @@ fn duplicate_capture_and_stale_worker_results_are_rejected() {
 }
 
 #[test]
-fn pin_size_preserves_aspect_ratio_and_does_not_upscale() {
-    assert_eq!(
-        geometry::fit_size([400, 200], 2.0, [760.0, 520.0]),
-        [200.0, 100.0]
+fn pin_preserves_original_size_and_position_on_a_negative_retina_display() {
+    let placement = geometry::pin_placement(
+        PixelRect {
+            x: 200,
+            y: 100,
+            width: 1600,
+            height: 1200,
+        },
+        [2880, 1800],
+        [-1440.0, -200.0],
+        [1440.0, 900.0],
     );
-    let fitted = geometry::fit_size([8000, 4000], 1.0, [760.0, 520.0]);
-    assert!(fitted[0] <= 760.0 && fitted[1] <= 520.0);
-    assert!((fitted[0] / fitted[1] - 2.0).abs() < 0.001);
+    assert_eq!(placement.position, [-1340.0, -150.0]);
+    assert_eq!(placement.size, [800.0, 600.0]);
 }
