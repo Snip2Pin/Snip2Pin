@@ -21,7 +21,7 @@ tempfile = "3.27"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSScreen"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -31,6 +31,10 @@ winit = { version = "0.30.13", default-features = false, features = ["x11"] }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[[test]]
+name = "macos_overlay"
+harness = false
 
 [lints.rust]
 unsafe_code = "deny"

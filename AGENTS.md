@@ -48,6 +48,11 @@ Shortcut changes must retain the previous binding if registration fails. Demo
 mode must not register a global shortcut, save settings, or read the desktop.
 macOS selection windows must join Spaces without creating a fullscreen Space,
 cover the menu bar, and release keyboard focus when capture finishes.
+After raising macOS selection windows above system UI, restore `NSScreen.frame`
+instead of the work area. Warm inactive layers too, and defer image painting
+until the viewport reports the complete display size; never stretch a desktop
+capture into a menu-bar-constrained window. Native geometry tests must keep
+windows invisible and prohibit application activation.
 Use egui's theme preference to follow system appearance without polling. Theme
 and icon changes must preserve unrelated settings and existing shortcut files.
 Keep unsafe code denied by default. A platform API that requires unsafe may have

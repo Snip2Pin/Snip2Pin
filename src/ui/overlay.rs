@@ -14,7 +14,6 @@ pub enum Action {
 }
 
 pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
-    crate::platform::prepare_floating_windows();
     if !selection.focus_requested {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         selection.focus_requested = true;

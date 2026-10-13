@@ -183,5 +183,6 @@ Pins are independent borderless windows. Removing a pin releases its texture.
 Platform permission errors appear in the launcher.
 
 CI runs LFS validation, format, Clippy, tests, and development builds on Windows,
-macOS, and Linux. CI uses generated
-test data and does not verify real desktop permission prompts or compositor rules.
+macOS, and Linux. Image tests use generated pixels; macOS also checks selection
+window geometry using invisible windows with application activation prohibited.
+CI does not verify real desktop permission prompts or compositor rules.

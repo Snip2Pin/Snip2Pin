@@ -74,21 +74,33 @@ pub fn prepare_floating_windows() {
         for window in application.windows() {
             let title = window.title().to_string();
             if title == "SnipSprig · 框选" || title == "SnipSprig · 贴图" {
-                window.setCollectionBehavior(
-                    NSWindowCollectionBehavior::CanJoinAllSpaces
-                        | NSWindowCollectionBehavior::Stationary
-                        | NSWindowCollectionBehavior::IgnoresCycle
-                        | NSWindowCollectionBehavior::FullScreenAuxiliary,
-                );
+                let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::Stationary
+                    | NSWindowCollectionBehavior::IgnoresCycle
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary;
+                if window.collectionBehavior() != behavior {
+                    window.setCollectionBehavior(behavior);
+                }
                 if title == "SnipSprig · 框选" {
                     // The demo is a regular small test window; it need not
                     // cover system UI or block other apps during development.
                     let level = if std::env::args().any(|argument| argument == "--demo") {
                         0
                     } else {
-                        (objc2_core_graphics::kCGMainMenuWindowLevel + 1) as isize
+                        (objc2_core_graphics::kCGStatusWindowLevel + 1) as isize
                     };
-                    window.setLevel(level);
+                    if window.level() != level {
+                        window.setLevel(level);
+                    }
+                    if level != 0
+                        && let Some(screen) = window.screen()
+                        && window.frame() != screen.frame()
+                    {
+                        // Raising the level does not undo an earlier work-area
+                        // constraint. Restore the entire screen, including the
+                        // menu bar and Dock, without a fullscreen transition.
+                        window.setFrame_display(screen.frame(), false);
+                    }
                 }
             }
         }

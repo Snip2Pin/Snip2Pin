@@ -442,6 +442,7 @@ impl SnipSprig {
             Phase::Selecting { id, .. } => Some(*id),
             _ => None,
         };
+        let demo = self.demo;
         for (&display_id, layer) in &self.layers {
             let selection = layer.selection.clone();
             let events = self.sender.clone();
@@ -464,6 +465,20 @@ impl SnipSprig {
                     .with_taskbar(false)
                     .with_mouse_passthrough(!active),
                 move |ui, _| {
+                    platform::prepare_floating_windows();
+                    if cfg!(target_os = "macos") && !demo {
+                        // Native bounds can change after this frame's input was
+                        // collected. Wait for the resize event instead of squeezing
+                        // the whole desktop into a menu-bar-constrained viewport.
+                        let expected = egui::vec2(size[0], size[1]) / ui.ctx().zoom_factor();
+                        let actual = ui.max_rect().size();
+                        if (actual.x - expected.x).abs() > 0.5
+                            || (actual.y - expected.y).abs() > 0.5
+                        {
+                            ui.ctx().request_repaint();
+                            return;
+                        }
+                    }
                     // Correct initial placement after the native window resolves
                     // its actual monitor/DPI (especially mixed-DPI Windows).
                     if !cfg!(target_os = "macos") {
@@ -743,6 +758,78 @@ mod tests {
         assert!(matches!(app.phase, Phase::Idle));
         assert!(app.layers.values().all(|layer| layer.selection.is_none()));
         assert!(app.pins.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut setup = ctx.run_ui(
+            egui::RawInput {
+                max_texture_side: Some(4096),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        setup.textures_delta.clear();
+        let mut app = app();
+        app.demo = false;
+        let mut snapshot = capture::demo();
+        snapshot.display.size = [1440.0, 900.0];
+        snapshot.pixels = image::RgbaImage::new(2880, 1800);
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![snapshot]), &ctx);
+        let layer = layer_id(0);
+        let texture = app.layers[&0]
+            .selection
+            .as_ref()
+            .expect("selection")
+            .lock()
+            .expect("selection lock")
+            .texture
+            .id();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        let paint = output.viewport_output[&layer]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("native layer callback");
+        for (size, should_paint) in [([1440.0, 870.0], false), ([1440.0, 900.0], true)] {
+            let mut input = egui::RawInput {
+                viewport_id: layer,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
+                ..Default::default()
+            };
+            input.viewports.insert(layer, egui::ViewportInfo::default());
+            let mut frame = ctx.run_ui(input, |ui| paint(ui));
+            frame.textures_delta.clear();
+            let images: Vec<_> = frame
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
+                        Some(mesh.calc_bounds())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if should_paint {
+                assert_eq!(
+                    images,
+                    vec![egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0)
+                    )],
+                    "Retina desktop must retain its full dimensions and aspect ratio"
+                );
+            } else {
+                assert!(
+                    images.is_empty(),
+                    "never paint a vertically compressed desktop"
+                );
+            }
+        }
     }
 
     #[test]
