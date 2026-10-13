@@ -3,3 +3,10 @@ target/
 dist/
 .DS_Store
 *.zip
+*.pem
+*.key
+*.p12
+*.pfx
+*.keychain
+*.keychain-db
+password.bin
