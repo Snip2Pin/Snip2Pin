@@ -11,6 +11,32 @@ password() {
     od -An -v -tx1 "$PASSWORD_FILE" | tr -d ' \n'
 }
 
+ensure_public_certificate() {
+    local fingerprint
+    fingerprint="$(openssl x509 -in "$CERTIFICATE" -noout -fingerprint -sha1)"
+    fingerprint="${fingerprint#*=}"
+    if ! security find-certificate -a -Z -c 'SnipSprig Local Development' 2>/dev/null |
+        grep -F "SHA-1 hash: ${fingerprint//:/}" >/dev/null; then
+        # Trust evaluation needs a discoverable public certificate; the private key stays isolated.
+        security add-certificates "$CERTIFICATE"
+    fi
+}
+
+prepare_signing_keychain() {
+    ORIGINAL_KEYCHAINS=()
+    while IFS= read -r line; do
+        line="${line#*\"}"
+        ORIGINAL_KEYCHAINS+=("${line%\"*}")
+    done < <(security list-keychains -d user)
+    for existing in "${ORIGINAL_KEYCHAINS[@]}"; do
+        [[ "$existing" != "$1" ]] || return 0
+    done
+    trap 'security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" "$1"
+}
+
 case "${1:-}" in
     --setup)
         if [[ -e "$KEYCHAIN" || -e "$CERTIFICATE" || -e "$PASSWORD_FILE" ]]; then
@@ -18,6 +44,7 @@ case "${1:-}" in
                 printf 'Signing setup is incomplete. Restore it; do not regenerate an existing identity.\n' >&2
                 exit 1
             }
+            ensure_public_certificate
             printf 'Reusing the existing local signing identity.\n'
             exit 0
         fi
@@ -46,6 +73,7 @@ case "${1:-}" in
             -x -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple: -s \
             -k "$SIGNING_PASSWORD" "$KEYCHAIN" >/dev/null
+        ensure_public_certificate
         printf 'Local signing identity created in %s\n' "$SIGNING_DIR"
         ;;
     --sign)
@@ -57,6 +85,7 @@ case "${1:-}" in
             }
             SIGN_ARGS=(--sign "$SNIPSPRIG_SIGN_IDENTITY")
             if [[ -n "${SNIPSPRIG_SIGN_KEYCHAIN:-}" ]]; then
+                prepare_signing_keychain "$SNIPSPRIG_SIGN_KEYCHAIN"
                 SIGN_ARGS+=(--keychain "$SNIPSPRIG_SIGN_KEYCHAIN")
             fi
         else
@@ -65,6 +94,7 @@ case "${1:-}" in
                 exit 1
             }
             security unlock-keychain -p "$(password)" "$KEYCHAIN"
+            prepare_signing_keychain "$KEYCHAIN"
             IDENTITY="$(openssl x509 -in "$CERTIFICATE" -noout -fingerprint -sha1)"
             IDENTITY="${IDENTITY#*=}"
             SIGN_ARGS=(--sign "${IDENTITY//:/}" --keychain "$KEYCHAIN")

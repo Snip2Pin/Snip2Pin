@@ -43,16 +43,21 @@ plutil -lint "$APP_DIR/Contents/Info.plist"
 bash packaging/macos/signing.sh --sign "$APP_DIR"
 if "$RELEASE"; then
     codesign --verify --strict \
-        -R 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
+        -R '=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
         "$APP_DIR"
     ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$OUTPUT_DIR/SnipSprig-macOS.zip"
 fi
 if "$INSTALL"; then
     DESTINATION=/Applications/SnipSprig.app
     if [[ -d "$DESTINATION" ]]; then
-        OLD_REQUIREMENT="$(codesign -d -r- "$DESTINATION" 2>&1 | awk '/^designated => / {sub(/^designated => /, ""); print}')"
+        codesign --verify --strict "$DESTINATION"
+        OLD_REQUIREMENT="$(codesign -d -r- "$DESTINATION" 2>&1 | awk '/^(# )?designated => / {sub(/^(# )?designated => /, ""); print}')"
+        [[ -n "$OLD_REQUIREMENT" ]] || {
+            printf 'Could not read the installed app\047s signing requirement.\n' >&2
+            exit 1
+        }
         if [[ "$OLD_REQUIREMENT" != cdhash\ * ]] && \
-            ! codesign --verify --strict -R "$OLD_REQUIREMENT" "$APP_DIR"; then
+            ! codesign --verify --strict -R "=$OLD_REQUIREMENT" "$APP_DIR"; then
             printf 'The signing identity changed. Reuse the installed app\047s certificate before updating.\n' >&2
             exit 1
         fi

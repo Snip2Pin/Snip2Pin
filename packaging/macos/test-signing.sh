@@ -4,6 +4,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR"
 WORK_DIR="$(mktemp -d /private/tmp/snipsprig-signing-test.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+ORIGINAL_SEARCH_LIST="$(security list-keychains -d user)"
 for variant in first second; do
     APP="$WORK_DIR/$variant.app"
     mkdir -p "$APP/Contents/MacOS"
@@ -12,19 +13,26 @@ for variant in first second; do
     cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
     bash packaging/macos/signing.sh --sign "$APP"
 done
+[[ "$(security list-keychains -d user)" == "$ORIGINAL_SEARCH_LIST" ]]
+if bash packaging/macos/signing.sh --sign "$WORK_DIR/missing.app" 2>/dev/null; then
+    printf 'FAIL: signing a missing app succeeded.\n' >&2
+    exit 1
+fi
+[[ "$(security list-keychains -d user)" == "$ORIGINAL_SEARCH_LIST" ]]
 requirement() {
-    codesign -d -r- "$1" 2>&1 | awk '/^designated => / {sub(/^designated => /, ""); print}'
+    codesign -d -r- "$1" 2>&1 | awk '/^(# )?designated => / {sub(/^(# )?designated => /, ""); print}'
 }
 FIRST_REQUIREMENT="$(requirement "$WORK_DIR/first.app")"
 [[ "$FIRST_REQUIREMENT" == "$(requirement "$WORK_DIR/second.app")" ]]
 FIRST_HASH="$(codesign -d --verbose=4 "$WORK_DIR/first.app" 2>&1 | awk '/^CDHash=/ {print}')"
 SECOND_HASH="$(codesign -d --verbose=4 "$WORK_DIR/second.app" 2>&1 | awk '/^CDHash=/ {print}')"
 [[ "$FIRST_HASH" != "$SECOND_HASH" ]]
-codesign --verify --strict -R "$FIRST_REQUIREMENT" "$WORK_DIR/second.app"
+codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app"
 # An unrelated ad-hoc signature with the same bundle ID must not impersonate an update.
 codesign --force --sign - --identifier io.github.rensilin.snipsprig "$WORK_DIR/second.app"
-if codesign --verify --strict -R "$FIRST_REQUIREMENT" "$WORK_DIR/second.app" 2>/dev/null; then
+[[ "$(requirement "$WORK_DIR/second.app")" == cdhash\ * ]]
+if codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app" 2>/dev/null; then
     printf 'FAIL: an unsigned identity impersonated a certificate-signed update.\n' >&2
     exit 1
 fi
-printf 'PASS: different builds retain the same authenticated identity; impostors fail.\n'
+printf 'PASS: builds retain the same identity; impostors fail; keychain search list is restored.\n'

@@ -145,12 +145,16 @@ packaging or publishing an application.
 
 For local macOS installation, create a development identity once. Its key and
 password stay in a private, app-specific keychain directory outside the repository;
-the normal keychain search list is preserved. Trust the certificate only for code
-signing by `/usr/bin/codesign`, using the macOS confirmation when requested:
+the private keychain is added to the search list only while signing, then the
+original list is restored. Setup adds a copy of the public
+certificate to the default keychain so macOS can discover it during verification.
+Trust this certificate only for code signing in your user account, using the
+macOS confirmation when requested. Private-key access remains restricted to
+signing tools; this trust does not cover HTTPS or other certificate purposes:
 
 ```sh
 bash packaging/macos/signing.sh --setup
-security add-trusted-cert -r trustRoot -p codeSign -a /usr/bin/codesign \
+security add-trusted-cert -r trustRoot -p codeSign \
   -k "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/identity.keychain-db" \
   "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/certificate.pem"
 bash packaging/macos/test-signing.sh
