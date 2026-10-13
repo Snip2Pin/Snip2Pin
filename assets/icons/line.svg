@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="e-base" x1="161" y1="89" x2="862" y2="963" gradientUnits="userSpaceOnUse"><stop stop-color="#FBFBF3"/><stop offset="1" stop-color="#DDE6DC"/></linearGradient>
+    <linearGradient id="e-ink" x1="282" y1="294" x2="721" y2="732" gradientUnits="userSpaceOnUse"><stop stop-color="#225E4C"/><stop offset="1" stop-color="#143E33"/></linearGradient>
+    <linearGradient id="e-pin" x1="597" y1="229" x2="729" y2="426" gradientUnits="userSpaceOnUse"><stop stop-color="#EB987D"/><stop offset="1" stop-color="#C56454"/></linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="#D1DBCF"/>
+  <rect x="66" y="64" width="892" height="892" rx="206" fill="url(#e-base)" stroke="#FFFFFF" stroke-opacity=".55" stroke-width="2"/>
+  <g transform="rotate(-7 496 534)">
+    <path d="M563 323H343Q292 323 292 374V681Q292 732 343 732H668Q719 732 719 681V486" fill="none" stroke="url(#e-ink)" stroke-width="39" stroke-linecap="round"/>
+    <path d="M360 638L448 551Q464 535 480 551L524 592L603 508" fill="none" stroke="url(#e-ink)" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="383" cy="464" r="29" fill="#225744"/>
+  </g>
+  <g transform="rotate(25 663 336)">
+    <path d="M663 393V534" stroke="#1B4A3B" stroke-width="20" stroke-linecap="round"/>
+    <path d="M611 268H715L702 332Q698 350 718 366L739 383Q753 405 730 415H596Q573 405 587 383L608 366Q628 350 624 332Z" fill="url(#e-pin)"/>
+    <rect x="596" y="235" width="134" height="51" rx="25" fill="#E5967D"/>
+    <path d="M623 249H703" stroke="#F8CCB4" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

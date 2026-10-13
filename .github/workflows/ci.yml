@@ -15,6 +15,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - name: LFS resource integrity
+        run: git lfs fsck
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
@@ -28,25 +32,5 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests
         run: cargo test --locked
-      - name: Release build
-        run: cargo build --locked --release
-      - name: Package macOS
-        if: runner.os == 'macOS'
-        run: bash packaging/macos/build.sh
-      - name: Package Linux
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist
-          target/release/snipsprig --write-icon dist/io.github.rensilin.snipsprig.png
-          tar -czf dist/SnipSprig-Linux.tar.gz -C target/release snipsprig -C ../../packaging/linux io.github.rensilin.snipsprig.desktop -C ../../dist io.github.rensilin.snipsprig.png
-      - name: Package Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist
-          Compress-Archive -Path target/release/snipsprig.exe -DestinationPath dist/SnipSprig-Windows.zip
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: SnipSprig-${{ runner.os }}
-          path: dist/SnipSprig-*
-          if-no-files-found: error
+      - name: Development build
+        run: cargo build --locked

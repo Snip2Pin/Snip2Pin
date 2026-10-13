@@ -2,7 +2,12 @@
 
 ## 项目原则
 
-- 保持项目简洁，只做框选截图、置顶贴图、拖动和关闭，支持修改截图快捷键。
+- 保持项目简洁，只做框选截图、置顶贴图、拖动和关闭，支持修改截图快捷键、主题和图标。
+- 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
+- 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
+- PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
+- 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
+- CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 自动覆盖所有显示器，每次截图刷新屏幕布局；贴图保持框选时的位置和大小。
 - 使用预先准备的透明无边框选区层，不切换系统全屏、不隐藏主窗口或已有贴图。
 - 新贴图绘制完成后才清除选区画面，避免截图结束时露出空白帧。
@@ -23,8 +28,8 @@
 - `src/app.rs`: capture state machine, events, and window lifecycle.
 - `src/ui/`: launcher, selection overlay, and floating image views.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
-- `src/settings.rs`: shortcut recording, validation, and local preference storage.
-- `assets/icon.svg`, `src/icon.rs`: shared vector icon and raster rendering.
+- `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
+- `assets/icons/`, `src/icon.rs`: vector sources, LFS PNG assets, and icon selection.
 - `tests/`: deterministic checks using generated images.
 - `packaging/`: platform packaging metadata and scripts.
 - `.github/workflows/ci.yml`: format, Clippy, tests, and builds on all three OSes.
@@ -43,6 +48,12 @@ Shortcut changes must retain the previous binding if registration fails. Demo
 mode must not register a global shortcut, save settings, or read the desktop.
 macOS selection windows must join Spaces without creating a fullscreen Space,
 cover the menu bar, and release keyboard focus when capture finishes.
+Use egui's theme preference to follow system appearance without polling. Theme
+and icon changes must preserve unrelated settings and existing shortcut files.
+Keep unsafe code denied by default. A platform API that requires unsafe may have
+one narrowly scoped exception, with documented preconditions and owned memory.
+macOS Dock icons must decode PNG in Rust, avoiding AppKit PNG loading and borrowed
+pixel buffers. Updating an icon must not modify the signed application bundle.
 
 Use dedicated file patch tools for text edits. Programmatic transformation is
 appropriate only when the transformation itself is complex; state the reason and
@@ -54,7 +65,8 @@ show the resulting diff. Keep code, comments, README, and this file consistent.
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-cargo build --locked --release
+cargo build --locked
+git lfs fsck
 git diff --check
 ```
 

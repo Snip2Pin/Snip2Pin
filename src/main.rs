@@ -17,7 +17,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let path = arguments
             .next()
             .ok_or("--write-icon needs an output path")?;
-        snipsprig::icon::render(1024)?.save(path)?;
+        let variant = match arguments.next().as_deref().unwrap_or("line") {
+            "line" => snipsprig::icon::Variant::Line,
+            "metal" => snipsprig::icon::Variant::Metal,
+            _ => return Err("icon must be line or metal".into()),
+        };
+        snipsprig::icon::render_vector(variant, 1024)?.save(path)?;
         return Ok(());
     }
     let options = eframe::NativeOptions {
@@ -27,7 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .with_inner_size([400.0, 380.0])
             .with_transparent(true)
             .with_icon(eframe::egui::IconData {
-                rgba: snipsprig::icon::render(64)?.into_raw(),
+                rgba: snipsprig::icon::render(snipsprig::icon::Variant::Line, 64)?.into_raw(),
                 width: 64,
                 height: 64,
             })

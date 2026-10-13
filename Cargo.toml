@@ -14,11 +14,15 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 xcap = { version = "0.9.8", default-features = false }
 directories = "6.0"
 resvg = { version = "0.48.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1"
+tempfile = "3.27"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["x11"] }
@@ -29,7 +33,7 @@ codegen-units = 1
 strip = true
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [lints.clippy]
 dbg_macro = "deny"

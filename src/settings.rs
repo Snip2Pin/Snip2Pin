@@ -1,9 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
+use crate::icon::Variant;
 use eframe::egui;
 use global_hotkey::hotkey::{HotKey, Modifiers};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Binding(pub HotKey);
 
 impl Default for Binding {
@@ -83,24 +89,133 @@ impl Binding {
             .replace("Digit", "")
             .replace('+', " + ")
     }
+}
+
+impl TryFrom<String> for Binding {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value)
+    }
+}
+
+impl From<Binding> for String {
+    fn from(binding: Binding) -> Self {
+        binding.0.to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "跟随系统",
+            Self::Light => "浅色",
+            Self::Dark => "深色",
+        }
+    }
+
+    pub fn preference(self) -> egui::ThemePreference {
+        match self {
+            Self::System => egui::ThemePreference::System,
+            Self::Light => egui::ThemePreference::Light,
+            Self::Dark => egui::ThemePreference::Dark,
+        }
+    }
+
+    pub fn active(self, system: Option<egui::Theme>) -> egui::Theme {
+        match self {
+            Self::System => system.unwrap_or(egui::Theme::Light),
+            Self::Light => egui::Theme::Light,
+            Self::Dark => egui::Theme::Dark,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Icon {
+    #[default]
+    Auto,
+    Line,
+    Metal,
+}
+
+impl Icon {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "跟随主题",
+            Self::Line => "极简线条",
+            Self::Metal => "深色金属",
+        }
+    }
+
+    pub fn resolve(self, theme: egui::Theme) -> Variant {
+        match self {
+            Self::Auto if theme == egui::Theme::Dark => Variant::Metal,
+            Self::Auto | Self::Line => Variant::Line,
+            Self::Metal => Variant::Metal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Preferences {
+    pub binding: Binding,
+    pub theme: Theme,
+    pub icon: Icon,
+}
+
+impl Preferences {
+    pub fn icon_variant(self, system: Option<egui::Theme>) -> Variant {
+        self.icon.resolve(self.theme.active(system))
+    }
 
     pub fn load(path: &Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(format!("读取快捷键设置失败：{error}")),
+            Ok(text) => toml::from_str(&text).map_err(|error| format!("读取设置失败：{error}")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::read_to_string(path.with_file_name("shortcut.txt")) {
+                    Ok(text) => Ok(Self {
+                        binding: Binding::parse(&text)?,
+                        ..Default::default()
+                    }),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Ok(Self::default())
+                    }
+                    Err(error) => Err(format!("读取旧快捷键设置失败：{error}")),
+                }
+            }
+            Err(error) => Err(format!("读取设置失败：{error}")),
         }
     }
 
     pub fn save(self, path: &Path) -> Result<(), String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| format!("保存设置失败：{error}"))?;
-        }
-        std::fs::write(path, self.0.to_string()).map_err(|error| format!("保存设置失败：{error}"))
+        let result = || -> Result<(), Box<dyn std::error::Error>> {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            std::fs::create_dir_all(parent)?;
+            let mut file = tempfile::NamedTempFile::new_in(parent)?;
+            file.write_all(toml::to_string_pretty(&self)?.as_bytes())?;
+            file.as_file().sync_all()?;
+            file.persist(path)?;
+            Ok(())
+        };
+        result().map_err(|error| format!("保存设置失败：{error}"))
     }
 }
 
 pub fn path() -> Option<PathBuf> {
     directories::ProjectDirs::from("io.github", "rensilin", "SnipSprig")
-        .map(|dirs| dirs.config_dir().join("shortcut.txt"))
+        .map(|dirs| dirs.config_dir().join("preferences.toml"))
 }

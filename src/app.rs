@@ -13,8 +13,9 @@ use eframe::egui::{self, ColorImage, TextureHandle, ViewportCommand, ViewportId}
 use snipsprig::{
     capture::{self, Display, Snapshot},
     geometry::{self, Placement},
+    icon::{self, Variant},
     session::CaptureGate,
-    settings::{self, Binding},
+    settings::{self, Binding, Preferences},
 };
 
 use crate::{
@@ -63,7 +64,10 @@ pub struct SnipSprig {
     next_pin: u64,
     message: Option<String>,
     shortcut: Option<Shortcut>,
-    binding: Binding,
+    preferences: Preferences,
+    applied_icon: Option<Variant>,
+    icon_data: Option<Arc<egui::IconData>>,
+    icon_texture: Option<TextureHandle>,
     config_path: Option<PathBuf>,
     recording: bool,
     suppress_shortcut_until: Instant,
@@ -78,16 +82,19 @@ impl SnipSprig {
         let config_path = (!demo).then(settings::path).flatten();
         let loaded = config_path
             .as_deref()
-            .map(Binding::load)
-            .unwrap_or(Ok(Binding::default()));
+            .map(Preferences::load)
+            .unwrap_or(Ok(Preferences::default()));
         let mut message = loaded.as_ref().err().cloned();
-        let binding = loaded.unwrap_or_default();
+        let preferences = loaded.unwrap_or_default();
+        cc.egui_ctx
+            .options_mut(|options| options.fallback_theme = egui::Theme::Light);
+        cc.egui_ctx.set_theme(preferences.theme.preference());
         let shortcut = if demo {
             None
         } else {
             let ctx = cc.egui_ctx.clone();
             let hotkey_sender = sender.clone();
-            match Shortcut::register(binding, move || {
+            match Shortcut::register(preferences.binding, move || {
                 let _ = hotkey_sender.send(Event::Capture);
                 ctx.request_repaint_of(ViewportId::ROOT);
             }) {
@@ -129,7 +136,10 @@ impl SnipSprig {
             next_pin: 0,
             message,
             shortcut,
-            binding,
+            preferences,
+            applied_icon: None,
+            icon_data: None,
+            icon_texture: None,
             config_path,
             recording: false,
             suppress_shortcut_until: Instant::now(),
@@ -305,21 +315,25 @@ impl SnipSprig {
             self.message = Some(error);
             return;
         }
+        let preferences = Preferences {
+            binding,
+            ..self.preferences
+        };
         if let Some(path) = &self.config_path
-            && let Err(error) = binding.save(path)
+            && let Err(error) = preferences.save(path)
         {
             let rollback = self
                 .shortcut
                 .as_mut()
-                .map(|shortcut| shortcut.replace(self.binding));
+                .map(|shortcut| shortcut.replace(self.preferences.binding));
             if matches!(rollback, Some(Err(_))) {
                 // Show the actual registered binding if rollback fails.
-                self.binding = binding;
+                self.preferences.binding = binding;
             }
             self.message = Some(error);
             return;
         }
-        self.binding = binding;
+        self.preferences = preferences;
         self.message = Some(
             if self.shortcut.is_some() {
                 "快捷键已保存。"
@@ -328,6 +342,69 @@ impl SnipSprig {
             }
             .into(),
         );
+    }
+
+    fn change_appearance(
+        &mut self,
+        theme: settings::Theme,
+        icon: settings::Icon,
+        ctx: &egui::Context,
+    ) {
+        ctx.request_repaint_of(ViewportId::ROOT);
+        let preferences = Preferences {
+            theme,
+            icon,
+            ..self.preferences
+        };
+        if let Some(path) = &self.config_path
+            && let Err(error) = preferences.save(path)
+        {
+            self.message = Some(error);
+            return;
+        }
+        self.preferences = preferences;
+        ctx.set_theme(theme.preference());
+        self.message = Some(
+            if self.demo {
+                "演示外观已更新，本次有效。"
+            } else {
+                "外观设置已保存。"
+            }
+            .into(),
+        );
+        ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    fn update_icon(&mut self, ctx: &egui::Context) {
+        let variant = self.preferences.icon_variant(ctx.system_theme());
+        if self.applied_icon == Some(variant) {
+            return;
+        }
+        self.applied_icon = Some(variant);
+        match icon::render(variant, 64) {
+            Ok(pixels) => {
+                self.icon_texture = Some(texture(ctx, "application-icon", &pixels));
+                let data = Arc::new(egui::IconData {
+                    rgba: pixels.into_raw(),
+                    width: 64,
+                    height: 64,
+                });
+                self.icon_data = Some(data.clone());
+                if let Err(error) = platform::set_app_icon(ctx, variant, data) {
+                    self.message = Some(error);
+                }
+            }
+            Err(error) => {
+                self.message = Some(error);
+            }
+        }
+    }
+
+    fn window_icon(&self, builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+        match &self.icon_data {
+            Some(data) => builder.with_icon(data.clone()),
+            None => builder,
+        }
     }
 
     fn record_key(&mut self, ui: &egui::Ui) {
@@ -374,7 +451,7 @@ impl SnipSprig {
             let size = display.logical_size();
             ctx.show_viewport_deferred(
                 layer_id(display_id),
-                egui::ViewportBuilder::default()
+                self.window_icon(egui::ViewportBuilder::default())
                     .with_title("SnipSprig · 框选")
                     .with_decorations(false)
                     .with_transparent(true)
@@ -422,7 +499,7 @@ impl SnipSprig {
             let display_scale = pin.display_scale;
             ctx.show_viewport_deferred(
                 ViewportId::from_hash_of(("pin", id)),
-                egui::ViewportBuilder::default()
+                self.window_icon(egui::ViewportBuilder::default())
                     .with_title("SnipSprig · 贴图")
                     .with_decorations(false)
                     .with_transparent(true)
@@ -471,6 +548,7 @@ impl eframe::App for SnipSprig {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_icon(ctx);
         platform::prepare_floating_windows();
         while let Ok(event) = self.events.try_recv() {
             match event {
@@ -498,6 +576,7 @@ impl eframe::App for SnipSprig {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.update_icon(&ctx);
         if matches!(self.phase, Phase::Selecting { .. })
             && ui.input(|input| input.key_pressed(egui::Key::Escape))
         {
@@ -510,7 +589,8 @@ impl eframe::App for SnipSprig {
                 pin_count: self.pins.len(),
                 message: self.message.as_deref(),
                 global_shortcut: self.shortcut.is_some(),
-                binding: self.binding,
+                preferences: self.preferences,
+                icon_texture: self.icon_texture.as_ref(),
                 recording: self.recording,
                 idle,
                 demo: self.demo,
@@ -523,12 +603,20 @@ impl eframe::App for SnipSprig {
                 self.recording = !self.recording;
                 self.message = None;
             }
+            Some(launcher::Action::Appearance(theme, icon)) => {
+                self.change_appearance(theme, icon, &ctx)
+            }
             None => {}
         }
         if self.recording {
             self.record_key(ui);
         } else if idle
-            && ui.input(|input| input.events.iter().any(|event| self.binding.matches(event)))
+            && ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .any(|event| self.preferences.binding.matches(event))
+            })
         {
             self.begin_capture(&ctx);
         }
@@ -568,7 +656,10 @@ mod tests {
             next_pin: 0,
             message: None,
             shortcut: None,
-            binding: Binding::default(),
+            preferences: Preferences::default(),
+            applied_icon: None,
+            icon_data: None,
+            icon_texture: None,
             config_path: None,
             recording: false,
             suppress_shortcut_until: Instant::now(),
@@ -741,6 +832,51 @@ mod tests {
         assert!(
             repaints.lock().expect("repaint log").contains(&layer_id(0)),
             "cancel must clear the selection without waiting for pointer input"
+        );
+    }
+
+    #[test]
+    fn appearance_changes_preserve_shortcut_and_survive_restart() {
+        let directory = tempfile::tempdir().expect("temporary preferences");
+        let path = directory.path().join("preferences.toml");
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.config_path = Some(path.clone());
+        app.preferences.binding = Binding::parse("Ctrl+Alt+K").expect("custom binding");
+        app.change_appearance(settings::Theme::Dark, settings::Icon::Line, &ctx);
+        assert_eq!(
+            app.preferences.binding,
+            Binding::parse("Ctrl+Alt+K").expect("preserved binding")
+        );
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(Preferences::load(&path).expect("restart"), app.preferences);
+        app.change_binding(Binding::parse("Ctrl+Shift+4").expect("new binding"), &ctx);
+        let reloaded = Preferences::load(&path).expect("restart after shortcut change");
+        assert_eq!(reloaded.theme, settings::Theme::Dark);
+        assert_eq!(reloaded.icon, settings::Icon::Line);
+        assert_eq!(
+            reloaded.binding,
+            Binding::parse("Ctrl+Shift+4").expect("updated binding")
+        );
+    }
+
+    #[test]
+    fn failed_preference_save_leaves_theme_and_icon_unchanged() {
+        let directory = tempfile::tempdir().expect("temporary preferences");
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.config_path = Some(directory.path().to_path_buf());
+        let previous = app.preferences;
+        let previous_theme = ctx.theme();
+        app.change_appearance(settings::Theme::Light, settings::Icon::Metal, &ctx);
+        assert_eq!(app.preferences, previous);
+        assert_eq!(ctx.theme(), previous_theme);
+        assert!(app.message.is_some());
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("directory preserved")
+                .count(),
+            0
         );
     }
 }

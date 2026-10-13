@@ -7,6 +7,63 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snipsprig::settings::Binding;
 
+pub fn set_app_icon(
+    ctx: &egui::Context,
+    variant: snipsprig::icon::Variant,
+    data: Arc<egui::IconData>,
+) -> Result<(), String> {
+    let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+    for viewport in viewports {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Icon(Some(data.clone())));
+    }
+    #[cfg(target_os = "macos")]
+    set_dock_icon(variant)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = variant;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn set_dock_icon(variant: snipsprig::icon::Variant) -> Result<(), String> {
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSApplication, NSBitmapFormat, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage,
+    };
+    use objc2_foundation::NSSize;
+    let main_thread = objc2::MainThreadMarker::new().ok_or("图标必须在 UI 线程更新。")?;
+    let pixels = snipsprig::icon::render(variant, 256)?;
+    let row_len = pixels.width() as usize * 4;
+    // SAFETY: Main-thread operation, bounded 256x256 RGBA pixels, valid color
+    // space and matching layout. Null planes request memory owned by AppKit.
+    let bitmap = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), 256, 256, 8, 4, true, false,
+            NSDeviceRGBColorSpace, NSBitmapFormat::AlphaNonpremultiplied, row_len as isize, 32,
+        )
+    }.ok_or("无法分配 Dock 图标。")?;
+    let stride = usize::try_from(bitmap.bytesPerRow()).map_err(|_| "无效图标行长度。")?;
+    let destination = bitmap.bitmapData();
+    if destination.is_null() || stride < row_len {
+        return Err("无效图标缓冲区。".into());
+    }
+    for (y, row) in pixels.as_raw().chunks_exact(row_len).enumerate() {
+        // SAFETY: The validated native stride covers every RGBA row. The bitmap
+        // owns all 256 rows; Rust's source buffer is distinct and still alive.
+        unsafe {
+            std::ptr::copy_nonoverlapping(row.as_ptr(), destination.add(y * stride), row_len);
+        }
+    }
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(256.0, 256.0));
+    image.addRepresentation(&bitmap);
+    // SAFETY: The main-thread application receives Some(valid retained image),
+    // never nil. AppKit retains the image and its owned bitmap representation.
+    unsafe {
+        NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&image));
+    }
+    Ok(())
+}
+
 /// Selection windows can cover the menu bar and fullscreen applications without
 /// asking macOS to create a Space. All calls stay on the verified main thread.
 pub fn prepare_floating_windows() {

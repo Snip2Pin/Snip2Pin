@@ -25,7 +25,8 @@ pub fn show(ui: &mut egui::Ui, id: u64, texture: &TextureHandle, events: &Sender
     }
     let close = ui.put(
         close_rect,
-        egui::Button::new("×").fill(Color32::from_black_alpha(160)),
+        egui::Button::new(egui::RichText::new("×").color(Color32::WHITE))
+            .fill(Color32::from_black_alpha(160)),
     );
     if close.clicked()
         || response.double_clicked()
