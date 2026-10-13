@@ -3426,7 +3426,9 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+ "windows-sys 0.61.2",
  "winit",
+ "x11rb",
  "xcap",
 ]
 

@@ -9,22 +9,44 @@ pub struct Selection {
 }
 
 pub enum Action {
+    Activate,
     Cancel,
     Select(PixelRect),
 }
 
-pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
-    if !selection.focus_requested {
+pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Option<Action> {
+    let bounds = ui.max_rect();
+    let activate = !active
+        && ui.input(|input| {
+            input.events.iter().any(|event| match event {
+                egui::Event::PointerMoved(point) => bounds.contains(*point),
+                _ => false,
+            })
+        });
+    if active && !selection.focus_requested {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
         selection.focus_requested = true;
     }
-    let bounds = ui.max_rect();
+    if !active {
+        selection.focus_requested = false;
+    }
     ui.painter().image(
         selection.texture.id(),
         bounds,
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
+    if active {
+        ui.painter().rect_stroke(
+            bounds,
+            0,
+            Stroke::new(2.0, Color32::from_rgb(56, 132, 255)),
+            StrokeKind::Inside,
+        );
+    } else {
+        ui.painter()
+            .rect_filled(bounds, 0, Color32::from_black_alpha(28));
+    }
     let response = ui.allocate_rect(bounds, Sense::drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
@@ -64,7 +86,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
         Pos2::new(bounds.center().x, bounds.min.y + 38.0),
         egui::vec2(340.0, 36.0),
     );
-    if selection.start.is_none() {
+    if active && selection.start.is_none() {
         ui.painter()
             .rect_filled(hint, 8, Color32::from_black_alpha(180));
         ui.painter().text(
@@ -75,5 +97,70 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection) -> Option<Action> {
             Color32::WHITE,
         );
     }
-    None
+    activate.then_some(Action::Activate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_screen_is_outlined_and_other_screens_are_dimmed() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "selection",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            egui::TextureOptions::NEAREST,
+        );
+        let mut selection = Selection {
+            texture,
+            pixels: [2, 2],
+            start: None,
+            focus_requested: false,
+        };
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0));
+        for active in [true, false] {
+            let mut frame = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(bounds),
+                    ..Default::default()
+                },
+                |ui| {
+                    show(ui, &mut selection, active);
+                },
+            );
+            frame.textures_delta.clear();
+            assert_eq!(frame.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds && rect.stroke.color == Color32::from_rgb(56, 132, 255))
+            }), active);
+            assert_eq!(frame.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds && rect.fill == Color32::from_black_alpha(28))
+            }), !active);
+            assert_eq!(
+                frame.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|command| { matches!(command, egui::ViewportCommand::Focus) }),
+                active,
+                "inactive displays must not steal keyboard focus"
+            );
+        }
+        let mut frame = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(bounds),
+                events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(matches!(
+                    show(ui, &mut selection, false),
+                    Some(Action::Activate)
+                ));
+            },
+        );
+        frame.textures_delta.clear();
+        assert!(frame.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == selection.texture.id())
+        }), "switching displays must not clear the frozen desktop");
+    }
 }

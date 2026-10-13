@@ -7,6 +7,35 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snip2pin::settings::Binding;
 
+/// Read the cursor once when entering capture, in the same desktop coordinates
+/// as xcap's monitor bounds. No event taps, global hooks, or polling are used.
+#[cfg(target_os = "macos")]
+pub fn pointer_position() -> Option<[f32; 2]> {
+    let event = objc2_core_graphics::CGEvent::new(None)?;
+    let point = objc2_core_graphics::CGEvent::location(Some(&event));
+    Some([point.x as f32, point.y as f32])
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub fn pointer_position() -> Option<[f32; 2]> {
+    use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetPhysicalCursorPos};
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: A valid, writable POINT stays alive for this synchronous API call.
+    (unsafe { GetPhysicalCursorPos(&mut point) } != 0).then_some([point.x as f32, point.y as f32])
+}
+
+#[cfg(target_os = "linux")]
+pub fn pointer_position() -> Option<[f32; 2]> {
+    use x11rb::{connection::Connection, protocol::xproto::ConnectionExt};
+    let (connection, screen) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots.get(screen)?.root;
+    let pointer = connection.query_pointer(root).ok()?.reply().ok()?;
+    pointer
+        .same_screen
+        .then_some([f32::from(pointer.root_x), f32::from(pointer.root_y)])
+}
+
 pub fn set_app_icon(
     ctx: &egui::Context,
     variant: snip2pin::icon::Variant,

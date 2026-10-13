@@ -18,6 +18,12 @@ pub struct Snapshot {
 }
 
 impl Display {
+    pub fn contains(&self, point: [f32; 2]) -> bool {
+        (0..2).all(|axis| {
+            point[axis] >= self.origin[axis] && point[axis] < self.origin[axis] + self.size[axis]
+        })
+    }
+
     pub fn position(&self) -> [f32; 2] {
         self.origin.map(|value| {
             if cfg!(target_os = "macos") {

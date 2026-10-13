@@ -11,7 +11,7 @@ fn main() {
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSScreen, NSWindow,
         NSWindowStyleMask,
     };
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
     let thread = MainThreadMarker::new().expect("native geometry test runs on the main thread");
     let application = NSApplication::sharedApplication(thread);
@@ -54,7 +54,43 @@ fn main() {
         assert_eq!(window.frame(), expected, "preparation must be idempotent");
         assert!(!window.isVisible());
         assert!(!application.isActive());
+
+        let scale = screen.backingScaleFactor();
+        let target = NSRect::new(
+            NSPoint::new(expected.origin.x + 100.0, expected.origin.y + 100.0),
+            NSSize::new(301.0 / scale, 201.0 / scale),
+        );
+        // SAFETY: Valid borderless geometry on the main thread. This window is
+        // never shown; the same native APIs are used by winit's size/move commands.
+        let pin = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(thread),
+                target,
+                NSWindowStyleMask::Borderless | NSWindowStyleMask::Miniaturizable,
+                NSBackingStoreType::Buffered,
+                true,
+            )
+        };
+        // AppKit rounds fractional window dimensions to integral native points.
+        // Keep that rounding in the transparent window, not in the captured image.
+        let window_size = NSSize::new(target.size.width.ceil(), target.size.height.ceil());
+        pin.setContentSize(window_size);
+        pin.setFrameOrigin(target.origin);
+        assert_eq!(
+            pin.frame(),
+            NSRect::new(target.origin, window_size),
+            "native rounding must be accounted for before positioning the pin"
+        );
+        assert!(!pin.isVisible());
+        assert!(!application.isActive());
     }
+    let pointer =
+        platform::pointer_position().expect("cursor position is readable without event hooks");
+    let displays = snip2pin::capture::displays().expect("display bounds");
+    assert!(
+        displays.iter().any(|display| display.contains(pointer)),
+        "cursor and monitor coordinates must use the same space"
+    );
     println!("macOS hidden selection geometry: full display bounds preserved");
 }
 
