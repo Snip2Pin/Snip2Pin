@@ -1,5 +1,7 @@
 # Snip2Pin
 
+Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
+
 ## 项目原则
 
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。

@@ -1,5 +1,7 @@
 # Snip2Pin · 小贴图
 
+[源码 / Source](https://github.com/Snip2Pin/Snip2Pin)
+
 <p>
   <img src="assets/icons/line.svg" width="96" alt="Light icon: minimal lines" />
   <img src="assets/icons/metal.svg" width="96" alt="Dark icon: dark metal" />
@@ -79,6 +81,8 @@ Install [Git LFS](https://git-lfs.com/), then fetch the binary icon resources
 before building:
 
 ```sh
+git clone https://github.com/Snip2Pin/Snip2Pin.git
+cd Snip2Pin
 git lfs install --local
 git lfs pull
 ```
