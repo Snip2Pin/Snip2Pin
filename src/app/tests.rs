@@ -484,7 +484,7 @@ fn top_edge_pin_finishes_capture_when_the_system_moves_it_below_the_menu_bar() {
 }
 
 #[test]
-fn native_top_boundary_switches_toolbar_for_initial_capture_and_dragging() {
+fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = app();
@@ -515,14 +515,14 @@ fn native_top_boundary_switches_toolbar_for_initial_capture_and_dragging() {
         .viewport_ui_cb
         .as_ref()
         .expect("pin callback");
-    let top = egui::pos2(initial.window.min.x, pin.screen.min.y);
+    let top = egui::pos2(initial.window.min.x, pin.screen.min.y - initial.image.min.y);
     let left_screen = pin
         .screen_areas
         .iter()
         .find(|screen| screen.min.x < pin.screen.min.x)
         .expect("left screen");
     let left_top = left_screen.min + initial.image.size() / 2.0;
-    let left_top = egui::pos2(left_top.x, left_screen.min.y);
+    let left_top = egui::pos2(left_top.x, left_screen.min.y - initial.image.min.y);
     let enough_space = egui::vec2(0.0, snip2pin::pin::METRICS.toolbar_height() * 3.0);
     for (index, (position, below)) in [
         (top, true),
@@ -819,8 +819,10 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
         .viewport_output
         .get(&ViewportId::from_hash_of(("pin", 1_u64)))
         .expect("native pin");
-    assert_eq!(pin.builder.position, Some(egui::pos2(138.0, 100.0)));
-    assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 168.0)));
+    let model = &app.pins[&1];
+    let layout = ui::pin::frame_geometry(model.placement, model.screen, 1.0, 1.0);
+    assert_eq!(pin.builder.position, Some(layout.window.min));
+    assert_eq!(pin.builder.inner_size, Some(layout.window.size()));
     assert!(
         output.viewport_output[&ViewportId::ROOT]
             .commands

@@ -1,4 +1,5 @@
 use super::*;
+use egui::Vec2;
 use std::sync::mpsc;
 
 #[test]
@@ -56,6 +57,8 @@ fn upward_drag_allows_the_image_offscreen_but_keeps_lower_buttons_reachable() {
                     texture: &texture,
                     frame,
                     events: &sender,
+                    monitors: &[],
+                    coordinate_ratio: 1.0,
                 },
                 &mut drag,
                 || Some(cursor.into()),
@@ -78,7 +81,7 @@ fn upward_drag_allows_the_image_offscreen_but_keeps_lower_buttons_reachable() {
     assert_eq!(image.size(), frame.image.size());
     let mut moved = frame;
     moved.place_controls(inner, &[screen], screen, 1.0);
-    assert!(moved.toolbar_below);
+    assert!((moved.toolbar_side == ToolbarSide::Bottom));
     let (copy, close) = moved.toolbar_rects();
     for button in [copy, close] {
         assert!(
@@ -155,6 +158,8 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
                     texture: &texture,
                     frame,
                     events: &sender,
+                    monitors: &[],
+                    coordinate_ratio: 1.0,
                 },
                 &mut drag,
                 || {
@@ -204,7 +209,7 @@ fn toolbar_fits_tiny_images_without_changing_their_desktop_bounds() {
                 grid,
             );
             let image = frame.image;
-            let (copy, close) = toolbar_rects(image, frame.toolbar_below);
+            let (copy, close) = frame.toolbar_rects();
             let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
             assert!(bounds.contains_rect(copy) && bounds.contains_rect(close));
             assert!(copy.max.x < close.min.x);
@@ -233,7 +238,7 @@ fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
                     size,
                 };
                 let frame = frame_geometry(placement, screen, ratio, 1.0 / ratio);
-                let (copy, close) = toolbar_rects(frame.image, frame.toolbar_below);
+                let (copy, close) = frame.toolbar_rects();
                 assert!(frame.top_edge);
                 assert!(frame.window.min.y + frame.image.min.y >= screen.min.y * ratio);
                 let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
@@ -242,7 +247,7 @@ fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
                 assert!(visible.contains_rect(copy.translate(frame.window.min.to_vec2())));
                 assert!(visible.contains_rect(close.translate(frame.window.min.to_vec2())));
                 assert!(!copy.intersects(frame.image) && !close.intersects(frame.image));
-                assert_eq!(frame.toolbar_below, size[1] < 200.0);
+                assert_eq!((frame.toolbar_side == ToolbarSide::Bottom), size[1] < 200.0);
                 assert!((frame.image.aspect_ratio() - size[0] / size[1]).abs() < 0.001);
                 assert!(
                     (frame.image.size() - egui::vec2(size[0], size[1]) * ratio).length() < 0.001,
@@ -254,20 +259,17 @@ fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
 }
 
 #[test]
-fn toolbar_uses_native_top_boundary_instead_of_reserved_transparent_space() {
-    for top in [28.0, -172.0] {
-        let screen = Rect::from_min_size(egui::pos2(-680.0, top), egui::vec2(680.0, 420.0));
-        for (distance, below) in [(0.0, true), (31.0, true), (32.0, false), (80.0, false)] {
-            let window =
-                Rect::from_min_size(egui::pos2(-600.0, top + distance), egui::vec2(160.0, 170.0));
-            assert_eq!(toolbar_below(window, screen), below);
-        }
-    }
-}
-
-#[test]
 fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
-    for (copy, below) in [(true, false), (false, false), (true, true), (false, true)] {
+    for (copy, side) in [
+        (true, ToolbarSide::Top),
+        (false, ToolbarSide::Top),
+        (true, ToolbarSide::Bottom),
+        (false, ToolbarSide::Bottom),
+        (true, ToolbarSide::Left),
+        (false, ToolbarSide::Left),
+        (true, ToolbarSide::Right),
+        (false, ToolbarSide::Right),
+    ] {
         let ctx = egui::Context::default();
         let texture = ctx.load_texture(
             "pin",
@@ -275,15 +277,25 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
             egui::TextureOptions::NEAREST,
         );
         let (sender, events) = mpsc::channel();
-        let image = Rect::from_min_size(egui::pos2(10.0, 42.0), egui::vec2(200.0, 88.0));
-        let frame = Frame {
-            window: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 140.0)),
-            image,
-            controls_area: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 180.0)),
-            toolbar_below: below,
-            top_edge: false,
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(680.0, 420.0));
+        let position = match side {
+            ToolbarSide::Top => screen.min + Vec2::splat(100.0),
+            ToolbarSide::Bottom => screen.min + egui::vec2(100.0, -50.0),
+            ToolbarSide::Left => egui::pos2(screen.max.x - 50.0, screen.min.y + 100.0),
+            ToolbarSide::Right => screen.min + egui::vec2(-50.0, 100.0),
         };
-        let (copy_rect, close_rect) = toolbar_rects(image, below);
+        let mut frame = frame_geometry(
+            Placement {
+                position: position.into(),
+                size: [193.0, 121.0],
+            },
+            screen,
+            1.0,
+            1.0,
+        );
+        frame.place_controls(frame.window, &[screen], screen, 1.0);
+        assert_eq!(frame.toolbar_side, side);
+        let (copy_rect, close_rect) = frame.toolbar_rects();
         let point = if copy {
             copy_rect.center()
         } else {
@@ -306,7 +318,7 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
         ] {
             let mut frame = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 180.0))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, frame.window.size())),
                     events: input_events,
                     ..Default::default()
                 },
@@ -318,6 +330,8 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
                             texture: &texture,
                             frame,
                             events: &sender,
+                            monitors: &[],
+                            coordinate_ratio: 1.0,
                         },
                         &mut Drag::default(),
                         || panic!("toolbar must not read the desktop cursor"),
@@ -356,7 +370,9 @@ fn close_button_tracks_hover_and_pointer_leave_without_changing_image_bounds() {
         window: bounds,
         image: image_rect,
         controls_area: bounds,
-        toolbar_below: false,
+        grid: 1.0,
+        toolbar_side: ToolbarSide::Top,
+        toolbar_offset: Vec2::ZERO,
         top_edge: false,
     };
     for (events, close_visible) in [
@@ -387,6 +403,8 @@ fn close_button_tracks_hover_and_pointer_leave_without_changing_image_bounds() {
                         texture: &texture,
                         frame: layout,
                         events: &sender,
+                        monitors: &[],
+                        coordinate_ratio: 1.0,
                     },
                     &mut Drag::default(),
                     || panic!("hover must not read the desktop cursor"),

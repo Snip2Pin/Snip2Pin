@@ -336,10 +336,14 @@ impl Snip2Pin {
                 self.layers
                     .values()
                     .map(|layer| {
-                        let area = egui::Rect::from_min_size(
-                            layer.display.position().into(),
-                            layer.display.logical_size().into(),
-                        );
+                        let area = if self.demo {
+                            egui::Rect::from_min_size(
+                                layer.display.position().into(),
+                                layer.display.logical_size().into(),
+                            )
+                        } else {
+                            platform::pin_work_area(&layer.display)
+                        };
                         // Normalize mixed-DPI display bounds to the capture's
                         // coordinate scale before the viewport applies its DPI.
                         let factor = if cfg!(target_os = "macos") {
@@ -560,7 +564,8 @@ impl Snip2Pin {
                     .with_taskbar(false)
                     .with_mouse_passthrough(!active),
                 move |ui, _| {
-                    platform::prepare_floating_windows();
+                    // Root logic reports any pin-adapter failure.
+                    let _ = platform::prepare_floating_windows();
                     if cfg!(target_os = "macos") && !demo {
                         // Native bounds can change after this frame's input was
                         // collected. Wait for the resize event instead of squeezing
@@ -647,6 +652,10 @@ impl Snip2Pin {
                             window,
                             outer_position,
                         } => {
+                            // Prepare native pin constraints before the first
+                            // move, so system clamping cannot consume the space
+                            // reserved for controls. Root logic reports failures.
+                            let _ = platform::prepare_floating_windows();
                             ui.ctx()
                                 .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));
                             ui.ctx()
@@ -666,6 +675,8 @@ impl Snip2Pin {
                             texture: &texture,
                             frame,
                             events: &events,
+                            monitors: &screen_areas,
+                            coordinate_ratio: ratio,
                         },
                         &mut prepared.drag,
                         platform::pointer_position,
@@ -687,7 +698,9 @@ impl eframe::App for Snip2Pin {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_icon(ctx);
-        platform::prepare_floating_windows();
+        if let Err(error) = platform::prepare_floating_windows() {
+            self.message = Some(error);
+        }
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::Capture => {

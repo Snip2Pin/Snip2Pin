@@ -8,6 +8,10 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey:
 use snip2pin::settings::Binding;
 
 #[cfg(target_os = "macos")]
+#[path = "platform/macos.rs"]
+mod macos;
+
+#[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
 /// Read usable display bounds on the UI thread; never show or activate windows.
@@ -136,7 +140,7 @@ fn set_dock_icon(variant: snip2pin::icon::Variant) -> Result<(), String> {
 
 /// Selection windows can cover the menu bar and fullscreen applications without
 /// asking macOS to create a Space. All calls stay on the verified main thread.
-pub fn prepare_floating_windows() {
+pub fn prepare_floating_windows() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if let Some(main_thread) = objc2::MainThreadMarker::new() {
         use objc2_app_kit::{NSApplication, NSWindowCollectionBehavior};
@@ -152,13 +156,7 @@ pub fn prepare_floating_windows() {
                     window.setCollectionBehavior(behavior);
                 }
                 if title == "Snip2Pin · 贴图" {
-                    // Floating-level windows are constrained below the menu
-                    // bar. Status-level pins may leave the top edge; selection
-                    // layers remain above them and no Space is created.
-                    let level = objc2_core_graphics::kCGStatusWindowLevel as isize;
-                    if window.level() != level {
-                        window.setLevel(level);
-                    }
+                    macos::prepare_pin(&window)?;
                 }
                 if title == "Snip2Pin · 框选" {
                     // The demo is a regular small test window; it need not
@@ -184,6 +182,7 @@ pub fn prepare_floating_windows() {
             }
         }
     }
+    Ok(())
 }
 
 pub fn finish_capture(ctx: &egui::Context) {

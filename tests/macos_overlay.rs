@@ -43,7 +43,7 @@ fn main() {
             )
         };
         window.setTitle(&NSString::from_str("Snip2Pin · 框选"));
-        platform::prepare_floating_windows();
+        platform::prepare_floating_windows().expect("prepare native windows");
         assert!(!window.isVisible());
         assert!(!application.isActive());
         let actual = window.frame();
@@ -52,7 +52,7 @@ fn main() {
             "selection layer must include the menu bar and Dock, without compressing the captured desktop"
         );
         assert!(window.level() > objc2_core_graphics::kCGStatusWindowLevel as isize);
-        platform::prepare_floating_windows();
+        platform::prepare_floating_windows().expect("prepare native windows");
         assert_eq!(window.frame(), expected, "preparation must be idempotent");
         assert!(!window.isVisible());
         assert!(!application.isActive());
@@ -95,8 +95,21 @@ fn main() {
                 true,
             )
         };
+        let outside = NSRect::new(
+            NSPoint::new(
+                target.origin.x,
+                (visible.origin.y + visible.size.height - target.size.height / 2.0).floor(),
+            ),
+            target.size,
+        );
+        pin.setLevel(objc2_core_graphics::kCGFloatingWindowLevel as isize);
+        assert_ne!(
+            pin.constrainFrameRect_toScreen(outside, Some(&screen)),
+            outside
+        );
+        let original_class = pin.class();
         pin.setTitle(&NSString::from_str("Snip2Pin · 贴图"));
-        platform::prepare_floating_windows();
+        platform::prepare_floating_windows().expect("prepare native windows");
         // AppKit rounds fractional window dimensions to integral native points.
         // Keep that rounding in the transparent window, not in the captured image.
         let window_size = NSSize::new(target.size.width.ceil(), target.size.height.ceil());
@@ -133,17 +146,15 @@ fn main() {
             ),
             window_size,
         );
-        pin.setLevel(objc2_core_graphics::kCGFloatingWindowLevel as isize);
-        assert_ne!(
-            pin.constrainFrameRect_toScreen(offscreen, Some(&screen)),
-            offscreen,
-            "a normal floating window reproduces the system's top-edge restriction"
-        );
-        platform::prepare_floating_windows();
+        platform::prepare_floating_windows().expect("prepare native windows");
         assert_eq!(
             pin.level(),
-            objc2_core_graphics::kCGStatusWindowLevel as isize
+            objc2_core_graphics::kCGFloatingWindowLevel as isize
         );
+        assert!(pin.level() < objc2_core_graphics::kCGDockWindowLevel as isize);
+        assert!(pin.level() < objc2_core_graphics::kCGMainMenuWindowLevel as isize);
+        assert_eq!(pin.class().superclass(), Some(original_class));
+        assert_eq!(pin.class().instance_size(), original_class.instance_size());
         assert!(
             pin.level() < window.level(),
             "capture layers remain above existing pins"
@@ -154,7 +165,7 @@ fn main() {
             "the native pin must allow its upper half to leave the screen while lower controls remain reachable"
         );
         pin.setFrameOrigin(offscreen.origin);
-        platform::prepare_floating_windows();
+        platform::prepare_floating_windows().expect("prepare native windows");
         assert_eq!(
             pin.frame(),
             offscreen,

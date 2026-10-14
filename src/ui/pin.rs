@@ -8,13 +8,12 @@ use crate::app::Event;
 #[cfg(test)]
 use snip2pin::geometry::Placement;
 
+#[cfg(test)]
+use snip2pin::pin::ToolbarSide;
 use snip2pin::pin::{Coordinates, Drag};
 pub use snip2pin::pin::{Frame, frame_geometry};
 
 use super::{icons::paint_copy_icon, style::PIN};
-
-#[cfg(test)]
-use snip2pin::pin::toolbar_below;
 
 #[cfg(test)]
 fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
@@ -22,7 +21,13 @@ fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
         window: Rect::NOTHING,
         image,
         controls_area: Rect::NOTHING,
-        toolbar_below: below,
+        grid: 1.0,
+        toolbar_side: if below {
+            ToolbarSide::Bottom
+        } else {
+            ToolbarSide::Top
+        },
+        toolbar_offset: egui::Vec2::ZERO,
         top_edge: false,
     }
     .toolbar_rects()
@@ -33,6 +38,8 @@ pub struct Model<'a> {
     pub texture: &'a TextureHandle,
     pub frame: Frame,
     pub events: &'a Sender<Event>,
+    pub monitors: &'a [Rect],
+    pub coordinate_ratio: f32,
 }
 
 pub fn show(
@@ -46,6 +53,8 @@ pub fn show(
         texture,
         frame,
         events,
+        monitors,
+        coordinate_ratio,
     } = model;
     let bounds = ui.max_rect();
     let image = frame.image;
@@ -105,7 +114,7 @@ pub fn show(
         let inset = inner
             .zip(outer)
             .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
-        let position = frame.upward_drag_position(position, inset);
+        let position = frame.drag_position(position, inset, monitors, coordinate_ratio);
         if outer.is_none_or(|outer| outer.min != position) {
             ui.ctx()
                 .send_viewport_cmd(ViewportCommand::OuterPosition(position));
