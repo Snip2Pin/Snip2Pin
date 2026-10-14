@@ -43,30 +43,12 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     }
     let origin = Pos2::new(
         ((position.x - PADDING) * grid).floor() / grid,
-        ((position.y
-            - PADDING
-            - if toolbar_below {
-                0.0
-            } else {
-                BUTTON_HEIGHT + IMAGE_GAP
-            })
-            * grid)
-            .floor()
-            / grid,
+        ((position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP) * grid).floor() / grid,
     );
     let image = Rect::from_min_size((position - origin).to_pos2(), size);
     let window_size = egui::vec2(
         ((image.min.x + size.x.max(TOOLBAR_WIDTH) + PADDING) * grid).ceil() / grid,
-        ((image.max.y
-            + PADDING
-            + if toolbar_below {
-                BUTTON_HEIGHT + IMAGE_GAP
-            } else {
-                0.0
-            })
-            * grid)
-            .ceil()
-            / grid,
+        ((image.max.y + PADDING + BUTTON_HEIGHT + IMAGE_GAP) * grid).ceil() / grid,
     );
     Frame {
         window: Rect::from_min_size(origin, window_size),
@@ -74,6 +56,12 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
         toolbar_below,
         top_edge,
     }
+}
+
+/// Use current desktop geometry, including user dragging, without changing the
+/// image or native window. Both rows are reserved in the transparent surface.
+pub fn toolbar_below(image: Rect, screen: Rect) -> bool {
+    image.min.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP < screen.min.y
 }
 
 fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
@@ -268,7 +256,7 @@ mod tests {
                     let frame = frame_geometry(placement, screen, ratio, 1.0 / ratio);
                     let (copy, close) = toolbar_rects(frame.image, frame.toolbar_below);
                     assert!(frame.top_edge);
-                    assert!(frame.window.min.y >= screen.min.y * ratio);
+                    assert!(frame.window.min.y + frame.image.min.y >= screen.min.y * ratio);
                     let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
                     assert!(bounds.contains_rect(copy) && bounds.contains_rect(close));
                     let visible = Rect::from_min_max(screen.min * ratio, screen.max * ratio);

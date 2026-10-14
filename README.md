@@ -16,7 +16,7 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，双击关闭；鼠标移入时显示复制图标和 ×。图片始终保持原始尺寸，顶部空间不足时只调整贴图和按钮位置。
+- 拖动贴图可移动，双击关闭；鼠标移入时显示复制图标和 ×。按钮随当前位置自动切换上下，图片始终保持原始尺寸。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
@@ -32,8 +32,7 @@ macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制�
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
 - Drag a pin to move it; double-click to close. Hover to show **Copy** and **×**.
-  Images retain their original size; tight top-edge space only changes the
-  positions of the pin and its controls.
+  Controls switch above or below as the pin moves; images retain their original size.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **“修改快捷键” (Change shortcut)** to change it.

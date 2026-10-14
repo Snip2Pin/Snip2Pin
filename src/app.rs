@@ -54,6 +54,7 @@ struct Pin {
     placement: Placement,
     display_scale: f32,
     screen: egui::Rect,
+    screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
     prepared: Arc<Mutex<PinPreparation>>,
 }
@@ -333,6 +334,29 @@ impl Snip2Pin {
             } else {
                 platform::pin_work_area(&snapshot.display)
             };
+            let screen_areas = Arc::new(
+                self.layers
+                    .values()
+                    .map(|layer| {
+                        let area = if self.demo {
+                            egui::Rect::from_min_size(
+                                layer.display.position().into(),
+                                layer.display.logical_size().into(),
+                            )
+                        } else {
+                            platform::pin_work_area(&layer.display)
+                        };
+                        // Normalize mixed-DPI display bounds to the capture's
+                        // coordinate scale before the viewport applies its DPI.
+                        let factor = if cfg!(target_os = "macos") {
+                            1.0
+                        } else {
+                            layer.display.scale / snapshot.display.scale
+                        };
+                        egui::Rect::from_min_max(area.min * factor, area.max * factor)
+                    })
+                    .collect(),
+            );
             self.pins.insert(
                 self.next_pin,
                 Pin {
@@ -341,6 +365,7 @@ impl Snip2Pin {
                     placement,
                     display_scale: snapshot.display.scale,
                     screen,
+                    screen_areas,
                     session: id,
                     prepared: Arc::new(Mutex::new(PinPreparation::default())),
                 },
@@ -585,6 +610,7 @@ impl Snip2Pin {
             let placement = pin.placement;
             let display_scale = pin.display_scale;
             let screen = pin.screen;
+            let screen_areas = pin.screen_areas.clone();
             let initial = ui::pin::frame_geometry(
                 placement,
                 screen,
@@ -657,6 +683,20 @@ impl Snip2Pin {
                         offset / ratio
                     });
                     frame.image = frame.image.translate(offset * ratio);
+                    if let Some(actual) = inner {
+                        let image = frame.image.translate(actual.min.to_vec2());
+                        let screen = screen_areas
+                            .iter()
+                            .map(|area| {
+                                egui::Rect::from_min_max(area.min * ratio, area.max * ratio)
+                            })
+                            .find(|area| area.contains(image.center()))
+                            .unwrap_or(egui::Rect::from_min_max(
+                                screen.min * ratio,
+                                screen.max * ratio,
+                            ));
+                        frame.toolbar_below = ui::pin::toolbar_below(image, screen);
+                    }
                     ui::pin::show(ui, id, &texture, frame, &events);
                     if first_frame {
                         let _ = events.send(Event::PinReady(session, id));
@@ -1255,6 +1295,113 @@ mod tests {
     }
 
     #[test]
+    fn dragging_switches_toolbar_rows_without_moving_or_resizing_the_image() {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        let id = app.gate.begin().expect("capture starts");
+        let mut left = capture::demo();
+        left.display.id = 9;
+        left.display.scale = 2.0;
+        left.display.origin = [-680.0, -100.0];
+        app.accept_capture(id, Ok(vec![capture::demo(), left]), None, &ctx);
+        app.selection_action(
+            id,
+            0,
+            overlay::Action::Select(geometry::PixelRect {
+                x: 96,
+                y: 60,
+                width: 192,
+                height: 120,
+            }),
+            &ctx,
+        );
+        let pin = &app.pins[&1];
+        let initial = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0);
+        let texture = pin.texture.id();
+        let viewport = ViewportId::from_hash_of(("pin", 1_u64));
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        setup.textures_delta.clear();
+        let paint = setup.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("pin callback");
+        for (index, (position, below)) in [
+            (initial.window.min, false),
+            (initial.window.min, false),
+            (egui::pos2(138.0, 68.0), true),
+            (egui::pos2(138.0, 200.0), false),
+            (egui::pos2(138.0, 68.0), true),
+            (egui::pos2(-640.0, -20.0), false),
+            (egui::pos2(-640.0, -132.0), true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let actual = egui::Rect::from_min_size(position, initial.window.size());
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
+                events: vec![egui::Event::PointerMoved(initial.image.center())],
+                ..Default::default()
+            };
+            input.viewports.insert(
+                viewport,
+                egui::ViewportInfo {
+                    inner_rect: Some(actual),
+                    outer_rect: Some(actual),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| paint(ui));
+            output.textures_delta.clear();
+            if index == 0 {
+                continue;
+            }
+            assert!(
+                output.viewport_output[&viewport]
+                    .commands
+                    .iter()
+                    .all(|command| !matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    ))
+            );
+            let image = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
+                        Some(mesh.calc_bounds())
+                    }
+                    _ => None,
+                })
+                .expect("image stays visible");
+            assert_eq!(
+                image, initial.image,
+                "toolbar switching cannot change image placement or dimensions"
+            );
+            let close = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "×" => Some((
+                        shape.clip_rect,
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .expect("hover reveals close button");
+            assert!(
+                close.0.contains_rect(close.1),
+                "both toolbar rows must fit the native surface"
+            );
+            assert_eq!(close.1.min.y > image.max.y, below);
+            assert!(!close.1.intersects(image));
+        }
+    }
+
+    #[test]
     fn pending_pin_can_be_closed_before_native_geometry_is_ready() {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
@@ -1482,7 +1629,7 @@ mod tests {
             .get(&ViewportId::from_hash_of(("pin", 1_u64)))
             .expect("native pin");
         assert_eq!(pin.builder.position, Some(egui::pos2(138.0, 100.0)));
-        assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 136.0)));
+        assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 168.0)));
         assert!(
             output.viewport_output[&ViewportId::ROOT]
                 .commands
