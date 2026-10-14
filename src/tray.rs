@@ -67,11 +67,10 @@ impl Tray {
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Snip2Pin");
-        let builder = if cfg!(target_os = "macos") {
-            builder.with_icon_templated(icon)
-        } else {
-            builder.with_icon(icon)
-        };
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(icon);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.with_icon(icon);
         let icon = builder.build().map_err(|error| error.to_string())?;
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if let Some(action) = action(event.id.as_ref()) {
