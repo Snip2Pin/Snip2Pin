@@ -21,7 +21,7 @@ keep it above other windows, drag to move, and double-click to close.
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
 
-主题默认跟随系统，图标默认跟随主题；均可在主窗口修改，设置自动保存。
+主题默认跟随系统，图标默认跟随主题；均可在主窗口修改，设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
 
 macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制」
 （较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，再重新打开应用。
@@ -39,7 +39,8 @@ Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Li
 Click **“修改快捷键” (Change shortcut)** to change it.
 
 Theme follows the system and icons follow the theme by default. Change either
-in the main window; settings are saved automatically.
+in the main window; settings are saved automatically. On macOS, Dock icons update
+immediately; local update installs apply the saved icon to Finder and Launchpad.
 
 On first use on macOS, allow Snip2Pin in System Settings → Privacy & Security →
 Screen Recording (Screen & System Audio Recording on newer macOS), then reopen it.

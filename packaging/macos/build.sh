@@ -31,14 +31,24 @@ rm -rf "$APP_DIR" "$ICONSET"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$ICONSET"
 cp "target/$PROFILE/snip2pin" "$APP_DIR/Contents/MacOS/snip2pin"
 cp packaging/macos/Info.plist "$APP_DIR/Contents/Info.plist"
+ICON_VARIANT=line
+if "$INSTALL"; then
+    ICON_VARIANT="$("target/$PROFILE/snip2pin" --selected-icon)"
+fi
+case "$ICON_VARIANT" in
+    line) ICON_NAME=AppIcon-Line ;;
+    metal) ICON_NAME=AppIcon-Metal ;;
+    *) printf 'Invalid icon variant.\n' >&2; exit 1 ;;
+esac
+plutil -replace CFBundleIconFile -string "$ICON_NAME" "$APP_DIR/Contents/Info.plist"
 for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" assets/icons/line.png \
+    sips -z "$size" "$size" "assets/icons/$ICON_VARIANT.png" \
         --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
     doubled=$((size * 2))
-    sips -z "$doubled" "$doubled" assets/icons/line.png \
+    sips -z "$doubled" "$doubled" "assets/icons/$ICON_VARIANT.png" \
         --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon-Line.icns"
+iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/$ICON_NAME.icns"
 plutil -lint "$APP_DIR/Contents/Info.plist"
 bash packaging/macos/signing.sh --sign "$APP_DIR"
 if "$RELEASE"; then

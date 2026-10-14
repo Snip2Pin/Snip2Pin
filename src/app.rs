@@ -460,6 +460,7 @@ impl Snip2Pin {
             return;
         }
         self.preferences = preferences;
+        self.applied_icon = None;
         ctx.set_theme(theme.preference());
         self.message = Some(
             if self.demo {

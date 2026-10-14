@@ -153,16 +153,14 @@ fn main() {
         );
         assert!(pin.level() < objc2_core_graphics::kCGDockWindowLevel as isize);
         assert!(pin.level() < objc2_core_graphics::kCGMainMenuWindowLevel as isize);
-        assert_eq!(pin.class().superclass(), Some(original_class));
-        assert_eq!(pin.class().instance_size(), original_class.instance_size());
+        assert_eq!(
+            pin.class(),
+            original_class,
+            "preserve AppKit observation bookkeeping"
+        );
         assert!(
             pin.level() < window.level(),
             "capture layers remain above existing pins"
-        );
-        assert_eq!(
-            pin.constrainFrameRect_toScreen(offscreen, Some(&screen)),
-            offscreen,
-            "the native pin must allow its upper half to leave the screen while lower controls remain reachable"
         );
         pin.setFrameOrigin(offscreen.origin);
         platform::prepare_floating_windows().expect("prepare native windows");

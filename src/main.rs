@@ -13,7 +13,19 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
-    if arguments.next().as_deref() == Some("--write-icon") {
+    let action = arguments.next();
+    #[cfg(target_os = "macos")]
+    if action.as_deref() == Some("--selected-icon") {
+        println!(
+            "{}",
+            match platform::macos_icon::selected_variant()? {
+                snip2pin::icon::Variant::Line => "line",
+                snip2pin::icon::Variant::Metal => "metal",
+            }
+        );
+        return Ok(());
+    }
+    if action.as_deref() == Some("--write-icon") {
         let path = arguments
             .next()
             .ok_or("--write-icon needs an output path")?;

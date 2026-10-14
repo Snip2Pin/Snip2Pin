@@ -17,7 +17,7 @@
 - 贴图应能自由移动到任意位置，包括部分或全部移出屏幕；操作图标必须保持在显示器可用区内、可见且可点击，避开 Dock、菜单栏等系统界面。不能以图片边界限制移动；移动边界由可达的操作图标决定。拖动锚点用原生坐标保存，正确处理 DPI 和缩放变化。无法读取全局鼠标坐标或指定位置的平台使用系统拖动。
 - 位置根据图片、窗口和显示器的实际边界计算，禁止硬编码屏幕坐标。尺寸、间距、颜色、时间阈值等使用有明确用途的配置或常量，避免散落数值；数学常量、格式规范、图标路径和测试样例无需机械抽象。
 - 操作图标的位置根据图片、显示器可用区和实际空间在四边动态计算，优先在图片上方；图片移出右侧时放到左侧，移出左侧时放到右侧，顶部不足时放到下方。角落处综合选择可达位置，始终不遮挡图片。不能只判断“是否移到顶部”，也不能将透明留白误当作屏幕内的可用空间。窗口初始化时预留四边所需空间；图标切换不能移动或缩放图片，也不能重设窗口位置和尺寸。
-- 普通贴图必须置于 Dock 和菜单栏之下，不得靠提高到系统界面之上的窗口层级解决移动限制。macOS 仅针对本应用的贴图窗口调整原生边界约束，保留窗口原有行为；不得修改系统或其他窗口的实现。框选层仅在用户主动截图时覆盖系统界面。
+- 普通贴图必须置于 Dock 和菜单栏之下，不得靠提高到系统界面之上的窗口层级解决移动限制。macOS 使用原生移动接口，保留窗口类型和系统监听的生命周期；不得修改窗口运行时类型或系统共享类。框选层仅在用户主动截图时覆盖系统界面。
 - macOS 窗口按整数原生点取整，图片须在窗口内单独定位和绘制，不能随窗口尺寸取整而偏移或拉伸。
 - 使用预先准备的透明无边框选区层，不切换系统全屏、不隐藏主窗口或已有贴图。
 - 新贴图绘制完成后才清除选区画面，避免截图结束时露出空白帧。
@@ -54,7 +54,7 @@
 - `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
-- `src/platform/macos.rs`: pin-specific native frame constraint adapter, preserving the backend's window class and system UI stacking.
+- `src/platform/macos.rs`: pin stacking adapter, preserving the backend's window class and observation lifecycle.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `assets/icons/`, `src/icon.rs`: vector sources, LFS PNG assets, and icon selection.
 - `tests/`: deterministic checks using generated images.
@@ -75,11 +75,11 @@ Shortcut changes must retain the previous binding if registration fails. Demo
 mode must not register a global shortcut, save settings, or read the desktop.
 macOS selection windows must join Spaces without creating a fullscreen Space,
 cover the menu bar, and release keyboard focus when capture finishes.
-macOS pins stay at floating window level, below the Dock and menu bar. A subclass
-of each pin's actual native class overrides only `constrainFrameRect:toScreen:`;
-it adds no ivars and preserves backend behavior. Do not alter methods on shared
-classes. Test native constraints, inherited class layout, and stacking on hidden
-windows, rather than relying only on hidden `setFrameOrigin:` calls.
+macOS pins stay at floating window level, below the Dock and menu bar. Never
+replace the runtime class of an observed window: AppKit owns KVO subclasses and
+their observation bookkeeping. Test creation, movement, appearance changes,
+and destruction using real winit windows, hidden with activation prohibited;
+plain NSWindow geometry tests alone cannot cover backend observation teardown.
 After raising macOS selection windows above system UI, restore `NSScreen.frame`
 instead of the work area. Warm inactive layers too, and defer image painting
 until the viewport reports the complete display size; never stretch a desktop
@@ -91,6 +91,10 @@ Keep unsafe code denied by default. A platform API that requires unsafe may have
 one narrowly scoped exception, with documented preconditions and owned memory.
 macOS Dock icons must decode PNG in Rust, avoiding AppKit PNG loading and borrowed
 pixel buffers. Updating an icon must not modify the signed application bundle.
+Select Finder/Launchpad bundle resources before signing during local installation.
+Do not set a custom file icon on a signed app: its Finder metadata/resource fork
+fails strict signature verification. Runtime icon choices update the Dock; document
+the bundle-icon installation requirement rather than silently invalidating signing.
 
 Use dedicated file patch tools for text edits. Programmatic transformation is
 appropriate only when the transformation itself is complex; state the reason and
