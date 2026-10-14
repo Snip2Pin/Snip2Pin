@@ -7,35 +7,76 @@ use eframe::egui::{
 use crate::app::Event;
 use snip2pin::geometry::Placement;
 
-pub const PADDING: f32 = 10.0;
+const PADDING: f32 = 10.0;
 const BUTTON_HEIGHT: f32 = 26.0;
-const COPY_WIDTH: f32 = 48.0;
+const COPY_WIDTH: f32 = BUTTON_HEIGHT;
 const BUTTON_GAP: f32 = 4.0;
 const IMAGE_GAP: f32 = 6.0;
 const TOOLBAR_WIDTH: f32 = COPY_WIDTH + BUTTON_GAP + BUTTON_HEIGHT;
 
-/// Snap the native window to its coordinate grid while retaining the image's
-/// exact origin and size inside it. macOS windows use integral native points.
-pub fn frame_geometry(placement: Placement, ratio: f32, grid: f32) -> (Rect, Rect) {
-    let position = Pos2::new(placement.position[0], placement.position[1]) * ratio;
-    let size = egui::vec2(placement.size[0], placement.size[1]) * ratio;
+#[derive(Clone, Copy)]
+pub struct Frame {
+    pub window: Rect,
+    pub image: Rect,
+    pub toolbar_below: bool,
+}
+
+/// Keep normal pins at their source position. At the display's usable top edge,
+/// move down just enough for the shadow and put the toolbar below the image.
+pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32) -> Frame {
+    let mut position = Pos2::new(placement.position[0], placement.position[1]) * ratio;
+    let mut size = egui::vec2(placement.size[0], placement.size[1]) * ratio;
+    let screen_top = screen.min.y * ratio;
+    let toolbar_below = position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP < screen_top;
+    if toolbar_below {
+        position.y = position.y.max((screen_top * grid).ceil() / grid + PADDING);
+        let available =
+            (screen.max.y * ratio - position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP).max(1.0);
+        size *= (available / size.y).min(1.0);
+    }
     let origin = Pos2::new(
-        ((position.x - PADDING - (TOOLBAR_WIDTH - size.x).max(0.0)) * grid).floor() / grid,
-        ((position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP) * grid).floor() / grid,
+        ((position.x - PADDING) * grid).floor() / grid,
+        ((position.y
+            - PADDING
+            - if toolbar_below {
+                0.0
+            } else {
+                BUTTON_HEIGHT + IMAGE_GAP
+            })
+            * grid)
+            .floor()
+            / grid,
     );
     let image = Rect::from_min_size((position - origin).to_pos2(), size);
     let window_size = egui::vec2(
-        ((image.max.x + PADDING) * grid).ceil() / grid,
-        ((image.max.y + PADDING) * grid).ceil() / grid,
+        ((image.min.x + size.x.max(TOOLBAR_WIDTH) + PADDING) * grid).ceil() / grid,
+        ((image.max.y
+            + PADDING
+            + if toolbar_below {
+                BUTTON_HEIGHT + IMAGE_GAP
+            } else {
+                0.0
+            })
+            * grid)
+            .ceil()
+            / grid,
     );
-    (Rect::from_min_size(origin, window_size), image)
+    Frame {
+        window: Rect::from_min_size(origin, window_size),
+        image,
+        toolbar_below,
+    }
 }
 
-fn toolbar_rects(image: Rect) -> (Rect, Rect) {
+fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
     let close = Rect::from_min_size(
         Pos2::new(
-            image.max.x - BUTTON_HEIGHT,
-            image.min.y - IMAGE_GAP - BUTTON_HEIGHT,
+            image.max.x.max(image.min.x + TOOLBAR_WIDTH) - BUTTON_HEIGHT,
+            if below {
+                image.max.y + IMAGE_GAP
+            } else {
+                image.min.y - IMAGE_GAP - BUTTON_HEIGHT
+            },
         ),
         egui::vec2(BUTTON_HEIGHT, BUTTON_HEIGHT),
     );
@@ -46,14 +87,61 @@ fn toolbar_rects(image: Rect) -> (Rect, Rect) {
     (copy, close)
 }
 
+fn paint_copy_icon(ui: &egui::Ui, rect: Rect) {
+    let origin = rect.center() - egui::vec2(8.0, 8.0);
+    let point = |x, y| origin + egui::vec2(x, y) * (16.0 / 24.0);
+    let stroke = Stroke::new(1.7 * (16.0 / 24.0), Color32::WHITE);
+    ui.painter().add(egui::Shape::line(
+        [
+            (5.0, 15.0),
+            (4.0, 15.0),
+            (2.6, 14.4),
+            (2.0, 13.0),
+            (2.0, 5.0),
+            (2.6, 3.6),
+            (4.0, 3.0),
+            (15.0, 3.0),
+            (16.4, 3.6),
+            (17.0, 5.0),
+            (17.0, 6.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| point(x, y))
+        .collect(),
+        stroke,
+    ));
+    ui.painter().rect_stroke(
+        Rect::from_min_max(point(7.0, 8.0), point(22.0, 21.0)),
+        1,
+        stroke,
+        StrokeKind::Middle,
+    );
+    ui.painter().add(egui::Shape::line(
+        [
+            (8.0, 19.0),
+            (12.0, 15.0),
+            (15.0, 18.0),
+            (17.0, 16.0),
+            (21.0, 20.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| point(x, y))
+        .collect(),
+        stroke,
+    ));
+    ui.painter()
+        .circle_filled(point(17.5, 12.5), 16.0 / 24.0, Color32::WHITE);
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     id: u64,
     texture: &TextureHandle,
-    image: Rect,
+    frame: Frame,
     events: &Sender<Event>,
 ) {
     let bounds = ui.max_rect();
+    let image = frame.image;
     ui.painter().add(
         Shadow {
             offset: [0, 2],
@@ -78,7 +166,7 @@ pub fn show(
         ),
         StrokeKind::Outside,
     );
-    let (copy_rect, close_rect) = toolbar_rects(image);
+    let (copy_rect, close_rect) = toolbar_rects(image, frame.toolbar_below);
     let response = ui.interact(image, ui.id().with("image-drag"), Sense::click_and_drag());
     let hovered = ui
         .input(|input| input.pointer.hover_pos())
@@ -86,17 +174,21 @@ pub fn show(
     if response.drag_started() {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }
-    if hovered
-        && ui
+    if hovered {
+        let copy = ui
             .put(
                 copy_rect,
-                egui::Button::new(egui::RichText::new("复制").color(Color32::WHITE))
-                    .fill(Color32::from_black_alpha(160)),
+                egui::Button::new("").fill(Color32::from_black_alpha(160)),
             )
-            .clicked()
-    {
-        let _ = events.send(Event::CopyPin(id));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            .on_hover_text("复制");
+        copy.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "复制")
+        });
+        paint_copy_icon(ui, copy.rect);
+        if copy.clicked() {
+            let _ = events.send(Event::CopyPin(id));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
     let close = hovered
         && ui
@@ -130,14 +222,20 @@ mod tests {
                     position: [-680.5, 100.25],
                     size,
                 };
-                let (window, image) = frame_geometry(placement, ratio, grid);
-                let (copy, close) = toolbar_rects(image);
-                let bounds = Rect::from_min_size(Pos2::ZERO, window.size());
+                let frame = frame_geometry(
+                    placement,
+                    Rect::from_min_size(egui::pos2(-1000.0, -1000.0), egui::vec2(3000.0, 3000.0)),
+                    ratio,
+                    grid,
+                );
+                let image = frame.image;
+                let (copy, close) = toolbar_rects(image, frame.toolbar_below);
+                let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
                 assert!(bounds.contains_rect(copy) && bounds.contains_rect(close));
                 assert!(copy.max.x < close.min.x);
                 assert!(copy.max.y < image.min.y && close.max.y < image.min.y);
                 assert!(
-                    (window.min + image.min.to_vec2())
+                    (frame.window.min + image.min.to_vec2())
                         .distance(Pos2::new(placement.position[0], placement.position[1]) * ratio)
                         < 0.001
                 );
@@ -147,8 +245,35 @@ mod tests {
     }
 
     #[test]
+    fn top_edge_layout_moves_down_and_keeps_the_lower_toolbar_inside_the_display() {
+        for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
+            for ratio in [1.0, 0.8] {
+                for size in [[12.0, 8.0], [193.0, 121.0], [680.0, 420.0]] {
+                    let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
+                    let placement = Placement {
+                        position: [origin.x + 80.0, origin.y - 28.0],
+                        size,
+                    };
+                    let frame = frame_geometry(placement, screen, ratio, 1.0 / ratio);
+                    let (copy, close) = toolbar_rects(frame.image, frame.toolbar_below);
+                    assert!(frame.toolbar_below);
+                    assert!(frame.window.min.y >= screen.min.y * ratio);
+                    assert!(frame.window.max.y <= screen.max.y * ratio + ratio);
+                    let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
+                    assert!(bounds.contains_rect(copy) && bounds.contains_rect(close));
+                    assert!(copy.min.y > frame.image.max.y && close.min.y > frame.image.max.y);
+                    assert!((frame.image.aspect_ratio() - size[0] / size[1]).abs() < 0.001);
+                    if size[1] < 200.0 {
+                        assert!((frame.image.height() - size[1] * ratio).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
-        for copy in [true, false] {
+        for (copy, below) in [(true, false), (false, false), (true, true), (false, true)] {
             let ctx = egui::Context::default();
             let texture = ctx.load_texture(
                 "pin",
@@ -157,7 +282,12 @@ mod tests {
             );
             let (sender, events) = mpsc::channel();
             let image = Rect::from_min_size(egui::pos2(10.0, 42.0), egui::vec2(200.0, 88.0));
-            let (copy_rect, close_rect) = toolbar_rects(image);
+            let frame = Frame {
+                window: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 140.0)),
+                image,
+                toolbar_below: below,
+            };
+            let (copy_rect, close_rect) = toolbar_rects(image, below);
             let point = if copy {
                 copy_rect.center()
             } else {
@@ -182,12 +312,12 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             Pos2::ZERO,
-                            egui::vec2(220.0, 140.0),
+                            egui::vec2(220.0, 180.0),
                         )),
                         events: input_events,
                         ..Default::default()
                     },
-                    |ui| show(ui, 41, &texture, image, &sender),
+                    |ui| show(ui, 41, &texture, frame, &sender),
                 );
                 frame.textures_delta.clear();
                 assert!(
@@ -217,6 +347,11 @@ mod tests {
         let (sender, _events) = mpsc::channel();
         let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 140.0));
         let image_rect = Rect::from_min_size(egui::pos2(10.0, 42.0), egui::vec2(200.0, 88.0));
+        let layout = Frame {
+            window: bounds,
+            image: image_rect,
+            toolbar_below: false,
+        };
         for (events, close_visible) in [
             (vec![], false),
             (
@@ -225,7 +360,7 @@ mod tests {
             ),
             (
                 vec![egui::Event::PointerMoved(
-                    toolbar_rects(image_rect).0.center(),
+                    toolbar_rects(image_rect, false).0.center(),
                 )],
                 true,
             ),
@@ -237,7 +372,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| show(ui, 1, &texture, image_rect, &sender),
+                |ui| show(ui, 1, &texture, layout, &sender),
             );
             frame.textures_delta.clear();
             assert_eq!(
@@ -247,9 +382,7 @@ mod tests {
                 close_visible
             );
             assert_eq!(
-                frame.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "复制")
-                }),
+                frame.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.points.len() == 5)),
                 close_visible
             );
             let image = frame

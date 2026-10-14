@@ -25,6 +25,8 @@ fn main() {
         !screens.is_empty(),
         "macOS geometry test requires a display"
     );
+    let primary_frame = screens.iter().next().expect("primary screen").frame();
+    let desktop_top = primary_frame.origin.y + primary_frame.size.height;
     for screen in screens {
         let expected = screen.frame();
         // Reproduce a selection layer constrained to the desktop work area.
@@ -56,6 +58,28 @@ fn main() {
         assert!(!application.isActive());
 
         let scale = screen.backingScaleFactor();
+        let display = snip2pin::capture::Display {
+            id: 0,
+            origin: [
+                expected.origin.x as f32,
+                (desktop_top - expected.origin.y - expected.size.height) as f32,
+            ],
+            size: [expected.size.width as f32, expected.size.height as f32],
+            scale: scale as f32,
+        };
+        let visible = screen.visibleFrame();
+        let usable = platform::pin_work_area(&display);
+        assert_eq!(
+            usable.min,
+            eframe::egui::pos2(
+                visible.origin.x as f32,
+                (desktop_top - visible.origin.y - visible.size.height) as f32
+            )
+        );
+        assert_eq!(
+            usable.size(),
+            eframe::egui::vec2(visible.size.width as f32, visible.size.height as f32)
+        );
         let target = NSRect::new(
             NSPoint::new(expected.origin.x + 100.0, expected.origin.y + 100.0),
             NSSize::new(301.0 / scale, 201.0 / scale),

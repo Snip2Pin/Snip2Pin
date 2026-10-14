@@ -7,6 +7,38 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snip2pin::settings::Binding;
 
+/// Read usable display bounds on the UI thread; never show or activate windows.
+pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
+    let bounds =
+        egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
+    #[cfg(target_os = "macos")]
+    if let Some(thread) = objc2::MainThreadMarker::new() {
+        let screens = objc2_app_kit::NSScreen::screens(thread);
+        if let Some(primary) = screens.iter().next() {
+            let frame = primary.frame();
+            let desktop_top = frame.origin.y + frame.size.height;
+            for screen in screens.iter() {
+                let frame = screen.frame();
+                let origin = egui::pos2(
+                    frame.origin.x as f32,
+                    (desktop_top - frame.origin.y - frame.size.height) as f32,
+                );
+                if origin.distance(bounds.min) < 1.0 {
+                    let visible = screen.visibleFrame();
+                    return egui::Rect::from_min_size(
+                        egui::pos2(
+                            visible.origin.x as f32,
+                            (desktop_top - visible.origin.y - visible.size.height) as f32,
+                        ),
+                        egui::vec2(visible.size.width as f32, visible.size.height as f32),
+                    );
+                }
+            }
+        }
+    }
+    bounds
+}
+
 /// Read the cursor once when entering capture, in the same desktop coordinates
 /// as xcap's monitor bounds. No event taps, global hooks, or polling are used.
 #[cfg(target_os = "macos")]
