@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SIGNING_DIR="${SNIP2PIN_SIGNING_DIR:-$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing}"
+SIGNING_DIR="${SNIP2PIN_SIGNING_DIR:-$HOME/Library/Application Support/Snip2Pin/signing}"
 KEYCHAIN="$SIGNING_DIR/identity.keychain-db"
 CERTIFICATE="$SIGNING_DIR/certificate.pem"
 PASSWORD_FILE="$SIGNING_DIR/password.bin"
@@ -99,11 +99,45 @@ case "${1:-}" in
             IDENTITY="${IDENTITY#*=}"
             SIGN_ARGS=(--sign "${IDENTITY//:/}" --keychain "$KEYCHAIN")
         fi
-        codesign --force "${SIGN_ARGS[@]}" --identifier io.github.rensilin.snipsprig "$2"
+        BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$2/Contents/Info.plist")"
+        codesign --force "${SIGN_ARGS[@]}" --identifier "$BUNDLE_ID" "$2"
         codesign --verify --strict "$2"
         ;;
+    --verify-update)
+        [[ $# -eq 3 || ( $# -eq 4 && "${4:-}" == --migrate-identity ) ]] || {
+            printf 'Usage: signing.sh --verify-update NEW_APP OLD_APP [--migrate-identity]\n' >&2
+            exit 2
+        }
+        codesign --verify --strict "$2"
+        codesign --verify --strict "$3"
+        OLD_REQUIREMENT="$(codesign -d -r- "$3" 2>&1 | awk '/^(# )?designated => / {sub(/^(# )?designated => /, ""); print}')"
+        [[ -n "$OLD_REQUIREMENT" && "$OLD_REQUIREMENT" != cdhash\ * ]] || {
+            printf 'The installed app must have a stable certificate signature.\n' >&2
+            exit 1
+        }
+        OLD_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$3/Contents/Info.plist")"
+        NEW_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$2/Contents/Info.plist")"
+        if [[ "$OLD_ID" != "$NEW_ID" ]]; then
+            [[ "${4:-}" == --migrate-identity && "$OLD_ID" =~ ^[a-zA-Z0-9.-]+$ && "$NEW_ID" =~ ^[a-zA-Z0-9.-]+$ ]] || {
+                printf 'App identifier changed. Explicit migration is required; screen permission may need approval again.\n' >&2
+                exit 1
+            }
+            EXPECTED_IDENTIFIER="identifier \"$OLD_ID\""
+            [[ "$OLD_REQUIREMENT" == *"$EXPECTED_IDENTIFIER"* ]] || {
+                printf 'Could not find the installed identifier in its signing requirement.\n' >&2
+                exit 1
+            }
+            # Only an explicitly requested identifier change is permitted.
+            # Preserve the installed certificate/anchor requirements verbatim.
+            OLD_REQUIREMENT="${OLD_REQUIREMENT/"$EXPECTED_IDENTIFIER"/identifier \"$NEW_ID\"}"
+        fi
+        codesign --verify --strict -R "=$OLD_REQUIREMENT" "$2" || {
+            printf 'The signing identity changed. Reuse the installed certificate.\n' >&2
+            exit 1
+        }
+        ;;
     *)
-        printf 'Usage: signing.sh --setup | --sign APP\n' >&2
+        printf 'Usage: signing.sh --setup | --sign APP | --verify-update NEW_APP OLD_APP [--migrate-identity]\n' >&2
         exit 2
         ;;
 esac

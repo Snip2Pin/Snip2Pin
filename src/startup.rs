@@ -30,7 +30,8 @@ impl Startup {
             #[cfg(target_os = "macos")]
             let path = dirs
                 .home_dir()
-                .join("Library/LaunchAgents/io.github.rensilin.snipsprig.plist");
+                .join("Library/LaunchAgents")
+                .join(format!("{}.plist", snip2pin::APP_ID));
             #[cfg(target_os = "linux")]
             let path = dirs.config_dir().join("autostart/snip2pin.desktop");
             Ok(Self {
@@ -123,14 +124,14 @@ fn write_entry(path: &Path, data: &[u8], enabled: bool) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn entry(executable: &str) -> Result<Vec<u8>, String> {
     let mut fields = plist::Dictionary::new();
-    fields.insert("Label".into(), "io.github.rensilin.snipsprig".into());
+    fields.insert("Label".into(), snip2pin::APP_ID.into());
     fields.insert(
         "ProgramArguments".into(),
         plist::Value::Array(vec![executable.into(), "--background".into()]),
     );
     fields.insert(
         "AssociatedBundleIdentifiers".into(),
-        plist::Value::Array(vec!["io.github.rensilin.snipsprig".into()]),
+        plist::Value::Array(vec![snip2pin::APP_ID.into()]),
     );
     fields.insert("RunAtLoad".into(), true.into());
     fields.insert("ProcessType".into(), "Interactive".into());

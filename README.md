@@ -119,8 +119,8 @@ signing tools; this trust does not cover HTTPS or other certificate purposes:
 ```sh
 bash packaging/macos/signing.sh --setup
 security add-trusted-cert -r trustRoot -p codeSign \
-  -k "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/identity.keychain-db" \
-  "$HOME/Library/Application Support/io.github.rensilin.SnipSprig/signing/certificate.pem"
+  -k "$HOME/Library/Application Support/Snip2Pin/signing/identity.keychain-db" \
+  "$HOME/Library/Application Support/Snip2Pin/signing/certificate.pem"
 bash packaging/macos/test-signing.sh
 bash packaging/macos/build.sh --install
 ```
@@ -130,8 +130,12 @@ identity, keeps the app's bundle ID and version, and refreshes only this app's
 Finder/Launchpad metadata. It does not stop the running application; reopen it
 yourself to use the update. `SNIP2PIN_SIGN_IDENTITY` and optional
 `SNIP2PIN_SIGN_KEYCHAIN` can select an existing signing identity instead.
-The historical `SnipSprig` directory and bundle ID are intentionally retained
-so renaming the app does not create a new settings or signing identity.
+Configuration directories use only `Snip2Pin`: `~/Library/Application Support/Snip2Pin`
+on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
+(`~/.config/Snip2Pin` by default) on Linux. The app identifier is `app.snip2pin`.
+Explicit identifier migrations use `--install --migrate-identity`, preserving the
+same signing certificate; macOS may require screen permission again after that
+one-time identity change. Subsequent updates use ordinary `--install`.
 The default build is a development bundle; only `--release` creates a distribution
 archive, and it requires a Developer ID signing identity.
 

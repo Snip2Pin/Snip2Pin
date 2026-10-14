@@ -2,8 +2,8 @@
 Name=Snip2Pin
 Comment=Capture a region and keep it floating on screen
 Exec=snip2pin
-Icon=io.github.rensilin.snipsprig
+Icon=app.snip2pin
 Terminal=false
 Type=Application
 Categories=Utility;Graphics;
-StartupWMClass=io.github.rensilin.snipsprig
+StartupWMClass=app.snip2pin

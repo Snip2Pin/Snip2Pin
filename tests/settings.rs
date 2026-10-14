@@ -5,6 +5,27 @@ use snip2pin::{
 };
 
 #[test]
+fn app_identity_and_config_directory_are_independent_of_repository_owner() {
+    let dirs = directories::BaseDirs::new().expect("configuration root");
+    assert_eq!(
+        snip2pin::settings::path(),
+        Some(dirs.config_dir().join("Snip2Pin").join("preferences.toml"))
+    );
+    let plist = include_str!("../packaging/macos/Info.plist");
+    assert!(plist.contains(&format!(
+        "<key>CFBundleIdentifier</key><string>{}</string>",
+        snip2pin::APP_ID
+    )));
+    let desktop = include_str!("../packaging/linux/app.snip2pin.desktop");
+    assert!(
+        desktop
+            .lines()
+            .any(|line| line == format!("StartupWMClass={}", snip2pin::APP_ID))
+    );
+    assert_eq!(snip2pin::APP_NAME, "Snip2Pin");
+}
+
+#[test]
 fn recorded_shortcut_matches_physical_keys_and_exact_modifiers() {
     let modifiers = Modifiers {
         ctrl: true,

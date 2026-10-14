@@ -28,11 +28,26 @@ FIRST_HASH="$(codesign -d --verbose=4 "$WORK_DIR/first.app" 2>&1 | awk '/^CDHash
 SECOND_HASH="$(codesign -d --verbose=4 "$WORK_DIR/second.app" 2>&1 | awk '/^CDHash=/ {print}')"
 [[ "$FIRST_HASH" != "$SECOND_HASH" ]]
 codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app"
+bash packaging/macos/signing.sh --verify-update "$WORK_DIR/second.app" "$WORK_DIR/first.app"
+# Identifier migration must be explicit and retain the installed certificate.
+plutil -replace CFBundleIdentifier -string app.snip2pin.test "$WORK_DIR/second.app/Contents/Info.plist"
+bash packaging/macos/signing.sh --sign "$WORK_DIR/second.app"
+if bash packaging/macos/signing.sh --verify-update "$WORK_DIR/second.app" "$WORK_DIR/first.app" 2>/dev/null; then
+    printf 'FAIL: identifier changed without explicit migration.\n' >&2
+    exit 1
+fi
+bash packaging/macos/signing.sh --verify-update \
+    "$WORK_DIR/second.app" "$WORK_DIR/first.app" --migrate-identity
 # An unrelated ad-hoc signature with the same bundle ID must not impersonate an update.
-codesign --force --sign - --identifier io.github.rensilin.snipsprig "$WORK_DIR/second.app"
+codesign --force --sign - --identifier app.snip2pin.test "$WORK_DIR/second.app"
 [[ "$(requirement "$WORK_DIR/second.app")" == cdhash\ * ]]
 if codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app" 2>/dev/null; then
     printf 'FAIL: an unsigned identity impersonated a certificate-signed update.\n' >&2
     exit 1
 fi
-printf 'PASS: builds retain the same identity; impostors fail; keychain search list is restored.\n'
+if bash packaging/macos/signing.sh --verify-update \
+    "$WORK_DIR/second.app" "$WORK_DIR/first.app" --migrate-identity 2>/dev/null; then
+    printf 'FAIL: identifier migration accepted a different signing identity.\n' >&2
+    exit 1
+fi
+printf 'PASS: stable identity and explicit migration verified; impostors fail; keychain search list restored.\n'

@@ -4,7 +4,7 @@
 <dict>
     <key>CFBundleName</key><string>Snip2Pin</string>
     <key>CFBundleDisplayName</key><string>Snip2Pin · 小贴图</string>
-    <key>CFBundleIdentifier</key><string>io.github.rensilin.snipsprig</string>
+    <key>CFBundleIdentifier</key><string>app.snip2pin</string>
     <key>CFBundleExecutable</key><string>snip2pin</string>
     <key>CFBundleIconFile</key><string>AppIcon-Line</string>
     <key>CFBundlePackageType</key><string>APPL</string>

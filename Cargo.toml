@@ -4,7 +4,6 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A tiny cross-platform screenshot pinning app"
-repository = "https://github.com/rensilin/snip2pin"
 publish = false
 
 [dependencies]

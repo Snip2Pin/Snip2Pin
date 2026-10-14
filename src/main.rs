@@ -43,7 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Snip2Pin · 小贴图")
-            .with_app_id("io.github.rensilin.snipsprig")
+            .with_app_id(snip2pin::APP_ID)
             .with_inner_size(ui::style::LAUNCHER.window)
             .with_transparent(true)
             // Bootstrap transparent capture viewports before hiding the root;

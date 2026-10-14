@@ -4,6 +4,7 @@
 
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
+- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `app.snip2pin`；产品身份与仓库所有者无关。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
@@ -28,7 +29,7 @@
 - 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
 - macOS 本地安装必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名。
-- 更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。
+- 更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。只有用户明确要求更换应用标识时，才使用显式迁移选项，仅替换签名要求中的 identifier，完整保留原证书和信任约束。
 - 签名私钥放在独立的本地钥匙串，不进入仓库；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
 - 签名证书及其私钥、钥匙串、密码、令牌等本机凭据必须保存在仓库之外，不提交到 Git、不上传到 GitHub，也不写入日志或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。
 - 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
@@ -123,10 +124,13 @@ Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
 Do not commit screenshots, credentials, toolchains, caches, or build output.
-Keep macOS bundle ID `io.github.rensilin.snipsprig` stable. Local certificate
+Keep macOS bundle ID `app.snip2pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
-The Snip2Pin rename preserves the historical app ID, preference/signing directory,
-and existing certificate. Do not rename these identities or regenerate credentials.
+Settings use the platform configuration root plus `Snip2Pin`; local macOS signing
+material uses `~/Library/Application Support/Snip2Pin/signing`, outside the repo.
+Reuse the existing certificate; do not regenerate credentials during a rename.
+An explicitly requested identifier change uses `--install --migrate-identity`,
+which preserves the certificate requirement; later updates use ordinary `--install`.
 `build.sh --install` performs a local development update. Distribution packaging
 requires `--release` and a Developer ID identity, only on an explicit release request.
 
