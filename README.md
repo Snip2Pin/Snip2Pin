@@ -16,7 +16,8 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，双击关闭；悬停显示复制图标和 ×。图标随位置在四边调整，右侧越界时放到左侧；图片保持原尺寸，macOS 贴图不遮挡 Dock 和菜单栏。
+- 拖动贴图可移动，拖动边角可缩放，按住 Shift 等比缩放，双击关闭；悬停显示复制图标和 ×。复制使用原始截图，macOS 贴图不遮挡 Dock 和菜单栏。
+- 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出。关闭主页会留在后台；主窗口可开启「开机自启」，默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
@@ -31,9 +32,11 @@ macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制�
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
-- Drag a pin to move it; double-click to close. Hover to show **Copy** and **×**.
-  Controls adapt to all four edges, moving left when the image passes the right
-  edge. Images retain their original size; macOS pins stay below the Dock and menu bar.
+- Drag a pin to move it, drag corners to resize, and hold **Shift** to keep its
+  proportions. Double-click to close; hover for **Copy** and **×**. Copy uses the
+  original screenshot; macOS pins stay below the Dock and menu bar.
+- The menu bar / tray offers Home, Capture, Close All and Quit. Closing Home keeps
+  the app running. Enable login startup in Home if wanted; it is **off by default**.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **“修改快捷键” (Change shortcut)** to change it.
@@ -59,6 +62,7 @@ Apple-notarized.
 
 On Linux with an X11 display (including XWayland), the app uses the X11 window
 backend so floating pins can request always-on-top through the window manager.
+The Linux tray requires a StatusNotifier-compatible desktop tray host.
 Pure Wayland does not expose a universal always-on-top or global-shortcut API.
 It also leaves absolute window placement to the compositor, so selection-layer
 placement and original-position pinning require X11/XWayland.
@@ -156,12 +160,14 @@ screen access.
 src/
   capture.rs       Monitor adapter, in-memory capture, validated cropping
   geometry.rs      Viewport-to-pixel conversion and original-position sizing
-  pin.rs           Pin layout, coordinate conversion, preparation and dragging
+  pin.rs           Pin layout, coordinates, preparation, dragging and resizing
   session.rs       Single-capture gate and stale-result rejection
   app.rs           Event-driven capture/window lifecycle
   platform.rs      Global shortcut and local font/icon adapters
   settings.rs      Shortcut validation, theme/icon settings, local preferences
   icon.rs          Icon selection, PNG loading, and SVG resource generation
+  tray.rs          Native menu bar/tray commands and symbolic status icon
+  startup.rs       Opt-in current-user login startup registration
   app/tests.rs     Capture/window lifecycle regressions
   ui/              Views, style profiles, copy artwork and view regressions
 assets/icons/      Line/metal SVG sources and Git LFS PNG resources

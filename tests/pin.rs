@@ -5,6 +5,113 @@ use snip2pin::{
 };
 
 #[test]
+fn every_resize_corner_keeps_its_opposite_pivot_and_shift_locks_proportions() {
+    use pin::{Corner, Resize};
+    let image = Rect::from_min_size(egui::pos2(-300.0, 100.0), egui::vec2(200.0, 100.0));
+    for corner in Corner::ALL {
+        let point = corner.point(image);
+        let sign = egui::vec2(
+            (point.x - image.center().x).signum(),
+            (point.y - image.center().y).signum(),
+        );
+        let pivot = egui::pos2(
+            if sign.x > 0.0 {
+                image.min.x
+            } else {
+                image.max.x
+            },
+            if sign.y > 0.0 {
+                image.min.y
+            } else {
+                image.max.y
+            },
+        );
+        let mut resize = Resize::default();
+        resize.begin(corner, image, point);
+        for proportional in [false, true] {
+            let next = resize
+                .update(
+                    point + egui::vec2(40.0, 10.0) * sign,
+                    proportional,
+                    Vec2::splat(1.0),
+                    None,
+                )
+                .expect("resize");
+            let expected = if proportional {
+                egui::vec2(240.0, 120.0)
+            } else {
+                egui::vec2(240.0, 110.0)
+            };
+            assert!((next.size() - expected).length() < 0.001);
+            assert!(
+                next.min == pivot
+                    || next.max == pivot
+                    || next.left_bottom() == pivot
+                    || next.right_top() == pivot
+            );
+        }
+        let minimum = resize
+            .update(
+                point - image.size() * sign * 3.0,
+                true,
+                egui::vec2(1.0, 3.0),
+                None,
+            )
+            .expect("minimum size");
+        assert_eq!(minimum.size(), egui::vec2(6.0, 3.0));
+        resize.end();
+        assert!(
+            resize
+                .update(point, false, Vec2::splat(1.0), None)
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn proportional_top_resize_stops_at_menu_bar_without_moving_the_opposite_corner() {
+    let image = Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 100.0));
+    let mut resize = pin::Resize::default();
+    resize.begin(pin::Corner::TopLeft, image, image.min);
+    let next = resize
+        .update(
+            egui::pos2(-300.0, -300.0),
+            true,
+            Vec2::splat(1.0),
+            Some(30.0),
+        )
+        .expect("bounded resize");
+    assert_eq!(next.min.y, 30.0);
+    assert_eq!(next.max, image.max);
+    assert_eq!(next.width() / next.height(), image.width() / image.height());
+}
+
+#[test]
+fn manual_resize_survives_release_and_zoom_without_changing_source_placement() {
+    let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
+    let placement = Placement {
+        position: [100.0, 100.0],
+        size: [200.0, 100.0],
+    };
+    let frame = pin::frame_geometry(placement, area, 1.0, 1.0);
+    let mut prepared = Preparation::default();
+    let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
+    let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
+    prepared.set_size(egui::vec2(300.0, 140.0), 1.0);
+    let zoomed = pin::frame_geometry(placement, area, 0.5, 2.0);
+    let Prepared::Paint { frame: painted, .. } =
+        prepared.update(zoomed, Some(zoomed.window), Some(zoomed.window), 0.5)
+    else {
+        panic!("resize cannot reinitialize");
+    };
+    assert_eq!(
+        painted.image.size() * painted.grid,
+        egui::vec2(300.0, 140.0)
+    );
+    assert_eq!(placement.size, [200.0, 100.0]);
+}
+
+#[test]
 fn screen_sized_image_keeps_controls_reachable_without_cropping_or_scaling() {
     let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
     let mut frame = pin::frame_geometry(

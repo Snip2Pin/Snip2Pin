@@ -174,6 +174,15 @@ pub fn finish_capture(ctx: &egui::Context) {
 }
 
 pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == "--background") {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        let mut options = options;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_activate_ignoring_other_apps(false);
+        }));
+        return options;
+    }
     // XWayland preserves window-level requests that native Wayland cannot make.
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_some() {

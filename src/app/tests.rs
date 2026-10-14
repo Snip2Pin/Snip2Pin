@@ -21,7 +21,74 @@ fn app() -> Snip2Pin {
         recording: false,
         suppress_shortcut_until: Instant::now(),
         demo: true,
+        tray: None,
+        startup: None,
+        startup_enabled: false,
+        exiting: false,
+        home_visible: true,
+        booting: false,
     }
+}
+
+#[test]
+fn background_bootstrap_keeps_capture_layers_available_without_painting_home() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    app.home_visible = false;
+    app.booting = true;
+    let display = capture::demo().display;
+    let display_id = display.id;
+    app.layers.insert(
+        display_id,
+        Layer {
+            display,
+            selection: None,
+            positioned: Arc::new(AtomicBool::new(false)),
+        },
+    );
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.show_layers(ui.ctx());
+        assert!(!app.prepare_home(ui.ctx()));
+    });
+    output.textures_delta.clear();
+    assert!(
+        output.shapes.is_empty(),
+        "background startup has no visible home contents"
+    );
+    assert!(!app.booting);
+    assert!(
+        matches!(app.phase, Phase::Idle),
+        "startup never captures the desktop"
+    );
+    assert!(
+        output.viewport_output[&ViewportId::ROOT]
+            .commands
+            .contains(&ViewportCommand::Visible(false))
+    );
+    let layer = &output.viewport_output[&layer_id(display_id)];
+    assert_eq!(layer.builder.mouse_passthrough, Some(true));
+    assert_eq!(layer.builder.active, Some(false));
+    assert_ne!(layer.builder.fullscreen, Some(true));
+}
+
+#[test]
+fn tray_home_and_quit_dispatch_root_commands_and_demo_cannot_enable_startup() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.home_visible = false;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Home, ctx)
+    });
+    assert!(app.home_visible);
+    assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(true)));
+    app.set_startup(true);
+    assert!(!app.startup_enabled, "demo never registers startup");
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    assert!(app.exiting);
+    assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Close));
 }
 
 #[test]
@@ -202,6 +269,11 @@ fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
     );
     assert_eq!(app.pins[&1].pixels.as_ref(), &expected);
 
+    app.pins[&1]
+        .prepared
+        .lock()
+        .expect("pin geometry")
+        .set_size(egui::vec2(70.0, 45.0), 2.0);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
     output.textures_delta.clear();
     assert_eq!(output.platform_output.commands.len(), 1);

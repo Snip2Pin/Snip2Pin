@@ -3,6 +3,123 @@ use egui::Vec2;
 use std::sync::mpsc;
 
 #[test]
+fn corner_drag_resizes_instead_of_moving_and_shift_preserves_aspect_ratio() {
+    for (proportional, global_cursor, known_position) in [
+        (false, true, true),
+        (true, true, true),
+        (false, false, true),
+        (true, false, true),
+        (false, false, false),
+        (true, false, false),
+    ] {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "resize",
+            egui::ColorImage::filled([2, 2], Color32::WHITE),
+            egui::TextureOptions::NEAREST,
+        );
+        let (sender, _) = mpsc::channel();
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(680.0, 420.0));
+        let frame = frame_geometry(
+            Placement {
+                position: [100.0, 100.0],
+                size: [200.0, 100.0],
+            },
+            screen,
+            1.0,
+            1.0,
+        );
+        let mut prepared = Preparation::default();
+        let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
+        let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
+        let press = frame.image.right_bottom();
+        let target = press + egui::vec2(40.0, 10.0);
+        let modifiers = egui::Modifiers {
+            shift: proportional,
+            ..egui::Modifiers::NONE
+        };
+        let mut resized = false;
+        for (point, mut events) in [
+            (press, vec![egui::Event::PointerMoved(press)]),
+            (
+                press,
+                vec![egui::Event::PointerButton {
+                    pos: press,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers,
+                }],
+            ),
+            (target, vec![egui::Event::PointerMoved(target)]),
+            (
+                target,
+                vec![egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers,
+                }],
+            ),
+        ] {
+            events.insert(0, egui::Event::ModifiersChanged(modifiers));
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, frame.window.size())),
+                events,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo {
+                    inner_rect: known_position.then_some(frame.window),
+                    outer_rect: known_position.then_some(frame.window),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                show(
+                    ui,
+                    Model {
+                        id: 1,
+                        texture: &texture,
+                        frame,
+                        events: &sender,
+                        monitors: &[screen],
+                        coordinate_ratio: 1.0,
+                        minimum_size: Vec2::splat(1.0),
+                    },
+                    &mut prepared,
+                    || global_cursor.then_some((point + frame.window.min.to_vec2()).into()),
+                )
+            });
+            resized |= output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::InnerSize(_)));
+            output.textures_delta.clear();
+        }
+        assert!(resized, "corner interaction must dispatch a resize");
+        assert!(!prepared.resize.is_active());
+        let Prepared::Paint { frame: painted, .. } =
+            prepared.update(frame, Some(frame.window), Some(frame.window), 1.0)
+        else {
+            panic!("paint after resize");
+        };
+        assert_eq!(
+            painted.image.size(),
+            if proportional {
+                egui::vec2(240.0, 120.0)
+            } else {
+                egui::vec2(240.0, 110.0)
+            }
+        );
+        assert_eq!(
+            painted.image.min, frame.image.min,
+            "bottom-right resizing leaves the opposite corner fixed"
+        );
+    }
+}
+
+#[test]
 fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
     let ctx = egui::Context::default();
     let texture = ctx.load_texture(
@@ -24,7 +141,7 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
     let press = frame.image.center_bottom() - egui::vec2(0.0, 1.0);
     let cursor = egui::pos2(frame.window.min.x + press.x, 0.0);
     let local = cursor - frame.window.min.to_vec2();
-    let mut drag = Drag::default();
+    let mut drag = Preparation::default();
     let mut requested = None;
     for events in [
         vec![egui::Event::PointerMoved(press)],
@@ -59,6 +176,7 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
                     events: &sender,
                     monitors: &[],
                     coordinate_ratio: 1.0,
+                    minimum_size: Vec2::splat(1.0),
                 },
                 &mut drag,
                 || Some(cursor.into()),
@@ -72,7 +190,10 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
         }
     }
     let position = requested.expect("drag requests a position");
-    let image_origin = drag.position(frame.grid).expect("logical image position");
+    let image_origin = drag
+        .drag
+        .position(frame.grid)
+        .expect("logical image position");
     let image = Rect::from_min_size(image_origin, frame.image.size());
     if cfg!(target_os = "macos") {
         assert_eq!(
@@ -121,7 +242,7 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
     let target = egui::pos2(frame.window.min.x, -frame.image.min.y);
     let global = target + press.to_vec2();
     let local = global - frame.window.min.to_vec2();
-    let mut drag = Drag::default();
+    let mut drag = Preparation::default();
     for (index, input_events) in [
         vec![egui::Event::PointerMoved(press)],
         vec![egui::Event::PointerButton {
@@ -167,6 +288,7 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
                     events: &sender,
                     monitors: &[],
                     coordinate_ratio: 1.0,
+                    minimum_size: Vec2::splat(1.0),
                 },
                 &mut drag,
                 || {
@@ -209,7 +331,7 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
             assert_eq!(cursor_reads, 0, "no idle cursor polling");
         }
     }
-    assert!(!drag.is_active());
+    assert!(!drag.drag.is_active());
     assert!(events.try_recv().is_err());
 }
 
@@ -351,8 +473,9 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
                             events: &sender,
                             monitors: &[],
                             coordinate_ratio: 1.0,
+                            minimum_size: Vec2::splat(1.0),
                         },
-                        &mut Drag::default(),
+                        &mut Preparation::default(),
                         || panic!("toolbar must not read the desktop cursor"),
                     )
                 },
@@ -424,8 +547,9 @@ fn close_button_tracks_hover_and_pointer_leave_without_changing_image_bounds() {
                         events: &sender,
                         monitors: &[],
                         coordinate_ratio: 1.0,
+                        minimum_size: Vec2::splat(1.0),
                     },
-                    &mut Drag::default(),
+                    &mut Preparation::default(),
                     || panic!("hover must not read the desktop cursor"),
                 )
             },

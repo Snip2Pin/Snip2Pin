@@ -2,6 +2,8 @@
 
 mod app;
 mod platform;
+mod startup;
+mod tray;
 mod ui;
 
 fn main() {
@@ -37,12 +39,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         snip2pin::icon::render_vector(variant, snip2pin::icon::EXPORT_SIZE)?.save(path)?;
         return Ok(());
     }
+    let background = action.as_deref() == Some("--background");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Snip2Pin · 小贴图")
             .with_app_id("io.github.rensilin.snipsprig")
             .with_inner_size(ui::style::LAUNCHER.window)
             .with_transparent(true)
+            // Bootstrap transparent capture viewports before hiding the root;
+            // eframe cannot create child windows in a logic-only hidden pass.
+            .with_decorations(!background)
+            .with_has_shadow(!background)
+            .with_active(!background)
+            .with_mouse_passthrough(background)
             .with_icon(eframe::egui::IconData {
                 rgba: snip2pin::icon::render(
                     snip2pin::icon::Variant::Line,

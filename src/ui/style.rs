@@ -50,6 +50,8 @@ pub struct PinStyle {
     pub shadow_radius: u8,
     pub border_alpha: u8,
     pub button_fill: Color32,
+    pub resize_hit: f32,
+    pub resize_mark: f32,
 }
 
 pub const PIN: PinStyle = PinStyle {
@@ -62,4 +64,6 @@ pub const PIN: PinStyle = PinStyle {
     shadow_radius: 2,
     border_alpha: 190,
     button_fill: Color32::from_black_alpha(160),
+    resize_hit: 12.0,
+    resize_mark: 6.0,
 };

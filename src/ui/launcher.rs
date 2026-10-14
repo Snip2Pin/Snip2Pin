@@ -8,6 +8,7 @@ pub enum Action {
     ClosePins,
     RecordShortcut,
     Appearance(Theme, Icon),
+    Startup(bool),
 }
 
 pub struct Model<'a> {
@@ -19,6 +20,7 @@ pub struct Model<'a> {
     pub recording: bool,
     pub idle: bool,
     pub demo: bool,
+    pub startup: Option<bool>,
 }
 
 pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
@@ -31,6 +33,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
         recording,
         idle,
         demo,
+        startup,
     } = model;
     ui.painter()
         .rect_filled(ui.max_rect(), 0, ui.visuals().panel_fill);
@@ -46,7 +49,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                             .strong(),
                     );
                     ui.add_space(LAUNCHER.paragraph_gap);
-                    ui.label("框选后自动置顶，拖动移动，双击关闭。");
+                    ui.label("拖动移动，边角缩放，Shift 等比，双击关闭。");
                     ui.weak("自动覆盖所有屏幕，贴图留在框选原位。");
                     ui.add_space(LAUNCHER.section_gap);
                     ui.add_enabled_ui(idle && !recording, |ui| {
@@ -110,6 +113,17 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                     });
                     if theme != preferences.theme || icon != preferences.icon {
                         action = Some(Action::Appearance(theme, icon));
+                    }
+                    if let Some(mut enabled) = startup
+                        && ui
+                            .add_enabled(
+                                idle && !recording,
+                                egui::Checkbox::new(&mut enabled, "开机自启"),
+                            )
+                            .on_hover_text("登录后在菜单栏后台运行，默认关闭。")
+                            .changed()
+                    {
+                        action = Some(Action::Startup(enabled));
                     }
                     if pin_count > 0
                         && ui

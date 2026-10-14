@@ -1,6 +1,7 @@
 pub const WINDOW_SIZE: u32 = 64;
 pub const DOCK_SIZE: u32 = 256;
 pub const EXPORT_SIZE: u32 = 1024;
+pub const STATUS_SIZE: u32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variant {
@@ -45,7 +46,15 @@ pub fn render(variant: Variant, size: u32) -> Result<image::RgbaImage, String> {
 
 /// Regenerate PNG assets from their editable SVG sources.
 pub fn render_vector(variant: Variant, size: u32) -> Result<image::RgbaImage, String> {
-    let tree = resvg::usvg::Tree::from_str(variant.svg(), &resvg::usvg::Options::default())
+    render_svg(variant.svg(), size)
+}
+
+pub fn status() -> Result<image::RgbaImage, String> {
+    render_svg(include_str!("../assets/icons/status.svg"), STATUS_SIZE)
+}
+
+fn render_svg(svg: &str, size: u32) -> Result<image::RgbaImage, String> {
+    let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
         .map_err(|error| error.to_string())?;
     let mut pixmap =
         resvg::tiny_skia::Pixmap::new(size, size).ok_or_else(|| "Invalid icon size".to_owned())?;

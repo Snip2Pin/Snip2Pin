@@ -34,6 +34,7 @@ pub enum Event {
     PinReady(u64, u64),
     CopyPin(u64),
     ClosePin(u64),
+    Tray(crate::tray::Action),
 }
 
 enum Phase {
@@ -82,6 +83,12 @@ pub struct Snip2Pin {
     recording: bool,
     suppress_shortcut_until: Instant,
     demo: bool,
+    tray: Option<crate::tray::Tray>,
+    startup: Option<crate::startup::Startup>,
+    startup_enabled: bool,
+    exiting: bool,
+    home_visible: bool,
+    booting: bool,
 }
 
 impl Snip2Pin {
@@ -123,7 +130,7 @@ impl Snip2Pin {
         if let Err(error) = &displays {
             message = Some(error.clone());
         }
-        let layers = displays
+        let layers: BTreeMap<_, _> = displays
             .unwrap_or_default()
             .into_iter()
             .map(|display| {
@@ -137,6 +144,46 @@ impl Snip2Pin {
                 )
             })
             .collect();
+        let tray = if demo {
+            None
+        } else {
+            let sender = sender.clone();
+            let ctx = cc.egui_ctx.clone();
+            match crate::tray::Tray::new(move |action| {
+                let _ = sender.send(Event::Tray(action));
+                ctx.request_repaint_of(ViewportId::ROOT);
+            }) {
+                Ok(tray) => Some(tray),
+                Err(error) => {
+                    message = Some(format!("菜单栏图标不可用：{error}"));
+                    cc.egui_ctx
+                        .send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
+                    cc.egui_ctx
+                        .send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Decorations(true));
+                    cc.egui_ctx.send_viewport_cmd_to(
+                        ViewportId::ROOT,
+                        ViewportCommand::MousePassthrough(false),
+                    );
+                    None
+                }
+            }
+        };
+        let (startup, startup_enabled) = if demo {
+            (None, false)
+        } else {
+            match crate::startup::Startup::new()
+                .and_then(|startup| startup.enabled().map(|enabled| (startup, enabled)))
+            {
+                Ok((startup, enabled)) => (Some(startup), enabled),
+                Err(error) => {
+                    message = Some(format!("开机自启不可用：{error}"));
+                    (None, false)
+                }
+            }
+        };
+        let home_visible = !std::env::args().any(|arg| arg == "--background")
+            || tray.is_none()
+            || layers.is_empty();
         Self {
             events,
             sender,
@@ -156,6 +203,12 @@ impl Snip2Pin {
             recording: false,
             suppress_shortcut_until: Instant::now(),
             demo,
+            tray,
+            startup,
+            startup_enabled,
+            exiting: false,
+            home_visible,
+            booting: true,
         }
     }
 
@@ -197,6 +250,74 @@ impl Snip2Pin {
             let _ = sender.send(Event::Ready(id, result, pointer));
             ctx.request_repaint_of(ViewportId::ROOT);
         });
+    }
+
+    fn tray_action(&mut self, action: crate::tray::Action, ctx: &egui::Context) {
+        use crate::tray::Action;
+        match action {
+            Action::Home => {
+                self.home_visible = true;
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Decorations(true));
+                ctx.send_viewport_cmd_to(
+                    ViewportId::ROOT,
+                    ViewportCommand::MousePassthrough(false),
+                );
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
+            }
+            Action::Capture => self.begin_capture(ctx),
+            Action::ClosePins => {
+                self.pins.clear();
+                if matches!(
+                    self.phase,
+                    Phase::Selecting {
+                        pending_pin: Some(_),
+                        ..
+                    }
+                ) {
+                    self.restore(ctx);
+                }
+            }
+            Action::Quit => {
+                self.exiting = true;
+                self.restore(ctx);
+                self.pins.clear();
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn set_startup(&mut self, enabled: bool) {
+        if let Some(startup) = &self.startup {
+            match startup.set_enabled(enabled) {
+                Ok(enabled) => {
+                    self.startup_enabled = enabled;
+                    self.message = None;
+                }
+                Err(error) => self.message = Some(error),
+            }
+        }
+    }
+
+    fn prepare_home(&mut self, ctx: &egui::Context) -> bool {
+        if !self.home_visible {
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
+            if self.booting {
+                self.booting = false;
+                ctx.request_repaint();
+            }
+            false
+        } else {
+            if self.booting {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Decorations(true));
+                ctx.send_viewport_cmd_to(
+                    ViewportId::ROOT,
+                    ViewportCommand::MousePassthrough(false),
+                );
+            }
+            self.booting = false;
+            true
+        }
     }
 
     fn restore(&mut self, ctx: &egui::Context) {
@@ -604,6 +725,7 @@ impl Snip2Pin {
     fn show_pins(&self, ctx: &egui::Context) {
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
+            let pixel_size = egui::vec2(pin.pixels.size[0] as f32, pin.pixels.size[1] as f32);
             let events = self.sender.clone();
             let prepared = pin.prepared.clone();
             let session = pin.session;
@@ -686,8 +808,9 @@ impl Snip2Pin {
                             events: &events,
                             monitors: &screen_areas,
                             coordinate_ratio: ratio,
+                            minimum_size: egui::Vec2::from(placement.size) * ratio / pixel_size,
                         },
-                        &mut prepared.drag,
+                        &mut prepared,
                         platform::pointer_position,
                     );
                     if first_frame {
@@ -706,6 +829,11 @@ impl eframe::App for Snip2Pin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if matches!(self.phase, Phase::Selecting { .. })
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.restore(ctx);
+        }
         self.update_icon(ctx);
         if let Err(error) = platform::prepare_floating_windows() {
             self.message = Some(error);
@@ -729,18 +857,30 @@ impl eframe::App for Snip2Pin {
                 }
                 Event::CopyPin(id) => self.copy_pin(id, ctx),
                 Event::ClosePin(id) => self.close_pin(id, ctx),
+                Event::Tray(action) => self.tray_action(action, ctx),
             }
         }
+        if let Some(tray) = &mut self.tray {
+            tray.update(
+                matches!(self.phase, Phase::Idle) && !self.recording,
+                !self.pins.is_empty(),
+            );
+            if !self.exiting && ctx.input(|input| input.viewport().close_requested()) {
+                self.home_visible = false;
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
+            }
+        }
+        self.show_pins(ctx);
+        self.show_layers(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.update_icon(&ctx);
-        if matches!(self.phase, Phase::Selecting { .. })
-            && ui.input(|input| input.key_pressed(egui::Key::Escape))
-        {
-            self.restore(&ctx);
+        if !self.prepare_home(&ctx) {
+            return;
         }
+        self.update_icon(&ctx);
         let idle = matches!(self.phase, Phase::Idle);
         let action = launcher::show(
             ui,
@@ -753,6 +893,7 @@ impl eframe::App for Snip2Pin {
                 recording: self.recording,
                 idle,
                 demo: self.demo,
+                startup: self.startup.as_ref().map(|_| self.startup_enabled),
             },
         );
         match action {
@@ -765,6 +906,7 @@ impl eframe::App for Snip2Pin {
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.change_appearance(theme, icon, &ctx)
             }
+            Some(launcher::Action::Startup(enabled)) => self.set_startup(enabled),
             None => {}
         }
         if self.recording {
@@ -779,8 +921,6 @@ impl eframe::App for Snip2Pin {
         {
             self.begin_capture(&ctx);
         }
-        self.show_pins(&ctx);
-        self.show_layers(&ctx);
     }
 }
 

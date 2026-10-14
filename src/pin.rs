@@ -164,6 +164,12 @@ impl Frame {
         frame
     }
 
+    pub fn resized_to(&self, image: Rect, screens: &[Rect], ratio: f32) -> Self {
+        let mut frame = *self;
+        frame.image = Rect::from_min_size(frame.image.min, image.size());
+        frame.moved_to(image.min, screens, ratio)
+    }
+
     /// Keep the whole image below AppKit's work-area boundary, and reduce only
     /// transparent upper margins. The picture can touch the menu bar without
     /// being cropped, scaled, or leaving its native window.
@@ -259,6 +265,8 @@ pub struct Preparation {
     requested: bool,
     image_offset: Option<Vec2>,
     pub drag: Drag,
+    pub resize: Resize,
+    size_native: Option<Vec2>,
 }
 
 pub enum Prepared {
@@ -286,6 +294,9 @@ impl Preparation {
             };
         }
         let first = self.image_offset.is_none();
+        if let Some(size) = self.size_native {
+            frame.image = Rect::from_min_size(frame.image.min, size / frame.grid);
+        }
         let offset = *self.image_offset.get_or_insert_with(|| {
             let mut offset = inner.map_or(Vec2::ZERO, |rect| frame.window.min - rect.min);
             if frame.top_edge {
@@ -302,6 +313,114 @@ impl Preparation {
             frame.image.translate(offset * ratio)
         };
         Prepared::Paint { frame, first }
+    }
+
+    pub fn set_size(&mut self, size: Vec2, grid: f32) {
+        self.size_native = Some(size * grid);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Corner {
+    pub const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+    pub fn point(self, rect: Rect) -> Pos2 {
+        match self {
+            Self::TopLeft => rect.left_top(),
+            Self::TopRight => rect.right_top(),
+            Self::BottomLeft => rect.left_bottom(),
+            Self::BottomRight => rect.right_bottom(),
+        }
+    }
+    fn opposite(self) -> Self {
+        match self {
+            Self::TopLeft => Self::BottomRight,
+            Self::TopRight => Self::BottomLeft,
+            Self::BottomLeft => Self::TopRight,
+            Self::BottomRight => Self::TopLeft,
+        }
+    }
+    fn direction(self) -> Vec2 {
+        match self {
+            Self::TopLeft => egui::vec2(-1.0, -1.0),
+            Self::TopRight => egui::vec2(1.0, -1.0),
+            Self::BottomLeft => egui::vec2(-1.0, 1.0),
+            Self::BottomRight => Vec2::splat(1.0),
+        }
+    }
+}
+
+struct ResizeAnchor {
+    corner: Corner,
+    image: Rect,
+    pointer: Pos2,
+}
+
+#[derive(Default)]
+pub struct Resize {
+    anchor: Option<ResizeAnchor>,
+}
+
+impl Resize {
+    pub fn begin(&mut self, corner: Corner, image: Rect, pointer: Pos2) {
+        self.anchor = Some(ResizeAnchor {
+            corner,
+            image,
+            pointer,
+        });
+    }
+    /// Native coordinates keep the opposite corner and grabbed pixel stable
+    /// across DPI changes. Shift locks the proportions at gesture start.
+    pub fn update(
+        &self,
+        pointer: Pos2,
+        proportional: bool,
+        minimum: Vec2,
+        top: Option<f32>,
+    ) -> Option<Rect> {
+        let anchor = self.anchor.as_ref()?;
+        let direction = anchor.corner.direction();
+        let delta = (pointer - anchor.pointer) * direction;
+        let mut size = (anchor.image.size() + delta).max(minimum);
+        let limit = if direction.y < 0.0 {
+            top.map(|top| (anchor.image.max.y - top).max(minimum.y))
+        } else {
+            None
+        };
+        if proportional {
+            let relative = delta / anchor.image.size();
+            let factor = if relative.x.abs() >= relative.y.abs() {
+                1.0 + relative.x
+            } else {
+                1.0 + relative.y
+            };
+            let minimum_factor = (minimum / anchor.image.size()).max_elem();
+            let factor = factor.max(minimum_factor);
+            let factor = limit.map_or(factor, |height| factor.min(height / anchor.image.height()));
+            size = anchor.image.size() * factor;
+        } else if let Some(height) = limit {
+            size.y = size.y.min(height);
+        }
+        let pivot = anchor.corner.opposite().point(anchor.image);
+        let point = pivot + size * direction;
+        Some(Rect::from_min_max(pivot.min(point), pivot.max(point)))
+    }
+    pub fn is_active(&self) -> bool {
+        self.anchor.is_some()
+    }
+    pub fn end(&mut self) {
+        self.anchor = None;
     }
 }
 

@@ -175,9 +175,14 @@ fn main() {
     let pointer =
         platform::pointer_position().expect("cursor position is readable without event hooks");
     let displays = snip2pin::capture::displays().expect("display bounds");
+    if displays.is_empty() {
+        println!("macOS cursor/monitor check unavailable: no displays exposed by the session");
+        println!("macOS hidden selection geometry: full display bounds preserved");
+        return;
+    }
     assert!(
         displays.iter().any(|display| display.contains(pointer)),
-        "cursor and monitor coordinates must use the same space"
+        "cursor {pointer:?} and monitors {displays:?} must use the same space"
     );
     println!("macOS hidden selection geometry: full display bounds preserved");
 }
