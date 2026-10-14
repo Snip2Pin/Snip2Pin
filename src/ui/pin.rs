@@ -19,20 +19,27 @@ pub struct Frame {
     pub window: Rect,
     pub image: Rect,
     pub toolbar_below: bool,
+    pub top_edge: bool,
 }
 
-/// Keep normal pins at their source position. At the display's usable top edge,
-/// move down just enough for the shadow and put the toolbar below the image.
+/// Keep image dimensions unchanged. Top-edge pins move down to leave room for
+/// controls, preferring a lower toolbar whenever it fits on the display.
 pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32) -> Frame {
     let mut position = Pos2::new(placement.position[0], placement.position[1]) * ratio;
-    let mut size = egui::vec2(placement.size[0], placement.size[1]) * ratio;
+    let size = egui::vec2(placement.size[0], placement.size[1]) * ratio;
     let screen_top = screen.min.y * ratio;
-    let toolbar_below = position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP < screen_top;
-    if toolbar_below {
+    let top_edge = position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP < screen_top;
+    let mut toolbar_below = top_edge;
+    if top_edge {
         position.y = position.y.max((screen_top * grid).ceil() / grid + PADDING);
-        let available =
-            (screen.max.y * ratio - position.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP).max(1.0);
-        size *= (available / size.y).min(1.0);
+        if position.y + size.y + PADDING + BUTTON_HEIGHT + IMAGE_GAP > screen.max.y * ratio {
+            // Keep tall images full-sized, moving down to make a visible row
+            // above instead of placing the lower controls beyond the display.
+            toolbar_below = false;
+            position.y = position
+                .y
+                .max((screen_top * grid).ceil() / grid + PADDING + BUTTON_HEIGHT + IMAGE_GAP);
+        }
     }
     let origin = Pos2::new(
         ((position.x - PADDING) * grid).floor() / grid,
@@ -65,6 +72,7 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
         window: Rect::from_min_size(origin, window_size),
         image,
         toolbar_below,
+        top_edge,
     }
 }
 
@@ -245,27 +253,35 @@ mod tests {
     }
 
     #[test]
-    fn top_edge_layout_moves_down_and_keeps_the_lower_toolbar_inside_the_display() {
+    fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
         for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
             for ratio in [1.0, 0.8] {
                 for size in [[12.0, 8.0], [193.0, 121.0], [680.0, 420.0]] {
                     let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
                     let placement = Placement {
-                        position: [origin.x + 80.0, origin.y - 28.0],
+                        position: [
+                            origin.x + if size[0] < 680.0 { 80.0 } else { 0.0 },
+                            origin.y - 28.0,
+                        ],
                         size,
                     };
                     let frame = frame_geometry(placement, screen, ratio, 1.0 / ratio);
                     let (copy, close) = toolbar_rects(frame.image, frame.toolbar_below);
-                    assert!(frame.toolbar_below);
+                    assert!(frame.top_edge);
                     assert!(frame.window.min.y >= screen.min.y * ratio);
-                    assert!(frame.window.max.y <= screen.max.y * ratio + ratio);
                     let bounds = Rect::from_min_size(Pos2::ZERO, frame.window.size());
                     assert!(bounds.contains_rect(copy) && bounds.contains_rect(close));
-                    assert!(copy.min.y > frame.image.max.y && close.min.y > frame.image.max.y);
+                    let visible = Rect::from_min_max(screen.min * ratio, screen.max * ratio);
+                    assert!(visible.contains_rect(copy.translate(frame.window.min.to_vec2())));
+                    assert!(visible.contains_rect(close.translate(frame.window.min.to_vec2())));
+                    assert!(!copy.intersects(frame.image) && !close.intersects(frame.image));
+                    assert_eq!(frame.toolbar_below, size[1] < 200.0);
                     assert!((frame.image.aspect_ratio() - size[0] / size[1]).abs() < 0.001);
-                    if size[1] < 200.0 {
-                        assert!((frame.image.height() - size[1] * ratio).abs() < 0.001);
-                    }
+                    assert!(
+                        (frame.image.size() - egui::vec2(size[0], size[1]) * ratio).length()
+                            < 0.001,
+                        "even tall captures must keep their original dimensions"
+                    );
                 }
             }
         }
@@ -286,6 +302,7 @@ mod tests {
                 window: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 140.0)),
                 image,
                 toolbar_below: below,
+                top_edge: false,
             };
             let (copy_rect, close_rect) = toolbar_rects(image, below);
             let point = if copy {
@@ -351,6 +368,7 @@ mod tests {
             window: bounds,
             image: image_rect,
             toolbar_below: false,
+            top_edge: false,
         };
         for (events, close_visible) in [
             (vec![], false),

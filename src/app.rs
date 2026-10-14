@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -44,6 +45,7 @@ enum Phase {
 struct Layer {
     display: Display,
     selection: Option<Arc<Mutex<overlay::Selection>>>,
+    positioned: Arc<AtomicBool>,
 }
 
 struct Pin {
@@ -58,10 +60,8 @@ struct Pin {
 
 #[derive(Default)]
 struct PinPreparation {
-    ready: bool,
-    previous_inner: Option<egui::Rect>,
     requested: bool,
-    screen_top: Option<f32>,
+    image_offset: Option<egui::Vec2>,
 }
 
 pub struct Snip2Pin {
@@ -133,6 +133,7 @@ impl Snip2Pin {
                     Layer {
                         display,
                         selection: None,
+                        positioned: Arc::new(AtomicBool::new(false)),
                     },
                 )
             })
@@ -247,6 +248,7 @@ impl Snip2Pin {
                             Layer {
                                 display,
                                 selection: Some(Arc::new(Mutex::new(selection))),
+                                positioned: Arc::new(AtomicBool::new(false)),
                             },
                         )
                     })
@@ -517,6 +519,7 @@ impl Snip2Pin {
         let demo = self.demo;
         for (&display_id, layer) in &self.layers {
             let selection = layer.selection.clone();
+            let positioned = layer.positioned.clone();
             let events = self.sender.clone();
             let active = selection.is_some();
             let pointer_display = self.active_display == Some(display_id);
@@ -554,16 +557,12 @@ impl Snip2Pin {
                     }
                     // Correct initial placement after the native window resolves
                     // its actual monitor/DPI (especially mixed-DPI Windows).
-                    if !cfg!(target_os = "macos") {
+                    if !cfg!(target_os = "macos") && !positioned.swap(true, Ordering::AcqRel) {
                         let scale = ui.ctx().pixels_per_point();
                         let target =
                             egui::pos2(display.origin[0] / scale, display.origin[1] / scale);
-                        let actual =
-                            ui.input(|input| input.viewport().outer_rect.map(|rect| rect.min));
-                        if actual.is_some_and(|actual| actual.distance(target) > 0.5) {
-                            ui.ctx()
-                                .send_viewport_cmd(ViewportCommand::OuterPosition(target));
-                        }
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::OuterPosition(target));
                     }
                     if let (Some(selection), Some(id)) = (&selection, session)
                         && let Ok(mut selection) = selection.lock()
@@ -632,61 +631,34 @@ impl Snip2Pin {
                     };
                     let (inner, outer) = ui
                         .input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
-                    let tolerance = 0.51 / ui.ctx().pixels_per_point();
-                    let initial = ui::pin::frame_geometry(placement, screen, ratio, grid);
-                    // A compositor may reserve more space than display metadata
-                    // reports. Adopt its stable top boundary after a move request.
-                    if !prepared.ready
-                        && prepared.requested
-                        && initial.toolbar_below
-                        && let Some((actual, previous)) = inner.zip(prepared.previous_inner)
-                        && actual.min.distance(previous.min) <= tolerance
-                        && (actual.min.x - initial.window.min.x).abs() <= tolerance
-                        && actual.min.y > initial.window.min.y + tolerance
-                    {
-                        prepared.screen_top = Some(actual.min.y / ratio);
-                    }
-                    let mut usable = screen;
-                    if let Some(top) = prepared.screen_top {
-                        usable.min.y = usable.min.y.max(top);
-                    }
-                    let frame = ui::pin::frame_geometry(placement, usable, ratio, grid);
+                    let mut frame = ui::pin::frame_geometry(placement, screen, ratio, grid);
                     let window = frame.window;
-                    if !prepared.ready {
-                        let position = window.min;
-                        let size = window.size();
-                        let size_matches = (ui.max_rect().width() - size.x).abs() <= tolerance
-                            && (ui.max_rect().height() - size.y).abs() <= tolerance;
-                        let position_matches = match inner {
-                            Some(rect) => {
-                                (rect.min.x - position.x).abs() <= tolerance
-                                    && (rect.min.y - position.y).abs() <= tolerance
-                            }
-                            // Native Wayland does not expose desktop positions.
-                            None => {
-                                cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none()
-                            }
-                        };
-                        if !prepared.requested || !size_matches || !position_matches {
-                            // Match the client image, including native invisible
-                            // frame insets. Resize before moving, then wait for
-                            // the native geometry event before revealing the pin.
-                            let inset = inner
-                                .zip(outer)
-                                .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
-                            ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(size));
-                            ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(
-                                position - inset,
-                            ));
-                            prepared.previous_inner = inner;
-                            prepared.requested = true;
-                            ui.ctx().request_repaint();
-                            return;
-                        }
+                    if !prepared.requested {
+                        // Resolve native DPI/insets once. Later native geometry
+                        // is authoritative; never retry a move or resize.
+                        let inset = inner
+                            .zip(outer)
+                            .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::OuterPosition(window.min - inset));
+                        prepared.requested = true;
+                        ui.ctx().request_repaint();
+                        return;
                     }
+                    let first_frame = prepared.image_offset.is_none();
+                    let offset = *prepared.image_offset.get_or_insert_with(|| {
+                        let mut offset =
+                            inner.map_or(egui::Vec2::ZERO, |rect| window.min - rect.min);
+                        if frame.top_edge {
+                            offset.y = 0.0;
+                        }
+                        offset / ratio
+                    });
+                    frame.image = frame.image.translate(offset * ratio);
                     ui::pin::show(ui, id, &texture, frame, &events);
-                    if !prepared.ready {
-                        prepared.ready = true;
+                    if first_frame {
                         let _ = events.send(Event::PinReady(session, id));
                         ui.ctx().request_repaint_of(ViewportId::ROOT);
                     }
@@ -846,6 +818,50 @@ mod tests {
             }),
             "capture must never enter/leave native fullscreen or switch monitors"
         );
+    }
+
+    #[test]
+    fn selection_layer_does_not_retry_native_position_changes() {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+        let viewport = layer_id(0);
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        setup.textures_delta.clear();
+        let callback = setup.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("selection callback");
+        for index in 0..3 {
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(680.0, 420.0),
+                )),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                viewport,
+                egui::ViewportInfo {
+                    outer_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(84.0, 104.0),
+                        egui::vec2(680.0, 420.0),
+                    )),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| callback(ui));
+            output.textures_delta.clear();
+            let count = output.viewport_output[&viewport]
+                .commands
+                .iter()
+                .filter(|command| matches!(command, ViewportCommand::OuterPosition(_)))
+                .count();
+            assert_eq!(count, usize::from(!cfg!(target_os = "macos") && index == 0));
+        }
     }
 
     #[test]
@@ -1078,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn misaligned_pin_must_not_paint_or_finish_capture() {
+    fn mismatched_native_position_is_not_retried_and_keeps_image_pixels_in_place() {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut app = app();
@@ -1103,7 +1119,7 @@ mod tests {
             .viewport_ui_cb
             .as_ref()
             .expect("pin callback");
-        for _ in 0..2 {
+        for index in 0..3 {
             let pin = &app.pins[&1];
             let window = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0).window;
             let rect = window.translate(egui::vec2(4.0, 3.0));
@@ -1122,17 +1138,38 @@ mod tests {
             );
             let mut frame = ctx.run_ui(input, |ui| paint(ui));
             frame.textures_delta.clear();
-            assert!(
-                frame.shapes.iter().all(|shape| {
-                    !matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture)
-                }),
-                "do not reveal a pin a few pixels away from the selected desktop region"
+            let commands = &frame.viewport_output[&viewport].commands;
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    ))
+                    .count(),
+                if index == 0 { 2 } else { 0 },
+                "geometry is configured once, never retried"
             );
-            assert!(
+            let image = frame.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                _ => None,
+            });
+            if index == 0 {
+                assert!(image.is_none());
+            } else {
+                let image = image.expect("native position cannot block the captured image");
+                let expected = egui::pos2(pin.placement.position[0], pin.placement.position[1]);
+                assert!((rect.min + image.min.to_vec2()).distance(expected) < 0.001);
+                assert_eq!(
+                    image.size(),
+                    egui::vec2(pin.placement.size[0], pin.placement.size[1])
+                );
+            }
+            assert_eq!(
                 app.events
                     .try_iter()
-                    .all(|event| !matches!(event, Event::PinReady(_, _))),
-                "keep the selection visible until native placement is confirmed"
+                    .any(|event| matches!(event, Event::PinReady(_, _))),
+                index == 1
             );
         }
     }
@@ -1466,6 +1503,7 @@ mod tests {
             Layer {
                 display: capture::demo().display,
                 selection: None,
+                positioned: Arc::new(AtomicBool::new(false)),
             },
         );
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
