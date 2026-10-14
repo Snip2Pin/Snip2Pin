@@ -1,6 +1,8 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle};
 use snip2pin::geometry::{self, PixelRect};
 
+use super::style::OVERLAY;
+
 pub struct Selection {
     pub texture: TextureHandle,
     pub pixels: [u32; 2],
@@ -40,12 +42,11 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         ui.painter().rect_stroke(
             bounds,
             0,
-            Stroke::new(2.0, Color32::from_rgb(56, 132, 255)),
+            Stroke::new(OVERLAY.stroke, OVERLAY.active),
             StrokeKind::Inside,
         );
     } else {
-        ui.painter()
-            .rect_filled(bounds, 0, Color32::from_black_alpha(28));
+        ui.painter().rect_filled(bounds, 0, OVERLAY.dim);
     }
     let response = ui.allocate_rect(bounds, Sense::drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -62,7 +63,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         ui.painter().rect_stroke(
             rect,
             0,
-            Stroke::new(2.0, Color32::WHITE),
+            Stroke::new(OVERLAY.stroke, Color32::WHITE),
             StrokeKind::Inside,
         );
         if response.drag_stopped() {
@@ -82,18 +83,22 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
             return result.map(Action::Select);
         }
     }
+    let hint_size = egui::Vec2::from(OVERLAY.hint_size);
     let hint = Rect::from_center_size(
-        Pos2::new(bounds.center().x, bounds.min.y + 38.0),
-        egui::vec2(340.0, 36.0),
+        Pos2::new(
+            bounds.center().x,
+            bounds.min.y + OVERLAY.hint_top + hint_size.y / 2.0,
+        ),
+        hint_size,
     );
     if active && selection.start.is_none() {
         ui.painter()
-            .rect_filled(hint, 8, Color32::from_black_alpha(180));
+            .rect_filled(hint, OVERLAY.hint_radius, OVERLAY.hint_fill);
         ui.painter().text(
             hint.center(),
             egui::Align2::CENTER_CENTER,
             "拖动框选区域，松手置顶 · Esc 取消",
-            egui::FontId::proportional(14.0),
+            egui::FontId::proportional(OVERLAY.hint_font),
             Color32::WHITE,
         );
     }

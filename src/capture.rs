@@ -107,19 +107,22 @@ pub fn crop(image: &RgbaImage, rect: PixelRect) -> Option<RgbaImage> {
 
 /// Generated pixels for development/CI: this never reads the desktop.
 pub fn demo() -> Snapshot {
+    const DISPLAY: Display = Display {
+        id: 0,
+        origin: [80.0, 100.0],
+        size: [680.0, 420.0],
+        scale: 1.0,
+    };
+    const PIXELS: [u32; 2] = [960, 600];
+    const CELL_SIZE: u32 = 80;
+    const COLORS: [image::Rgba<u8>; 2] = [
+        image::Rgba([70, 132, 110, 255]),
+        image::Rgba([225, 238, 228, 255]),
+    ];
     Snapshot {
-        display: Display {
-            id: 0,
-            origin: [80.0, 100.0],
-            size: [680.0, 420.0],
-            scale: 1.0,
-        },
-        pixels: RgbaImage::from_fn(960, 600, |x, y| {
-            if (x / 80 + y / 80) % 2 == 0 {
-                image::Rgba([70, 132, 110, 255])
-            } else {
-                image::Rgba([225, 238, 228, 255])
-            }
+        display: DISPLAY,
+        pixels: RgbaImage::from_fn(PIXELS[0], PIXELS[1], |x, y| {
+            COLORS[((x / CELL_SIZE + y / CELL_SIZE) % COLORS.len() as u32) as usize]
         }),
     }
 }

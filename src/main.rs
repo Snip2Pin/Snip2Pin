@@ -22,19 +22,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "metal" => snip2pin::icon::Variant::Metal,
             _ => return Err("icon must be line or metal".into()),
         };
-        snip2pin::icon::render_vector(variant, 1024)?.save(path)?;
+        snip2pin::icon::render_vector(variant, snip2pin::icon::EXPORT_SIZE)?.save(path)?;
         return Ok(());
     }
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Snip2Pin · 小贴图")
             .with_app_id("io.github.rensilin.snipsprig")
-            .with_inner_size([400.0, 380.0])
+            .with_inner_size(ui::style::LAUNCHER.window)
             .with_transparent(true)
             .with_icon(eframe::egui::IconData {
-                rgba: snip2pin::icon::render(snip2pin::icon::Variant::Line, 64)?.into_raw(),
-                width: 64,
-                height: 64,
+                rgba: snip2pin::icon::render(
+                    snip2pin::icon::Variant::Line,
+                    snip2pin::icon::WINDOW_SIZE,
+                )?
+                .into_raw(),
+                width: snip2pin::icon::WINDOW_SIZE,
+                height: snip2pin::icon::WINDOW_SIZE,
             })
             .with_resizable(false),
         centered: true,

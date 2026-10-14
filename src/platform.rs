@@ -7,6 +7,9 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snip2pin::settings::Binding;
 
+#[cfg(target_os = "macos")]
+const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
+
 /// Read usable display bounds on the UI thread; never show or activate windows.
 pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
     let bounds =
@@ -23,7 +26,7 @@ pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
                     frame.origin.x as f32,
                     (desktop_top - frame.origin.y - frame.size.height) as f32,
                 );
-                if origin.distance(bounds.min) < 1.0 {
+                if origin.distance(bounds.min) < DISPLAY_ORIGIN_TOLERANCE {
                     let visible = screen.visibleFrame();
                     return egui::Rect::from_min_size(
                         egui::pos2(
@@ -39,7 +42,7 @@ pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
     bounds
 }
 
-/// Read the cursor once when entering capture, in the same desktop coordinates
+/// Read the cursor on capture entry or a user drag event, in the same coordinates
 /// as xcap's monitor bounds. No event taps, global hooks, or polling are used.
 #[cfg(target_os = "macos")]
 pub fn pointer_position() -> Option<[f32; 2]> {
@@ -93,14 +96,17 @@ fn set_dock_icon(variant: snip2pin::icon::Variant) -> Result<(), String> {
     };
     use objc2_foundation::NSSize;
     let main_thread = objc2::MainThreadMarker::new().ok_or("图标必须在 UI 线程更新。")?;
-    let pixels = snip2pin::icon::render(variant, 256)?;
-    let row_len = pixels.width() as usize * 4;
-    // SAFETY: Main-thread operation, bounded 256x256 RGBA pixels, valid color
+    const RGBA_CHANNELS: usize = 4;
+    const BITS_PER_CHANNEL: isize = u8::BITS as isize;
+    let pixels = snip2pin::icon::render(variant, snip2pin::icon::DOCK_SIZE)?;
+    let row_len = pixels.width() as usize * RGBA_CHANNELS;
+    // SAFETY: Main-thread operation, bounded RGBA pixels, valid color
     // space and matching layout. Null planes request memory owned by AppKit.
     let bitmap = unsafe {
         NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bitmapFormat_bytesPerRow_bitsPerPixel(
-            NSBitmapImageRep::alloc(), std::ptr::null_mut(), 256, 256, 8, 4, true, false,
-            NSDeviceRGBColorSpace, NSBitmapFormat::AlphaNonpremultiplied, row_len as isize, 32,
+            NSBitmapImageRep::alloc(), std::ptr::null_mut(), pixels.width() as isize, pixels.height() as isize,
+            BITS_PER_CHANNEL, RGBA_CHANNELS as isize, true, false,
+            NSDeviceRGBColorSpace, NSBitmapFormat::AlphaNonpremultiplied, row_len as isize, BITS_PER_CHANNEL * RGBA_CHANNELS as isize,
         )
     }.ok_or("无法分配 Dock 图标。")?;
     let stride = usize::try_from(bitmap.bytesPerRow()).map_err(|_| "无效图标行长度。")?;
@@ -110,12 +116,15 @@ fn set_dock_icon(variant: snip2pin::icon::Variant) -> Result<(), String> {
     }
     for (y, row) in pixels.as_raw().chunks_exact(row_len).enumerate() {
         // SAFETY: The validated native stride covers every RGBA row. The bitmap
-        // owns all 256 rows; Rust's source buffer is distinct and still alive.
+        // owns all rows; Rust's source buffer is distinct and still alive.
         unsafe {
             std::ptr::copy_nonoverlapping(row.as_ptr(), destination.add(y * stride), row_len);
         }
     }
-    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(256.0, 256.0));
+    let image = NSImage::initWithSize(
+        NSImage::alloc(),
+        NSSize::new(f64::from(pixels.width()), f64::from(pixels.height())),
+    );
     image.addRepresentation(&bitmap);
     // SAFETY: The main-thread application receives Some(valid retained image),
     // never nil. AppKit retains the image and its owned bitmap representation.

@@ -14,6 +14,7 @@ use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry::{self, Placement},
     icon::{self, Variant},
+    pin::{Coordinates, Preparation as PinPreparation, Prepared},
     session::CaptureGate,
     settings::{self, Binding, Preferences},
 };
@@ -22,6 +23,9 @@ use crate::{
     platform::{self, Shortcut},
     ui::{self, launcher, overlay},
 };
+
+const SHORTCUT_SUPPRESSION: Duration = Duration::from_millis(200);
+const OVERLAY_SIZE_TOLERANCE: f32 = 0.5;
 
 pub enum Event {
     Capture,
@@ -57,12 +61,6 @@ struct Pin {
     screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
     prepared: Arc<Mutex<PinPreparation>>,
-}
-
-#[derive(Default)]
-struct PinPreparation {
-    requested: bool,
-    image_offset: Option<egui::Vec2>,
 }
 
 pub struct Snip2Pin {
@@ -393,7 +391,7 @@ impl Snip2Pin {
     }
 
     fn change_binding(&mut self, binding: Binding, ctx: &egui::Context) {
-        self.suppress_shortcut_until = Instant::now() + Duration::from_millis(200);
+        self.suppress_shortcut_until = Instant::now() + SHORTCUT_SUPPRESSION;
         if self.shortcut.is_none() && !self.demo && platform::global_shortcuts_supported() {
             let sender = self.sender.clone();
             let ctx = ctx.clone();
@@ -480,13 +478,13 @@ impl Snip2Pin {
             return;
         }
         self.applied_icon = Some(variant);
-        match icon::render(variant, 64) {
+        match icon::render(variant, icon::WINDOW_SIZE) {
             Ok(pixels) => {
                 self.icon_texture = Some(texture(ctx, "application-icon", &pixels));
                 let data = Arc::new(egui::IconData {
+                    width: pixels.width(),
+                    height: pixels.height(),
                     rgba: pixels.into_raw(),
-                    width: 64,
-                    height: 64,
                 });
                 self.icon_data = Some(data.clone());
                 if let Err(error) = platform::set_app_icon(ctx, variant, data) {
@@ -573,8 +571,8 @@ impl Snip2Pin {
                         // the whole desktop into a menu-bar-constrained viewport.
                         let expected = egui::vec2(size[0], size[1]) / ui.ctx().zoom_factor();
                         let actual = ui.max_rect().size();
-                        if (actual.x - expected.x).abs() > 0.5
-                            || (actual.y - expected.y).abs() > 0.5
+                        if (actual.x - expected.x).abs() > OVERLAY_SIZE_TOLERANCE
+                            || (actual.y - expected.y).abs() > OVERLAY_SIZE_TOLERANCE
                         {
                             ui.ctx().request_repaint();
                             return;
@@ -611,16 +609,9 @@ impl Snip2Pin {
             let display_scale = pin.display_scale;
             let screen = pin.screen;
             let screen_areas = pin.screen_areas.clone();
-            let initial = ui::pin::frame_geometry(
-                placement,
-                screen,
-                1.0,
-                if cfg!(target_os = "macos") {
-                    1.0
-                } else {
-                    display_scale
-                },
-            );
+            let initial_units = Coordinates::new(display_scale, 1.0, display_scale);
+            let initial =
+                ui::pin::frame_geometry(placement, screen, initial_units.ratio, initial_units.grid);
             ctx.show_viewport_deferred(
                 ViewportId::from_hash_of(("pin", id)),
                 self.window_icon(egui::ViewportBuilder::default())
@@ -642,62 +633,47 @@ impl Snip2Pin {
                         ui.ctx().request_repaint_of(ViewportId::ROOT);
                         return;
                     }
-                    let ratio = if cfg!(target_os = "macos") {
-                        ui.ctx().zoom_factor().recip()
-                    } else {
-                        display_scale / ui.ctx().pixels_per_point()
-                    };
-                    let grid = if cfg!(target_os = "macos") {
-                        ui.ctx().zoom_factor()
-                    } else {
-                        ui.ctx().pixels_per_point()
-                    };
+                    let coordinates = Coordinates::new(
+                        display_scale,
+                        ui.ctx().zoom_factor(),
+                        ui.ctx().pixels_per_point(),
+                    );
+                    let ratio = coordinates.ratio;
                     let Ok(mut prepared) = prepared.lock() else {
                         return;
                     };
                     let (inner, outer) = ui
                         .input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
-                    let mut frame = ui::pin::frame_geometry(placement, screen, ratio, grid);
-                    let window = frame.window;
-                    if !prepared.requested {
-                        // Resolve native DPI/insets once. Later native geometry
-                        // is authoritative; never retry a move or resize.
-                        let inset = inner
-                            .zip(outer)
-                            .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
-                        ui.ctx()
-                            .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));
-                        ui.ctx()
-                            .send_viewport_cmd(ViewportCommand::OuterPosition(window.min - inset));
-                        prepared.requested = true;
-                        ui.ctx().request_repaint();
-                        return;
-                    }
-                    let first_frame = prepared.image_offset.is_none();
-                    let offset = *prepared.image_offset.get_or_insert_with(|| {
-                        let mut offset =
-                            inner.map_or(egui::Vec2::ZERO, |rect| window.min - rect.min);
-                        if frame.top_edge {
-                            offset.y = 0.0;
+                    let frame = ui::pin::frame_geometry(placement, screen, ratio, coordinates.grid);
+                    let (mut frame, first_frame) = match prepared.update(frame, inner, outer, ratio)
+                    {
+                        Prepared::Initialize {
+                            window,
+                            outer_position,
+                        } => {
+                            ui.ctx()
+                                .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));
+                            ui.ctx()
+                                .send_viewport_cmd(ViewportCommand::OuterPosition(outer_position));
+                            ui.ctx().request_repaint();
+                            return;
                         }
-                        offset / ratio
-                    });
-                    frame.image = frame.image.translate(offset * ratio);
+                        Prepared::Paint { frame, first } => (frame, first),
+                    };
                     if let Some(actual) = inner {
-                        let image = frame.image.translate(actual.min.to_vec2());
-                        let screen = screen_areas
-                            .iter()
-                            .map(|area| {
-                                egui::Rect::from_min_max(area.min * ratio, area.max * ratio)
-                            })
-                            .find(|area| area.contains(image.center()))
-                            .unwrap_or(egui::Rect::from_min_max(
-                                screen.min * ratio,
-                                screen.max * ratio,
-                            ));
-                        frame.toolbar_below = ui::pin::toolbar_below(actual, screen);
+                        frame.place_controls(actual, &screen_areas, screen, ratio);
                     }
-                    ui::pin::show(ui, id, &texture, frame, &events);
+                    ui::pin::show(
+                        ui,
+                        ui::pin::Model {
+                            id,
+                            texture: &texture,
+                            frame,
+                            events: &events,
+                        },
+                        &mut prepared.drag,
+                        platform::pointer_position,
+                    );
                     if first_frame {
                         let _ = events.send(Event::PinReady(session, id));
                         ui.ctx().request_repaint_of(ViewportId::ROOT);
@@ -806,934 +782,4 @@ fn color_image(pixels: &image::RgbaImage) -> ColorImage {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn app() -> Snip2Pin {
-        let (sender, events) = mpsc::channel();
-        Snip2Pin {
-            sender,
-            events,
-            phase: Phase::Idle,
-            gate: CaptureGate::default(),
-            layers: BTreeMap::new(),
-            active_display: None,
-            pins: BTreeMap::new(),
-            next_pin: 0,
-            message: None,
-            shortcut: None,
-            preferences: Preferences::default(),
-            applied_icon: None,
-            icon_data: None,
-            icon_texture: None,
-            config_path: None,
-            recording: false,
-            suppress_shortcut_until: Instant::now(),
-            demo: true,
-        }
-    }
-
-    #[test]
-    fn capture_never_switches_the_desktop_into_native_fullscreen() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
-            app.show_layers(ui.ctx());
-            app.restore(ui.ctx());
-        });
-        output.textures_delta.clear();
-        assert!(
-            output.viewport_output.values().all(|viewport| {
-                viewport.builder.fullscreen != Some(true)
-                    && viewport.builder.monitor.is_none()
-                    && !viewport.commands.iter().any(|command| {
-                        matches!(
-                            command,
-                            ViewportCommand::Fullscreen(_) | ViewportCommand::SetMonitor(_)
-                        )
-                    })
-            }),
-            "capture must never enter/leave native fullscreen or switch monitors"
-        );
-    }
-
-    #[test]
-    fn selection_layer_does_not_retry_native_position_changes() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        let viewport = layer_id(0);
-        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
-        setup.textures_delta.clear();
-        let callback = setup.viewport_output[&viewport]
-            .viewport_ui_cb
-            .as_ref()
-            .expect("selection callback");
-        for index in 0..3 {
-            let mut input = egui::RawInput {
-                viewport_id: viewport,
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(680.0, 420.0),
-                )),
-                ..Default::default()
-            };
-            input.viewports.insert(
-                viewport,
-                egui::ViewportInfo {
-                    outer_rect: Some(egui::Rect::from_min_size(
-                        egui::pos2(84.0, 104.0),
-                        egui::vec2(680.0, 420.0),
-                    )),
-                    ..Default::default()
-                },
-            );
-            let mut output = ctx.run_ui(input, |ui| callback(ui));
-            output.textures_delta.clear();
-            let count = output.viewport_output[&viewport]
-                .commands
-                .iter()
-                .filter(|command| matches!(command, ViewportCommand::OuterPosition(_)))
-                .count();
-            assert_eq!(count, usize::from(!cfg!(target_os = "macos") && index == 0));
-        }
-    }
-
-    #[test]
-    fn capture_initially_highlights_the_display_under_the_cursor() {
-        let ctx = egui::Context::default();
-        let mut app = app();
-        let mut left = capture::demo();
-        left.display.id = 9;
-        left.display.origin = [-680.0, -100.0];
-        left.display.scale = 2.0;
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(
-            id,
-            Ok(vec![capture::demo(), left]),
-            Some([-300.0, -50.0]),
-            &ctx,
-        );
-        assert_eq!(
-            app.active_display,
-            Some(9),
-            "the pointer chooses the screen, not display ordering or the launcher"
-        );
-    }
-
-    #[test]
-    fn every_monitor_gets_a_layer_and_pin_uses_that_monitors_origin() {
-        let ctx = egui::Context::default();
-        let mut app = app();
-        let mut left = capture::demo();
-        left.display.id = 9;
-        left.display.origin = [-680.0, -100.0];
-        let origin = left.display.position();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo(), left]), None, &ctx);
-        assert_eq!(app.layers.len(), 2);
-        assert_eq!(app.active_display, Some(0));
-        app.selection_action(id, 9, overlay::Action::Activate, &ctx);
-        assert_eq!(app.active_display, Some(9));
-        app.selection_action(
-            id,
-            9,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 60,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        let pin = app.pins.values().next().expect("pin created");
-        assert_eq!(pin.placement.position, [origin[0] + 68.0, origin[1] + 42.0]);
-        assert_eq!(pin.placement.size, [136.0, 84.0]);
-        assert!(matches!(
-            app.phase,
-            Phase::Selecting {
-                pending_pin: Some(_),
-                ..
-            }
-        ));
-        app.restore(&ctx);
-        assert_eq!(app.active_display, None);
-        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-        assert_eq!(app.pins.len(), 1);
-    }
-
-    #[test]
-    fn canceled_and_stale_selections_release_buffers_without_creating_pins() {
-        let ctx = egui::Context::default();
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        app.selection_action(id + 1, 0, overlay::Action::Cancel, &ctx);
-        assert!(matches!(app.phase, Phase::Selecting { .. }));
-        app.selection_action(id, 0, overlay::Action::Cancel, &ctx);
-        assert!(matches!(app.phase, Phase::Idle));
-        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-        assert!(app.pins.is_empty());
-    }
-
-    #[test]
-    fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
-        let ctx = egui::Context::default();
-        let mut app = app();
-        let snapshot = capture::demo();
-        let rect = geometry::PixelRect {
-            x: 3,
-            y: 5,
-            width: 7,
-            height: 9,
-        };
-        let expected = color_image(&capture::crop(&snapshot.pixels, rect).expect("valid crop"));
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.selection_action(id + 1, 0, overlay::Action::Select(rect), ui.ctx());
-            assert!(
-                app.pins.is_empty(),
-                "stale selections cannot copy or create pins"
-            );
-            app.selection_action(id, 0, overlay::Action::Select(rect), ui.ctx());
-            app.selection_action(id, 0, overlay::Action::Select(rect), ui.ctx());
-        });
-        output.textures_delta.clear();
-        assert_eq!(output.platform_output.commands.len(), 1);
-        assert!(
-            matches!(&output.platform_output.commands[0], egui::OutputCommand::CopyImage(image) if image == &expected)
-        );
-        assert_eq!(app.pins[&1].pixels.as_ref(), &expected);
-
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
-        output.textures_delta.clear();
-        assert_eq!(output.platform_output.commands.len(), 1);
-        assert!(
-            matches!(&output.platform_output.commands[0], egui::OutputCommand::CopyImage(image) if image == &expected)
-        );
-        app.pins.remove(&1);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
-        output.textures_delta.clear();
-        assert!(
-            output.platform_output.commands.is_empty(),
-            "closed pins cannot overwrite the clipboard"
-        );
-    }
-
-    #[test]
-    fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
-        for rect in [
-            None,
-            Some(geometry::PixelRect {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 1,
-            }),
-            Some(geometry::PixelRect {
-                x: u32::MAX,
-                y: 1,
-                width: 1,
-                height: 1,
-            }),
-        ] {
-            let ctx = egui::Context::default();
-            let mut app = app();
-            let id = app.gate.begin().expect("capture starts");
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
-                app.selection_action(
-                    id,
-                    0,
-                    rect.map_or(overlay::Action::Cancel, overlay::Action::Select),
-                    ui.ctx(),
-                );
-            });
-            output.textures_delta.clear();
-            assert!(output.platform_output.commands.is_empty());
-            assert!(app.pins.is_empty());
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut setup = ctx.run_ui(
-            egui::RawInput {
-                max_texture_side: Some(4096),
-                ..Default::default()
-            },
-            |_| {},
-        );
-        setup.textures_delta.clear();
-        let mut app = app();
-        app.demo = false;
-        let mut snapshot = capture::demo();
-        snapshot.display.size = [1440.0, 900.0];
-        snapshot.pixels = image::RgbaImage::new(2880, 1800);
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
-        let layer = layer_id(0);
-        let texture = app.layers[&0]
-            .selection
-            .as_ref()
-            .expect("selection")
-            .lock()
-            .expect("selection lock")
-            .texture
-            .id();
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
-        output.textures_delta.clear();
-        let paint = output.viewport_output[&layer]
-            .viewport_ui_cb
-            .as_ref()
-            .expect("native layer callback");
-        for (size, should_paint) in [([1440.0, 870.0], false), ([1440.0, 900.0], true)] {
-            let mut input = egui::RawInput {
-                viewport_id: layer,
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
-                ..Default::default()
-            };
-            input.viewports.insert(layer, egui::ViewportInfo::default());
-            let mut frame = ctx.run_ui(input, |ui| paint(ui));
-            frame.textures_delta.clear();
-            let images: Vec<_> = frame
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
-                        Some(mesh.calc_bounds())
-                    }
-                    _ => None,
-                })
-                .collect();
-            if should_paint {
-                assert_eq!(
-                    images,
-                    vec![egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1440.0, 900.0)
-                    )],
-                    "Retina desktop must retain its full dimensions and aspect ratio"
-                );
-            } else {
-                assert!(
-                    images.is_empty(),
-                    "never paint a vertically compressed desktop"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn mismatched_native_position_is_not_retried_and_keeps_image_pixels_in_place() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        app.selection_action(
-            id,
-            0,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 60,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        let viewport = ViewportId::from_hash_of(("pin", 1_u64));
-        let texture = app.pins[&1].texture.id();
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
-        output.textures_delta.clear();
-        let paint = output.viewport_output[&viewport]
-            .viewport_ui_cb
-            .as_ref()
-            .expect("pin callback");
-        for index in 0..3 {
-            let pin = &app.pins[&1];
-            let window = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0).window;
-            let rect = window.translate(egui::vec2(4.0, 3.0));
-            let mut input = egui::RawInput {
-                viewport_id: viewport,
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, rect.size())),
-                ..Default::default()
-            };
-            input.viewports.insert(
-                viewport,
-                egui::ViewportInfo {
-                    inner_rect: Some(rect),
-                    outer_rect: Some(rect),
-                    ..Default::default()
-                },
-            );
-            let mut frame = ctx.run_ui(input, |ui| paint(ui));
-            frame.textures_delta.clear();
-            let commands = &frame.viewport_output[&viewport].commands;
-            assert_eq!(
-                commands
-                    .iter()
-                    .filter(|command| matches!(
-                        command,
-                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
-                    ))
-                    .count(),
-                if index == 0 { 2 } else { 0 },
-                "geometry is configured once, never retried"
-            );
-            let image = frame.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
-                _ => None,
-            });
-            if index == 0 {
-                assert!(image.is_none());
-            } else {
-                let image = image.expect("native position cannot block the captured image");
-                let expected = egui::pos2(pin.placement.position[0], pin.placement.position[1]);
-                assert!((rect.min + image.min.to_vec2()).distance(expected) < 0.001);
-                assert_eq!(
-                    image.size(),
-                    egui::vec2(pin.placement.size[0], pin.placement.size[1])
-                );
-            }
-            assert_eq!(
-                app.events
-                    .try_iter()
-                    .any(|event| matches!(event, Event::PinReady(_, _))),
-                index == 1
-            );
-        }
-    }
-
-    #[test]
-    fn top_edge_pin_finishes_capture_when_the_system_moves_it_below_the_menu_bar() {
-        for height in [120, 600] {
-            let ctx = egui::Context::default();
-            ctx.set_embed_viewports(false);
-            let mut app = app();
-            let id = app.gate.begin().expect("capture starts");
-            let mut snapshot = capture::demo();
-            snapshot.display.origin = [0.0, 0.0];
-            app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
-            app.selection_action(
-                id,
-                0,
-                overlay::Action::Select(geometry::PixelRect {
-                    x: 96,
-                    y: 0,
-                    width: 192,
-                    height,
-                }),
-                &ctx,
-            );
-            let viewport = ViewportId::from_hash_of(("pin", 1_u64));
-            let texture = app.pins[&1].texture.id();
-            let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
-            setup.textures_delta.clear();
-            let output = &setup.viewport_output[&viewport];
-            let paint = output.viewport_ui_cb.as_ref().expect("pin callback");
-            let mut actual = egui::Rect::from_min_size(
-                output.builder.position.expect("position"),
-                output.builder.inner_size.expect("size"),
-            );
-            let mut painted = false;
-            let mut ready = false;
-            for _ in 0..4 {
-                actual = actual.translate(egui::vec2(0.0, (28.0 - actual.min.y).max(0.0)));
-                let mut input = egui::RawInput {
-                    viewport_id: viewport,
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
-                    ..Default::default()
-                };
-                input.viewports.insert(
-                    viewport,
-                    egui::ViewportInfo {
-                        inner_rect: Some(actual),
-                        outer_rect: Some(actual),
-                        ..Default::default()
-                    },
-                );
-                let mut frame = ctx.run_ui(input, |ui| paint(ui));
-                frame.textures_delta.clear();
-                painted |= frame.shapes.iter().any(|shape| {
-                    matches!(&shape.shape,
-                egui::Shape::Mesh(mesh) if mesh.texture_id == texture)
-                });
-                ready |= app
-                    .events
-                    .try_iter()
-                    .any(|event| matches!(event, Event::PinReady(session, 1) if session == id));
-                for command in &frame.viewport_output[&viewport].commands {
-                    match command {
-                        ViewportCommand::InnerSize(size) => {
-                            actual = egui::Rect::from_min_size(actual.min, *size)
-                        }
-                        ViewportCommand::OuterPosition(position) => {
-                            actual = egui::Rect::from_min_size(*position, actual.size())
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            assert!(
-                ready && painted,
-                "top-edge capture must reveal the moved pin and finish, instead of endlessly retrying an impossible desktop position"
-            );
-            app.restore(&ctx);
-            assert!(matches!(app.phase, Phase::Idle));
-            assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-        }
-    }
-
-    #[test]
-    fn native_top_boundary_switches_toolbar_for_initial_capture_and_dragging() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        let mut left = capture::demo();
-        left.display.id = 9;
-        left.display.scale = 2.0;
-        left.display.origin = [-680.0, -100.0];
-        app.accept_capture(id, Ok(vec![capture::demo(), left]), None, &ctx);
-        app.selection_action(
-            id,
-            0,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 0,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        let pin = &app.pins[&1];
-        let initial = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0);
-        let texture = pin.texture.id();
-        let viewport = ViewportId::from_hash_of(("pin", 1_u64));
-        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
-        setup.textures_delta.clear();
-        let paint = setup.viewport_output[&viewport]
-            .viewport_ui_cb
-            .as_ref()
-            .expect("pin callback");
-        for (index, (position, below)) in [
-            (egui::pos2(138.0, 100.0), true),
-            (egui::pos2(138.0, 100.0), true),
-            (egui::pos2(138.0, 200.0), false),
-            (egui::pos2(138.0, 100.0), true),
-            (egui::pos2(-640.0, -20.0), false),
-            (egui::pos2(-640.0, -100.0), true),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let actual = egui::Rect::from_min_size(position, initial.window.size());
-            let mut input = egui::RawInput {
-                viewport_id: viewport,
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
-                events: vec![egui::Event::PointerMoved(initial.image.center())],
-                ..Default::default()
-            };
-            input.viewports.insert(
-                viewport,
-                egui::ViewportInfo {
-                    inner_rect: Some(actual),
-                    outer_rect: Some(actual),
-                    ..Default::default()
-                },
-            );
-            let mut output = ctx.run_ui(input, |ui| paint(ui));
-            output.textures_delta.clear();
-            if index == 0 {
-                continue;
-            }
-            assert!(
-                output.viewport_output[&viewport]
-                    .commands
-                    .iter()
-                    .all(|command| !matches!(
-                        command,
-                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
-                    ))
-            );
-            let image = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
-                        Some(mesh.calc_bounds())
-                    }
-                    _ => None,
-                })
-                .expect("image stays visible");
-            assert_eq!(
-                image, initial.image,
-                "toolbar switching cannot change image placement or dimensions"
-            );
-            let close = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "×" => Some((
-                        shape.clip_rect,
-                        egui::Rect::from_min_size(text.pos, text.galley.size()),
-                    )),
-                    _ => None,
-                })
-                .expect("hover reveals close button");
-            assert!(
-                close.0.contains_rect(close.1),
-                "both toolbar rows must fit the native surface"
-            );
-            assert_eq!(close.1.min.y > image.max.y, below);
-            assert!(!close.1.intersects(image));
-        }
-    }
-
-    #[test]
-    fn pending_pin_can_be_closed_before_native_geometry_is_ready() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        app.selection_action(
-            id,
-            0,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 0,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        let viewport = ViewportId::from_hash_of(("pin", 1_u64));
-        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
-        setup.textures_delta.clear();
-        let paint = setup.viewport_output[&viewport]
-            .viewport_ui_cb
-            .as_ref()
-            .expect("pin callback");
-        let mut input = egui::RawInput {
-            viewport_id: viewport,
-            ..Default::default()
-        };
-        input.viewports.insert(
-            viewport,
-            egui::ViewportInfo {
-                events: vec![egui::ViewportEvent::Close],
-                ..Default::default()
-            },
-        );
-        let mut frame = ctx.run_ui(input, |ui| paint(ui));
-        frame.textures_delta.clear();
-        assert!(matches!(app.events.try_recv(), Ok(Event::ClosePin(1))));
-        app.close_pin(1, &ctx);
-        assert!(app.pins.is_empty());
-        assert!(matches!(app.phase, Phase::Idle));
-        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-    }
-
-    #[test]
-    fn selection_escape_cancels_a_pending_pin_and_releases_capture_layers() {
-        let ctx = egui::Context::default();
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        app.selection_action(
-            id,
-            0,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 0,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        assert_eq!(app.pins.len(), 1);
-        app.selection_action(id, 0, overlay::Action::Cancel, &ctx);
-        assert!(app.pins.is_empty());
-        assert!(matches!(app.phase, Phase::Idle));
-        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-    }
-
-    #[test]
-    fn aligned_pin_keeps_image_origin_across_dpi_zoom_and_native_frame_insets() {
-        for scale in [1.0, 1.25, 2.0] {
-            for zoom in [1.0, 1.25] {
-                for origin in [[80.0, 100.0], [-680.0, -100.0]] {
-                    let ctx = egui::Context::default();
-                    ctx.set_embed_viewports(false);
-                    ctx.set_zoom_factor(zoom);
-                    let mut app = app();
-                    let id = app.gate.begin().expect("capture starts");
-                    let mut snapshot = capture::demo();
-                    snapshot.display.origin = origin;
-                    snapshot.display.scale = scale;
-                    if cfg!(target_os = "macos") {
-                        snapshot.display.size = [960.0 / scale, 600.0 / scale];
-                    } else {
-                        snapshot.display.origin = origin.map(|value| value * scale);
-                        snapshot.display.size = [960.0, 600.0];
-                    }
-                    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
-                    app.selection_action(
-                        id,
-                        0,
-                        overlay::Action::Select(geometry::PixelRect {
-                            x: 97,
-                            y: 61,
-                            width: 193,
-                            height: 121,
-                        }),
-                        &ctx,
-                    );
-                    let viewport = ViewportId::from_hash_of(("pin", 1_u64));
-                    let pin = &app.pins[&1];
-                    let texture = pin.texture.id();
-                    let position =
-                        egui::pos2(pin.placement.position[0], pin.placement.position[1]) / zoom;
-                    let size = egui::vec2(pin.placement.size[0], pin.placement.size[1]) / zoom;
-                    let grid = if cfg!(target_os = "macos") {
-                        zoom
-                    } else {
-                        scale * zoom
-                    };
-                    let window =
-                        ui::pin::frame_geometry(pin.placement, pin.screen, zoom.recip(), grid)
-                            .window;
-                    let inset = egui::vec2(4.0, 7.0) / (scale * zoom);
-                    let mut output =
-                        ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
-                    output.textures_delta.clear();
-                    let paint = output.viewport_output[&viewport]
-                        .viewport_ui_cb
-                        .as_ref()
-                        .expect("pin callback");
-                    let input = |rect: egui::Rect| {
-                        let mut input = egui::RawInput {
-                            viewport_id: viewport,
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                rect.size(),
-                            )),
-                            ..Default::default()
-                        };
-                        input.viewports.insert(
-                            viewport,
-                            egui::ViewportInfo {
-                                native_pixels_per_point: Some(scale),
-                                inner_rect: Some(rect),
-                                outer_rect: Some(rect.translate(-inset)),
-                                ..Default::default()
-                            },
-                        );
-                        input
-                    };
-                    let mut first = ctx.run_ui(input(window), |ui| paint(ui));
-                    first.textures_delta.clear();
-                    let commands = &first.viewport_output[&viewport].commands;
-                    let resize = commands
-                        .iter()
-                        .position(|command| matches!(command, ViewportCommand::InnerSize(_)))
-                        .expect("resize");
-                    let move_window = commands
-                        .iter()
-                        .position(|command| matches!(command, ViewportCommand::OuterPosition(_)))
-                        .expect("position");
-                    assert!(
-                        resize < move_window,
-                        "resizing must not undo the final top-left position"
-                    );
-                    assert!(commands.iter().any(|command| matches!(command,
-                        ViewportCommand::OuterPosition(actual) if actual.distance(window.min - inset) < 0.001
-                    )), "position targets the client area, compensating native insets");
-                    let mut frame = ctx.run_ui(input(window), |ui| paint(ui));
-                    frame.textures_delta.clear();
-                    let image = frame
-                        .shapes
-                        .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
-                                Some(mesh.calc_bounds())
-                            }
-                            _ => None,
-                        })
-                        .expect("aligned image is painted");
-                    let tolerance = 0.001;
-                    assert!((window.min + image.min.to_vec2()).distance(position) < tolerance);
-                    assert!(
-                        (image.width() - size.x).abs() < tolerance
-                            && (image.height() - size.y).abs() < tolerance,
-                        "native window rounding must not stretch the image"
-                    );
-                    assert!(
-                        app.events
-                            .try_iter()
-                            .any(|event| matches!(event, Event::PinReady(_, 1)))
-                    );
-                    let mut dragged = ctx
-                        .run_ui(input(window.translate(egui::vec2(20.0, 30.0))), |ui| {
-                            paint(ui)
-                        });
-                    dragged.textures_delta.clear();
-                    assert!(
-                        dragged.viewport_output[&viewport]
-                            .commands
-                            .iter()
-                            .all(|command| !matches!(command, ViewportCommand::OuterPosition(_))),
-                        "once initialized, user dragging must not snap the pin back"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        app.selection_action(
-            id,
-            0,
-            overlay::Action::Select(geometry::PixelRect {
-                x: 96,
-                y: 60,
-                width: 192,
-                height: 120,
-            }),
-            &ctx,
-        );
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_pins(ui.ctx());
-        });
-        output.textures_delta.clear();
-        let pin = output
-            .viewport_output
-            .get(&ViewportId::from_hash_of(("pin", 1_u64)))
-            .expect("native pin");
-        assert_eq!(pin.builder.position, Some(egui::pos2(138.0, 100.0)));
-        assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 168.0)));
-        assert!(
-            output.viewport_output[&ViewportId::ROOT]
-                .commands
-                .iter()
-                .all(|command| matches!(command, ViewportCommand::SetTheme(_))),
-            "unexpected root commands: {:?}",
-            output.viewport_output[&ViewportId::ROOT].commands
-        );
-    }
-
-    #[test]
-    fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
-        let ctx = egui::Context::default();
-        ctx.set_embed_viewports(false);
-        let mut app = app();
-        app.layers.insert(
-            0,
-            Layer {
-                display: capture::demo().display,
-                selection: None,
-                positioned: Arc::new(AtomicBool::new(false)),
-            },
-        );
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
-        output.textures_delta.clear();
-        let drain = || {
-            for _ in 0..4 {
-                let mut input = egui::RawInput {
-                    viewport_id: layer_id(0),
-                    ..Default::default()
-                };
-                input.viewports.insert(
-                    layer_id(0),
-                    egui::ViewportInfo {
-                        parent: Some(ViewportId::ROOT),
-                        ..Default::default()
-                    },
-                );
-                let mut output = ctx.run_ui(input, |_| {});
-                output.textures_delta.clear();
-            }
-        };
-        drain();
-        let repaints = Arc::new(Mutex::new(Vec::new()));
-        let observed = repaints.clone();
-        ctx.set_request_repaint_callback(move |info| {
-            observed.lock().expect("repaint log").push(info.viewport_id);
-        });
-        let id = app.gate.begin().expect("capture starts");
-        app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
-        assert!(
-            repaints.lock().expect("repaint log").contains(&layer_id(0)),
-            "ready must paint the selection without waiting for pointer input"
-        );
-        drain();
-        repaints.lock().expect("repaint log").clear();
-        app.restore(&ctx);
-        assert!(
-            repaints.lock().expect("repaint log").contains(&layer_id(0)),
-            "cancel must clear the selection without waiting for pointer input"
-        );
-    }
-
-    #[test]
-    fn appearance_changes_preserve_shortcut_and_survive_restart() {
-        let directory = tempfile::tempdir().expect("temporary preferences");
-        let path = directory.path().join("preferences.toml");
-        let ctx = egui::Context::default();
-        let mut app = app();
-        app.config_path = Some(path.clone());
-        app.preferences.binding = Binding::parse("Ctrl+Alt+K").expect("custom binding");
-        app.change_appearance(settings::Theme::Dark, settings::Icon::Line, &ctx);
-        assert_eq!(
-            app.preferences.binding,
-            Binding::parse("Ctrl+Alt+K").expect("preserved binding")
-        );
-        assert_eq!(ctx.theme(), egui::Theme::Dark);
-        assert_eq!(Preferences::load(&path).expect("restart"), app.preferences);
-        app.change_binding(Binding::parse("Ctrl+Shift+4").expect("new binding"), &ctx);
-        let reloaded = Preferences::load(&path).expect("restart after shortcut change");
-        assert_eq!(reloaded.theme, settings::Theme::Dark);
-        assert_eq!(reloaded.icon, settings::Icon::Line);
-        assert_eq!(
-            reloaded.binding,
-            Binding::parse("Ctrl+Shift+4").expect("updated binding")
-        );
-    }
-
-    #[test]
-    fn failed_preference_save_leaves_theme_and_icon_unchanged() {
-        let directory = tempfile::tempdir().expect("temporary preferences");
-        let ctx = egui::Context::default();
-        let mut app = app();
-        app.config_path = Some(directory.path().to_path_buf());
-        let previous = app.preferences;
-        let previous_theme = ctx.theme();
-        app.change_appearance(settings::Theme::Light, settings::Icon::Metal, &ctx);
-        assert_eq!(app.preferences, previous);
-        assert_eq!(ctx.theme(), previous_theme);
-        assert!(app.message.is_some());
-        assert_eq!(
-            std::fs::read_dir(directory.path())
-                .expect("directory preserved")
-                .count(),
-            0
-        );
-    }
-}
+mod tests;

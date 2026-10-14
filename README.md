@@ -154,12 +154,14 @@ screen access.
 src/
   capture.rs       Monitor adapter, in-memory capture, validated cropping
   geometry.rs      Viewport-to-pixel conversion and original-position sizing
+  pin.rs           Pin layout, coordinate conversion, preparation and dragging
   session.rs       Single-capture gate and stale-result rejection
   app.rs           Event-driven capture/window lifecycle
   platform.rs      Global shortcut and local font/icon adapters
   settings.rs      Shortcut validation, theme/icon settings, local preferences
   icon.rs          Icon selection, PNG loading, and SVG resource generation
-  ui/              Launcher, selection overlay, floating pin
+  app/tests.rs     Capture/window lifecycle regressions
+  ui/              Views, style profiles, copy artwork and view regressions
 assets/icons/      Line/metal SVG sources and Git LFS PNG resources
 tests/             Generated-image and state-transition tests
 packaging/         macOS bundle script and Linux desktop entry

@@ -13,7 +13,9 @@
 - 截图模式用蓝框标识鼠标所在屏幕，其他屏幕略微变暗；随鼠标切换高亮，不在后台轮询鼠标。
 - 贴图边框和阴影画在图片外侧；鼠标移入时显示复制和关闭图标，复制在左，关闭在右，不能遮挡图片。初次顶部截图和拖回顶部时均放在下方，向下移出足够空间后再放回上方。复制使用双层照片图标。
 - 成功框选后自动复制图片到系统剪贴板，复制按钮可再次复制；取消、无效或过期选区不能改动剪贴板。测试只检查复制命令，不写入真实系统剪贴板。
-- 窗口位置和尺寸只在初始化时设置一次，不因原生坐标或尺寸不匹配而重试。普通贴图通过窗口内偏移补偿小幅坐标差值，顶部接受系统放置位置；初始化期间仍须响应 Esc 和关闭，完成后不得干预用户拖动。
+- 窗口位置和尺寸只在初始化时设置一次，不因原生坐标或尺寸不匹配而重试。普通贴图通过窗口内偏移补偿小幅坐标差值，顶部接受系统初始放置位置；初始化期间仍须响应 Esc 和关闭。随后仅由用户拖动事件更新位置，静止时不得轮询鼠标或重复定位。
+- 拖动必须允许图片到达屏幕顶边，上方透明留白可以越过可用区；拖动锚点用原生坐标保存，正确处理 DPI 和缩放变化。无法读取全局鼠标坐标或指定位置的平台使用系统拖动。
+- 位置根据图片、窗口和显示器的实际边界计算，禁止硬编码屏幕坐标。尺寸、间距、颜色、时间阈值等使用有明确用途的配置或常量，避免散落数值；数学常量、格式规范、图标路径和测试样例无需机械抽象。
 - 拖动贴图时，根据原生窗口顶边与所在显示器可用区顶边的距离即时切换按钮上下位置：上方够放就放上方，否则放下方。不得将预留的上方透明空间算作可用距离。切换不能移动或缩放图片，也不能重设窗口位置和尺寸。
 - macOS 窗口按整数原生点取整，图片须在窗口内单独定位和绘制，不能随窗口尺寸取整而偏移或拉伸。
 - 使用预先准备的透明无边框选区层，不切换系统全屏、不隐藏主窗口或已有贴图。
@@ -37,8 +39,10 @@
 
 - `src/capture.rs`: monitor enumeration and in-memory screen capture.
 - `src/geometry.rs`: validated pixel selection and original-position pin placement.
+- `src/pin.rs`: pin layout metrics, coordinate conversion, one-time preparation, and drag anchoring.
 - `src/app.rs`: capture state machine, events, and window lifecycle.
-- `src/ui/`: launcher, selection overlay, and floating image views.
+- `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
+- `src/app/tests.rs`, `src/ui/pin/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `assets/icons/`, `src/icon.rs`: vector sources, LFS PNG assets, and icon selection.

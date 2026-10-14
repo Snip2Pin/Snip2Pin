@@ -1,3 +1,7 @@
+pub const WINDOW_SIZE: u32 = 64;
+pub const DOCK_SIZE: u32 = 256;
+pub const EXPORT_SIZE: u32 = 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variant {
     Line,
@@ -47,7 +51,10 @@ pub fn render_vector(variant: Variant, size: u32) -> Result<image::RgbaImage, St
         resvg::tiny_skia::Pixmap::new(size, size).ok_or_else(|| "Invalid icon size".to_owned())?;
     resvg::render(
         &tree,
-        resvg::tiny_skia::Transform::from_scale(size as f32 / 1024.0, size as f32 / 1024.0),
+        resvg::tiny_skia::Transform::from_scale(
+            size as f32 / tree.size().width(),
+            size as f32 / tree.size().height(),
+        ),
         &mut pixmap.as_mut(),
     );
     let rgba = pixmap

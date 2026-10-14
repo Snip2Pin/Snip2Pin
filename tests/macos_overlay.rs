@@ -105,6 +105,25 @@ fn main() {
             NSRect::new(target.origin, window_size),
             "native rounding must be accounted for before positioning the pin"
         );
+        let padding =
+            f64::from(snip2pin::pin::METRICS.padding + snip2pin::pin::METRICS.toolbar_height());
+        let image_top = visible.origin.y + visible.size.height;
+        let origin = NSPoint::new(target.origin.x, image_top + padding - window_size.height);
+        pin.setFrameOrigin(origin);
+        assert_eq!(
+            pin.frame().origin,
+            origin,
+            "user drag can move transparent margins beyond the native work area"
+        );
+        assert_eq!(
+            pin.frame().origin.y + pin.frame().size.height - padding,
+            image_top
+        );
+        assert_eq!(
+            pin.frame().size,
+            window_size,
+            "top-edge movement cannot shrink the image"
+        );
         assert!(!pin.isVisible());
         assert!(!application.isActive());
     }
