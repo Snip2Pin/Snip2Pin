@@ -58,10 +58,10 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     }
 }
 
-/// Use current desktop geometry, including user dragging, without changing the
-/// image or native window. Both rows are reserved in the transparent surface.
-pub fn toolbar_below(image: Rect, screen: Rect) -> bool {
-    image.min.y - PADDING - BUTTON_HEIGHT - IMAGE_GAP < screen.min.y
+/// The native top boundary excludes the reserved upper row. Counting that
+/// transparent row as available space would keep top-edge controls above.
+pub fn toolbar_below(window: Rect, screen: Rect) -> bool {
+    window.min.y - BUTTON_HEIGHT - IMAGE_GAP < screen.min.y
 }
 
 fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
@@ -271,6 +271,20 @@ mod tests {
                         "even tall captures must keep their original dimensions"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn toolbar_uses_native_top_boundary_instead_of_reserved_transparent_space() {
+        for top in [28.0, -172.0] {
+            let screen = Rect::from_min_size(egui::pos2(-680.0, top), egui::vec2(680.0, 420.0));
+            for (distance, below) in [(0.0, true), (31.0, true), (32.0, false), (80.0, false)] {
+                let window = Rect::from_min_size(
+                    egui::pos2(-600.0, top + distance),
+                    egui::vec2(160.0, 170.0),
+                );
+                assert_eq!(toolbar_below(window, screen), below);
             }
         }
     }

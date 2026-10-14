@@ -695,7 +695,7 @@ impl Snip2Pin {
                                 screen.min * ratio,
                                 screen.max * ratio,
                             ));
-                        frame.toolbar_below = ui::pin::toolbar_below(image, screen);
+                        frame.toolbar_below = ui::pin::toolbar_below(actual, screen);
                     }
                     ui::pin::show(ui, id, &texture, frame, &events);
                     if first_frame {
@@ -1295,7 +1295,7 @@ mod tests {
     }
 
     #[test]
-    fn dragging_switches_toolbar_rows_without_moving_or_resizing_the_image() {
+    fn native_top_boundary_switches_toolbar_for_initial_capture_and_dragging() {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut app = app();
@@ -1310,7 +1310,7 @@ mod tests {
             0,
             overlay::Action::Select(geometry::PixelRect {
                 x: 96,
-                y: 60,
+                y: 0,
                 width: 192,
                 height: 120,
             }),
@@ -1327,13 +1327,12 @@ mod tests {
             .as_ref()
             .expect("pin callback");
         for (index, (position, below)) in [
-            (initial.window.min, false),
-            (initial.window.min, false),
-            (egui::pos2(138.0, 68.0), true),
+            (egui::pos2(138.0, 100.0), true),
+            (egui::pos2(138.0, 100.0), true),
             (egui::pos2(138.0, 200.0), false),
-            (egui::pos2(138.0, 68.0), true),
+            (egui::pos2(138.0, 100.0), true),
             (egui::pos2(-640.0, -20.0), false),
-            (egui::pos2(-640.0, -132.0), true),
+            (egui::pos2(-640.0, -100.0), true),
         ]
         .into_iter()
         .enumerate()
