@@ -28,6 +28,7 @@ pub enum Event {
     Ready(u64, Result<Vec<Snapshot>, String>, Option<[f32; 2]>),
     Selection(u64, u32, overlay::Action),
     PinReady(u64, u64),
+    CopyPin(u64),
     ClosePin(u64),
 }
 
@@ -48,6 +49,7 @@ struct Layer {
 
 struct Pin {
     texture: TextureHandle,
+    pixels: Arc<ColorImage>,
     placement: Placement,
     display_scale: f32,
     session: u64,
@@ -296,11 +298,18 @@ impl Snip2Pin {
                 snapshot.display.position(),
                 snapshot.display.logical_size(),
             );
-            let texture = texture(ctx, &format!("pin-{}", self.next_pin), &pixels);
+            let pixels = Arc::new(color_image(&pixels));
+            let texture = ctx.load_texture(
+                format!("pin-{}", self.next_pin),
+                pixels.clone(),
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.copy_image((*pixels).clone());
             self.pins.insert(
                 self.next_pin,
                 Pin {
                     texture,
+                    pixels,
                     placement,
                     display_scale: snapshot.display.scale,
                     session: id,
@@ -312,6 +321,12 @@ impl Snip2Pin {
             ctx.request_repaint_of(ViewportId::ROOT);
         } else {
             self.restore(ctx);
+        }
+    }
+
+    fn copy_pin(&self, id: u64, ctx: &egui::Context) {
+        if let Some(pin) = self.pins.get(&id) {
+            ctx.copy_image((*pin.pixels).clone());
         }
     }
 
@@ -643,6 +658,7 @@ impl eframe::App for Snip2Pin {
                         self.restore(ctx);
                     }
                 }
+                Event::CopyPin(id) => self.copy_pin(id, ctx),
                 Event::ClosePin(id) => {
                     self.pins.remove(&id);
                 }
@@ -706,13 +722,13 @@ fn layer_id(display_id: u32) -> ViewportId {
 }
 
 fn texture(ctx: &egui::Context, name: &str, pixels: &image::RgbaImage) -> TextureHandle {
-    ctx.load_texture(
-        name,
-        ColorImage::from_rgba_unmultiplied(
-            [pixels.width() as usize, pixels.height() as usize],
-            pixels.as_raw(),
-        ),
-        egui::TextureOptions::LINEAR,
+    ctx.load_texture(name, color_image(pixels), egui::TextureOptions::LINEAR)
+}
+
+fn color_image(pixels: &image::RgbaImage) -> ColorImage {
+    ColorImage::from_rgba_unmultiplied(
+        [pixels.width() as usize, pixels.height() as usize],
+        pixels.as_raw(),
     )
 }
 
@@ -848,6 +864,86 @@ mod tests {
         assert!(app.pins.is_empty());
     }
 
+    #[test]
+    fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let snapshot = capture::demo();
+        let rect = geometry::PixelRect {
+            x: 3,
+            y: 5,
+            width: 7,
+            height: 9,
+        };
+        let expected = color_image(&capture::crop(&snapshot.pixels, rect).expect("valid crop"));
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.selection_action(id + 1, 0, overlay::Action::Select(rect), ui.ctx());
+            assert!(
+                app.pins.is_empty(),
+                "stale selections cannot copy or create pins"
+            );
+            app.selection_action(id, 0, overlay::Action::Select(rect), ui.ctx());
+            app.selection_action(id, 0, overlay::Action::Select(rect), ui.ctx());
+        });
+        output.textures_delta.clear();
+        assert_eq!(output.platform_output.commands.len(), 1);
+        assert!(
+            matches!(&output.platform_output.commands[0], egui::OutputCommand::CopyImage(image) if image == &expected)
+        );
+        assert_eq!(app.pins[&1].pixels.as_ref(), &expected);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
+        output.textures_delta.clear();
+        assert_eq!(output.platform_output.commands.len(), 1);
+        assert!(
+            matches!(&output.platform_output.commands[0], egui::OutputCommand::CopyImage(image) if image == &expected)
+        );
+        app.pins.remove(&1);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
+        output.textures_delta.clear();
+        assert!(
+            output.platform_output.commands.is_empty(),
+            "closed pins cannot overwrite the clipboard"
+        );
+    }
+
+    #[test]
+    fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
+        for rect in [
+            None,
+            Some(geometry::PixelRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 1,
+            }),
+            Some(geometry::PixelRect {
+                x: u32::MAX,
+                y: 1,
+                width: 1,
+                height: 1,
+            }),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            let id = app.gate.begin().expect("capture starts");
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
+                app.selection_action(
+                    id,
+                    0,
+                    rect.map_or(overlay::Action::Cancel, overlay::Action::Select),
+                    ui.ctx(),
+                );
+            });
+            output.textures_delta.clear();
+            assert!(output.platform_output.commands.is_empty());
+            assert!(app.pins.is_empty());
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
@@ -947,8 +1043,8 @@ mod tests {
             .as_ref()
             .expect("pin callback");
         for _ in 0..2 {
-            let rect =
-                egui::Rect::from_min_size(egui::pos2(142.0, 135.0), egui::vec2(156.0, 104.0));
+            let (window, _) = ui::pin::frame_geometry(app.pins[&1].placement, 1.0, 1.0);
+            let rect = window.translate(egui::vec2(4.0, 3.0));
             let mut input = egui::RawInput {
                 viewport_id: viewport,
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, rect.size())),
@@ -1135,8 +1231,8 @@ mod tests {
             .viewport_output
             .get(&ViewportId::from_hash_of(("pin", 1_u64)))
             .expect("native pin");
-        assert_eq!(pin.builder.position, Some(egui::pos2(138.0, 132.0)));
-        assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 104.0)));
+        assert_eq!(pin.builder.position, Some(egui::pos2(138.0, 100.0)));
+        assert_eq!(pin.builder.inner_size, Some(egui::vec2(156.0, 136.0)));
         assert!(
             output.viewport_output[&ViewportId::ROOT]
                 .commands

@@ -14,9 +14,9 @@ keep it above other windows, drag to move, and double-click to close.
 
 ### 中文
 
-- 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶。
+- 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，双击关闭；鼠标移入时显示 × 按钮。
+- 拖动贴图可移动，双击关闭；鼠标移入时，图片上方显示「复制」和 × 按钮。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
@@ -29,9 +29,10 @@ macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制�
 ### English
 
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
-  region on any monitor; release to pin it in place.
+  region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
-- Drag a pin to move it; double-click to close. The **×** button appears on hover.
+- Drag a pin to move it; double-click to close. Hover to show **“复制” (Copy)**
+  and **×** above the image.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **“修改快捷键” (Change shortcut)** to change it.
@@ -170,7 +171,8 @@ mouse-pass-through selection windows are prepared for all monitors. A capture
 fills these windows without moving or resizing the launcher, entering native
 fullscreen, or hiding existing pins. After selection, the overlay remains until
 the new pin has painted its first frame. Full-display buffers are then released.
-Pins are independent borderless windows. Removing a pin releases its texture.
+Pins are independent borderless windows. Removing a pin releases its texture and
+in-memory copy buffer; the system manages the image already on the clipboard.
 Platform permission errors appear in the launcher.
 
 CI runs LFS validation, format, Clippy, tests, and development builds on Windows,
