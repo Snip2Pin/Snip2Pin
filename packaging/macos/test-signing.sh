@@ -30,7 +30,8 @@ SECOND_HASH="$(codesign -d --verbose=4 "$WORK_DIR/second.app" 2>&1 | awk '/^CDHa
 codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app"
 bash packaging/macos/signing.sh --verify-update "$WORK_DIR/second.app" "$WORK_DIR/first.app"
 # Identifier migration must be explicit and retain the installed certificate.
-plutil -replace CFBundleIdentifier -string app.snip2pin.test "$WORK_DIR/second.app/Contents/Info.plist"
+TEST_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' packaging/macos/Info.plist).test"
+plutil -replace CFBundleIdentifier -string "$TEST_ID" "$WORK_DIR/second.app/Contents/Info.plist"
 bash packaging/macos/signing.sh --sign "$WORK_DIR/second.app"
 if bash packaging/macos/signing.sh --verify-update "$WORK_DIR/second.app" "$WORK_DIR/first.app" 2>/dev/null; then
     printf 'FAIL: identifier changed without explicit migration.\n' >&2
@@ -39,7 +40,7 @@ fi
 bash packaging/macos/signing.sh --verify-update \
     "$WORK_DIR/second.app" "$WORK_DIR/first.app" --migrate-identity
 # An unrelated ad-hoc signature with the same bundle ID must not impersonate an update.
-codesign --force --sign - --identifier app.snip2pin.test "$WORK_DIR/second.app"
+codesign --force --sign - --identifier "$TEST_ID" "$WORK_DIR/second.app"
 [[ "$(requirement "$WORK_DIR/second.app")" == cdhash\ * ]]
 if codesign --verify --strict -R "=$FIRST_REQUIREMENT" "$WORK_DIR/second.app" 2>/dev/null; then
     printf 'FAIL: an unsigned identity impersonated a certificate-signed update.\n' >&2

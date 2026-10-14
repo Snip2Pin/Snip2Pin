@@ -4,7 +4,8 @@
 
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
-- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `app.snip2pin`；产品身份与仓库所有者无关。
+- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
+- 项目网站后续使用 GitHub Pages；建立并验证页面之前，不添加尚不存在的主页链接。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
@@ -124,7 +125,7 @@ Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
 Do not commit screenshots, credentials, toolchains, caches, or build output.
-Keep macOS bundle ID `app.snip2pin` stable. Local certificate
+Keep macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
 Settings use the platform configuration root plus `Snip2Pin`; local macOS signing
 material uses `~/Library/Application Support/Snip2Pin/signing`, outside the repo.

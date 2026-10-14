@@ -16,7 +16,7 @@ fn app_identity_and_config_directory_are_independent_of_repository_owner() {
         "<key>CFBundleIdentifier</key><string>{}</string>",
         snip2pin::APP_ID
     )));
-    let desktop = include_str!("../packaging/linux/app.snip2pin.desktop");
+    let desktop = include_str!("../packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop");
     assert!(
         desktop
             .lines()

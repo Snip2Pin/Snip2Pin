@@ -132,7 +132,7 @@ yourself to use the update. `SNIP2PIN_SIGN_IDENTITY` and optional
 `SNIP2PIN_SIGN_KEYCHAIN` can select an existing signing identity instead.
 Configuration directories use only `Snip2Pin`: `~/Library/Application Support/Snip2Pin`
 on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
-(`~/.config/Snip2Pin` by default) on Linux. The app identifier is `app.snip2pin`.
+(`~/.config/Snip2Pin` by default) on Linux. The app identifier is `io.github.Snip2Pin.Snip2Pin`.
 Explicit identifier migrations use `--install --migrate-identity`, preserving the
 same signing certificate; macOS may require screen permission again after that
 one-time identity change. Subsequent updates use ordinary `--install`.
