@@ -5,6 +5,140 @@ use snip2pin::{
 };
 
 #[test]
+fn screen_sized_image_keeps_controls_reachable_without_cropping_or_scaling() {
+    let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
+    let mut frame = pin::frame_geometry(
+        Placement {
+            position: area.min.into(),
+            size: area.size().into(),
+        },
+        area,
+        1.0,
+        1.0,
+    );
+    frame = frame.moved_to(area.min, &[area], 1.0);
+    frame.fit_host_top();
+    assert_eq!(frame.image.size(), area.size());
+    assert!(Rect::from_min_size(egui::Pos2::ZERO, frame.window.size()).contains_rect(frame.image));
+    for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
+        assert!(area.contains_rect(button.translate(frame.window.min.to_vec2())));
+        assert!(!button.intersects(frame.image));
+    }
+}
+
+#[test]
+fn menu_bar_switches_controls_before_the_image_reaches_the_screen_top() {
+    for origin in [egui::pos2(0.0, 30.0), egui::pos2(-680.0, -170.0)] {
+        for (ratio, grid) in [(1.0, 1.0), (0.8, 1.25)] {
+            let area = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
+            let frame = pin::frame_geometry(
+                Placement {
+                    position: (origin + Vec2::splat(100.0)).into(),
+                    size: [193.0, 121.0],
+                },
+                area,
+                ratio,
+                grid,
+            );
+            let top = origin.y * ratio;
+            for (y, side) in [
+                (
+                    top + pin::METRICS.toolbar_height() + 1.0 / grid,
+                    ToolbarSide::Top,
+                ),
+                (
+                    top + pin::METRICS.toolbar_height() - 1.0 / grid,
+                    ToolbarSide::Bottom,
+                ),
+                (top - frame.image.height() / 2.0, ToolbarSide::Bottom),
+                (
+                    top - frame.image.height() - pin::METRICS.image_gap,
+                    ToolbarSide::Bottom,
+                ),
+                (top + 100.0 * ratio, ToolbarSide::Top),
+            ] {
+                let image_origin = egui::pos2(frame.image.min.x + frame.window.min.x, y);
+                let mut moved = frame.moved_to(image_origin, &[area], ratio);
+                moved.fit_host_top();
+                assert_eq!(moved.toolbar_side, side);
+                assert!(
+                    moved.window.min.y >= top,
+                    "native host stays below the menu bar"
+                );
+                assert!((moved.image.size() - frame.image.size()).length() < 0.001);
+                assert!(
+                    (moved.image.min + moved.window.min.to_vec2())
+                        .distance(egui::pos2(image_origin.x, image_origin.y.max(top)))
+                        < 0.001
+                );
+                for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
+                    assert!(
+                        moved
+                            .controls_area
+                            .expand(0.001)
+                            .contains_rect(button.translate(moved.window.min.to_vec2()))
+                    );
+                    assert!(
+                        Rect::from_min_size(egui::Pos2::ZERO, moved.window.size())
+                            .expand(0.001)
+                            .contains_rect(button)
+                    );
+                    assert!(!button.intersects(moved.image));
+                }
+                assert!(
+                    Rect::from_min_size(egui::Pos2::ZERO, moved.window.size())
+                        .expand(0.001)
+                        .contains_rect(moved.image)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn released_drag_preserves_the_complete_image_touching_the_menu_bar() {
+    let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
+    let mut frame = pin::frame_geometry(
+        Placement {
+            position: [100.0, 100.0],
+            size: [193.0, 121.0],
+        },
+        area,
+        1.0,
+        1.0,
+    );
+    frame.fit_host_top();
+    let mut preparation = Preparation::default();
+    let _ = preparation.update(frame, Some(frame.window), Some(frame.window), 1.0);
+    let _ = preparation.update(frame, Some(frame.window), Some(frame.window), 1.0);
+    let units = Coordinates::new(1.0, 1.0, 1.0);
+    let desired = egui::pos2(100.0, -30.0);
+    preparation.drag.begin(
+        frame.image.center() - frame.image.min,
+        frame.image.min + frame.window.min.to_vec2(),
+        &units,
+    );
+    let _ = preparation
+        .drag
+        .move_to((desired + frame.image.size() / 2.0).into(), &units);
+    let mut host = frame.moved_to(desired, &[area], 1.0);
+    host.fit_host_top();
+    let bounded = host.image.min + host.window.min.to_vec2();
+    preparation.drag.set_position(bounded, &units);
+    preparation.drag.end();
+    let Prepared::Paint { frame: painted, .. } =
+        preparation.update(frame, Some(host.window), Some(host.window), 1.0)
+    else {
+        panic!("drag cannot reinitialize the window");
+    };
+    assert_eq!(painted.image.size(), frame.image.size());
+    assert_eq!(painted.image.min + host.window.min.to_vec2(), bounded);
+    assert_eq!(bounded.y, area.min.y);
+    assert!(Rect::from_min_size(egui::Pos2::ZERO, host.window.size()).contains_rect(painted.image));
+    assert!(!preparation.drag.is_active());
+}
+
+#[test]
 fn controls_remain_visible_at_every_edge_and_corner_without_resizing_or_overlap() {
     for origin in [egui::pos2(0.0, 28.0), egui::pos2(-2560.0, -172.0)] {
         for ratio in [1.0, 0.8, 0.625] {
@@ -130,7 +264,7 @@ fn tall_pins_keep_a_reachable_row_before_and_after_moving_off_the_top() {
         1.0,
         1.0,
     );
-    frame.place_controls(frame.window, &[display], usable, 1.0);
+    frame.place_controls(frame.window, &[usable], usable, 1.0);
     assert!(
         frame.toolbar_side != ToolbarSide::Bottom,
         "a tall initial pin needs its visible upper row"
@@ -138,7 +272,7 @@ fn tall_pins_keep_a_reachable_row_before_and_after_moving_off_the_top() {
     let position = frame.window.min - egui::vec2(0.0, display.height() / 2.0);
     frame.place_controls(
         Rect::from_min_size(position, frame.window.size()),
-        &[display],
+        &[usable],
         usable,
         1.0,
     );
@@ -147,7 +281,7 @@ fn tall_pins_keep_a_reachable_row_before_and_after_moving_off_the_top() {
         "the lower row becomes reachable when the image leaves the top"
     );
     for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
-        assert!(display.contains_rect(button.translate(position.to_vec2())));
+        assert!(usable.contains_rect(button.translate(position.to_vec2())));
     }
 }
 
@@ -268,7 +402,11 @@ fn dragging_can_put_the_image_at_the_top_while_margins_leave_the_work_area() {
             let press = layout.image.center();
             let mut drag = Drag::default();
             let coordinates = Coordinates::new(1.0, 1.0, 1.0);
-            drag.begin(press, layout.window, outer, &coordinates);
+            drag.begin(
+                press.to_vec2() + (layout.window.min - outer.min),
+                outer.min,
+                &coordinates,
+            );
             let target_image = origin * ratio;
             let cursor = target_image + press.to_vec2() - layout.image.min.to_vec2();
             let moved = drag
@@ -320,7 +458,7 @@ fn drag_anchor_survives_a_change_in_zoom_or_native_dpi() {
     let outer = inner.translate(-egui::vec2(4.0, 7.0));
     let press = egui::pos2(80.0, 100.0);
     let mut drag = Drag::default();
-    drag.begin(press, inner, outer, &from);
+    drag.begin(press.to_vec2() + (inner.min - outer.min), outer.min, &from);
     let native_cursor = egui::pos2(-200.0, -100.0);
     let expected_native_origin = native_cursor - (press.to_vec2() + (inner.min - outer.min));
     assert_eq!(

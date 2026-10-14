@@ -18,6 +18,19 @@ pub mod macos_icon;
 #[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
+/// Respect AppKit's top boundary using image-aware margins: the complete image
+/// can touch the menu bar, while controls switch below it before becoming hidden.
+pub fn pin_host(frame: snip2pin::pin::Frame) -> snip2pin::pin::Frame {
+    #[cfg(target_os = "macos")]
+    {
+        let mut frame = frame;
+        frame.fit_host_top();
+        frame
+    }
+    #[cfg(not(target_os = "macos"))]
+    frame
+}
+
 /// Read usable display bounds on the UI thread; never show or activate windows.
 pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
     let bounds =

@@ -93,12 +93,16 @@ pub fn show(
     };
     let coordinates = Coordinates::new(1.0, ui.ctx().zoom_factor(), ui.ctx().pixels_per_point());
     if response.drag_started() {
-        let native = ui.input(|input| input.viewport().inner_rect.zip(input.viewport().outer_rect));
-        if let Some((inner, outer)) = native
+        let native = ui.input(|input| input.viewport().inner_rect);
+        if let Some(inner) = native
             && let Some(press) = ui.input(|input| input.pointer.press_origin())
             && pointer.is_some()
         {
-            drag.begin(press, inner, outer, &coordinates);
+            drag.begin(
+                press - image.min,
+                image.min + inner.min.to_vec2(),
+                &coordinates,
+            );
         } else {
             ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
         }
@@ -114,7 +118,19 @@ pub fn show(
         let inset = inner
             .zip(outer)
             .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
-        let position = frame.drag_position(position, inset, monitors, coordinate_ratio);
+        let proposed = position - frame.image.min.to_vec2() - inset;
+        let origin = frame.drag_position(proposed, inset, monitors, coordinate_ratio);
+        let image_origin = frame.image.min + (origin + inset).to_vec2();
+        let moved =
+            crate::platform::pin_host(frame.moved_to(image_origin, monitors, coordinate_ratio));
+        // The adapter may bound the image at a system edge. Keep the final image
+        // position so releasing the drag cannot restore obsolete upper margins.
+        drag.set_position(moved.image.min + moved.window.min.to_vec2(), &coordinates);
+        if inner.is_none_or(|inner| inner.size() != moved.window.size()) {
+            ui.ctx()
+                .send_viewport_cmd(ViewportCommand::InnerSize(moved.window.size()));
+        }
+        let position = moved.window.min - inset;
         if outer.is_none_or(|outer| outer.min != position) {
             ui.ctx()
                 .send_viewport_cmd(ViewportCommand::OuterPosition(position));

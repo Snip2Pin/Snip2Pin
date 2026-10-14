@@ -506,7 +506,7 @@ fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
         &ctx,
     );
     let pin = &app.pins[&1];
-    let initial = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0);
+    let initial = platform::pin_host(ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0));
     let texture = pin.texture.id();
     let viewport = ViewportId::from_hash_of(("pin", 1_u64));
     let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
@@ -535,7 +535,18 @@ fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
     .into_iter()
     .enumerate()
     {
-        let actual = egui::Rect::from_min_size(position, initial.window.size());
+        let expected = platform::pin_host(initial.moved_to(
+            position + initial.image.min.to_vec2(),
+            &pin.screen_areas,
+            1.0,
+        ));
+        let actual = expected.window;
+        // This callback paints after the drag's commands have been applied by
+        // the native backend. Pointer command generation is covered in ui/pin.
+        pin.prepared.lock().expect("pin state").drag.set_position(
+            expected.image.min + actual.min.to_vec2(),
+            &Coordinates::new(1.0, 1.0, 1.0),
+        );
         let mut input = egui::RawInput {
             viewport_id: viewport,
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
@@ -573,8 +584,8 @@ fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
             })
             .expect("image stays visible");
         assert_eq!(
-            image, initial.image,
-            "toolbar switching cannot change image placement or dimensions"
+            image, expected.image,
+            "painted pixels follow the image position after native margins change"
         );
         let close = output
             .shapes
@@ -591,7 +602,11 @@ fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
             close.0.contains_rect(close.1),
             "both toolbar rows must fit the native surface"
         );
-        assert_eq!(close.1.min.y > image.max.y, below);
+        assert_eq!(
+            close.1.min.y > image.max.y,
+            below,
+            "step {index}, native={actual:?}, image={image:?}"
+        );
         assert!(!close.1.intersects(image));
     }
 }
@@ -707,8 +722,13 @@ fn aligned_pin_keeps_image_origin_across_dpi_zoom_and_native_frame_insets() {
                 } else {
                     scale * zoom
                 };
-                let window =
-                    ui::pin::frame_geometry(pin.placement, pin.screen, zoom.recip(), grid).window;
+                let window = platform::pin_host(ui::pin::frame_geometry(
+                    pin.placement,
+                    pin.screen,
+                    zoom.recip(),
+                    grid,
+                ))
+                .window;
                 let inset = egui::vec2(4.0, 7.0) / (scale * zoom);
                 let mut output =
                     ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));

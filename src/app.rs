@@ -612,8 +612,12 @@ impl Snip2Pin {
             let screen = pin.screen;
             let screen_areas = pin.screen_areas.clone();
             let initial_units = Coordinates::new(display_scale, 1.0, display_scale);
-            let initial =
-                ui::pin::frame_geometry(placement, screen, initial_units.ratio, initial_units.grid);
+            let initial = platform::pin_host(ui::pin::frame_geometry(
+                placement,
+                screen,
+                initial_units.ratio,
+                initial_units.grid,
+            ));
             ctx.show_viewport_deferred(
                 ViewportId::from_hash_of(("pin", id)),
                 self.window_icon(egui::ViewportBuilder::default())
@@ -646,16 +650,20 @@ impl Snip2Pin {
                     };
                     let (inner, outer) = ui
                         .input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
-                    let frame = ui::pin::frame_geometry(placement, screen, ratio, coordinates.grid);
+                    let frame = platform::pin_host(ui::pin::frame_geometry(
+                        placement,
+                        screen,
+                        ratio,
+                        coordinates.grid,
+                    ));
                     let (mut frame, first_frame) = match prepared.update(frame, inner, outer, ratio)
                     {
                         Prepared::Initialize {
                             window,
                             outer_position,
                         } => {
-                            // Prepare native pin constraints before the first
-                            // move, so system clamping cannot consume the space
-                            // reserved for controls. Root logic reports failures.
+                            // Set the initial native host once; image geometry
+                            // remains independent of its platform boundaries.
                             let _ = platform::prepare_floating_windows();
                             ui.ctx()
                                 .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));

@@ -80,7 +80,6 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     let size = Vec2::from(placement.size) * ratio;
     let screen_top = (screen.min.y * ratio * grid).ceil() / grid;
     let vertical_margin = METRICS.padding + METRICS.toolbar_height();
-    let horizontal_margin = METRICS.padding + METRICS.toolbar_width() + METRICS.image_gap;
     let top_edge = position.y - vertical_margin < screen_top;
     let mut toolbar_side = ToolbarSide::Top;
     if top_edge {
@@ -91,6 +90,15 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
             position.y = position.y.max(screen_top + vertical_margin);
         }
     }
+    let mut frame = image_frame(position, size, scale_rect(screen, ratio), grid);
+    frame.toolbar_side = toolbar_side;
+    frame.top_edge = top_edge;
+    frame
+}
+
+fn image_frame(position: Pos2, size: Vec2, area: Rect, grid: f32) -> Frame {
+    let vertical_margin = METRICS.padding + METRICS.toolbar_height();
+    let horizontal_margin = METRICS.padding + METRICS.toolbar_width() + METRICS.image_gap;
     let origin = egui::pos2(
         ((position.x - horizontal_margin) * grid).floor() / grid,
         ((position.y - vertical_margin) * grid).floor() / grid,
@@ -104,11 +112,11 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     Frame {
         window: Rect::from_min_size(origin, window_size),
         image,
-        controls_area: scale_rect(screen, ratio),
+        controls_area: area,
         grid,
-        toolbar_side,
+        toolbar_side: ToolbarSide::Top,
         toolbar_offset: Vec2::ZERO,
-        top_edge,
+        top_edge: false,
     }
 }
 
@@ -142,6 +150,45 @@ fn nearest_area(point: Pos2, screens: &[Rect], fallback: Rect, ratio: f32) -> Re
 }
 
 impl Frame {
+    /// Rebuild margins and controls around the desired image position, without
+    /// reapplying initial-placement adjustments or changing the image dimensions.
+    pub fn moved_to(&self, image_origin: Pos2, screens: &[Rect], ratio: f32) -> Self {
+        let area = nearest_area(
+            image_origin + self.image.size() / 2.0,
+            screens,
+            self.controls_area,
+            ratio,
+        );
+        let mut frame = image_frame(image_origin, self.image.size(), area, self.grid);
+        frame.place_controls(frame.window, &[], area, 1.0);
+        frame
+    }
+
+    /// Keep the whole image below AppKit's work-area boundary, and reduce only
+    /// transparent upper margins. The picture can touch the menu bar without
+    /// being cropped, scaled, or leaving its native window.
+    pub fn fit_host_top(&mut self) {
+        let image = self.image.translate(self.window.min.to_vec2());
+        let mut position = egui::pos2(image.min.x, image.min.y.max(self.controls_area.min.y));
+        let top_edge = self.top_edge;
+        *self = self.moved_to(position, &[], 1.0);
+        let (copy, close) = self.toolbar_rects();
+        let row = copy.union(close).translate(self.window.min.to_vec2());
+        // A screen-sized image can leave no room below or beside it. Keep a
+        // reachable upper row in that case, preserving every image pixel.
+        if !self.controls_area.contains_rect(row) {
+            position.y = position
+                .y
+                .max(self.controls_area.min.y + METRICS.toolbar_height());
+            *self = self.moved_to(position, &[], 1.0);
+        }
+        self.top_edge = top_edge;
+        let top = self.window.min.y.max(self.controls_area.min.y);
+        let shift = egui::vec2(0.0, self.window.min.y - top);
+        self.window.min.y = top;
+        self.image = self.image.translate(shift);
+    }
+
     /// Stop only when the row on the opposite side would leave the work area.
     /// Choose a monitor from the proposed position, so gaps and negative origins
     /// do not trap a pin on its previous display.
@@ -246,32 +293,41 @@ impl Preparation {
             }
             offset / ratio
         });
-        frame.image = frame.image.translate(offset * ratio);
+        frame.image = if let Some(position) = self.drag.position(frame.grid) {
+            Rect::from_min_size(
+                (position - inner.unwrap_or(frame.window).min).to_pos2(),
+                frame.image.size(),
+            )
+        } else {
+            frame.image.translate(offset * ratio)
+        };
         Prepared::Paint { frame, first }
     }
 }
 
-/// Absolute pointer anchoring avoids native drags constraining transparent
-/// margins to the work area. Only pointer movement generates a new position.
+/// Anchor dragging to the image, so switching transparent margins cannot change
+/// the grabbed pixel. Retain the image position after the user releases it.
 #[derive(Default)]
 pub struct Drag {
     anchor_native: Option<Vec2>,
-    last_position_native: Option<Pos2>,
+    last_requested_native: Option<Pos2>,
+    image_position_native: Option<Pos2>,
 }
 
 impl Drag {
-    pub fn begin(&mut self, press: Pos2, inner: Rect, outer: Rect, coordinates: &Coordinates) {
-        self.anchor_native =
-            Some((press.to_vec2() + (inner.min - outer.min)) * coordinates.cursor_scale);
-        self.last_position_native = Some(outer.min * coordinates.cursor_scale);
+    pub fn begin(&mut self, offset: Vec2, origin: Pos2, coordinates: &Coordinates) {
+        self.anchor_native = Some(offset * coordinates.cursor_scale);
+        self.last_requested_native = Some(origin * coordinates.cursor_scale);
+        self.image_position_native = self.last_requested_native;
     }
 
     pub fn move_to(&mut self, cursor: [f32; 2], coordinates: &Coordinates) -> Option<Pos2> {
         let position = Pos2::from(cursor) - self.anchor_native?;
-        if self.last_position_native == Some(position) {
+        if self.last_requested_native == Some(position) {
             return None;
         }
-        self.last_position_native = Some(position);
+        self.last_requested_native = Some(position);
+        self.image_position_native = Some(position);
         Some(coordinates.cursor(position.into()))
     }
 
@@ -279,7 +335,15 @@ impl Drag {
         self.anchor_native.is_some()
     }
 
+    pub fn position(&self, grid: f32) -> Option<Pos2> {
+        self.image_position_native.map(|position| position / grid)
+    }
+
+    pub fn set_position(&mut self, position: Pos2, coordinates: &Coordinates) {
+        self.image_position_native = Some(position * coordinates.cursor_scale);
+    }
+
     pub fn end(&mut self) {
-        *self = Self::default();
+        self.anchor_native = None;
     }
 }

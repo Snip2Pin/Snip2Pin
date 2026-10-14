@@ -3,7 +3,7 @@ use egui::Vec2;
 use std::sync::mpsc;
 
 #[test]
-fn upward_drag_allows_the_image_offscreen_but_keeps_lower_buttons_reachable() {
+fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
     let ctx = egui::Context::default();
     let texture = ctx.load_texture(
         "pin",
@@ -72,20 +72,27 @@ fn upward_drag_allows_the_image_offscreen_but_keeps_lower_buttons_reachable() {
         }
     }
     let position = requested.expect("drag requests a position");
-    let inner = Rect::from_min_size(position, frame.window.size());
-    let image = frame.image.translate(position.to_vec2());
-    assert!(
-        image.min.y < 0.0,
-        "the picture may pass the physical screen top"
-    );
+    let image_origin = drag.position(frame.grid).expect("logical image position");
+    let image = Rect::from_min_size(image_origin, frame.image.size());
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            image.min.y, screen.min.y,
+            "the picture touches the menu-bar boundary"
+        );
+    } else {
+        assert!(
+            image.min.y < 0.0,
+            "other backends can move past the physical top"
+        );
+    }
     assert_eq!(image.size(), frame.image.size());
-    let mut moved = frame;
-    moved.place_controls(inner, &[screen], screen, 1.0);
+    let moved = crate::platform::pin_host(frame.moved_to(image_origin, &[screen], 1.0));
+    assert_eq!(moved.window.min, position);
     assert!((moved.toolbar_side == ToolbarSide::Bottom));
     let (copy, close) = moved.toolbar_rects();
     for button in [copy, close] {
         assert!(
-            screen.contains_rect(button.translate(position.to_vec2())),
+            screen.contains_rect(button.translate(moved.window.min.to_vec2())),
             "lower controls must remain visible even when the image leaves the screen"
         );
     }
@@ -170,10 +177,11 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
         });
         output.textures_delta.clear();
         let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
-        assert!(!commands.iter().any(|command| matches!(
-            command,
-            ViewportCommand::StartDrag | ViewportCommand::InnerSize(_)
-        )));
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::StartDrag))
+        );
         let positions: Vec<_> = commands
             .iter()
             .filter_map(|command| match command {
@@ -182,9 +190,20 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
             })
             .collect();
         if index == 2 {
-            assert_eq!(positions, [target]);
+            let moved = crate::platform::pin_host(frame.moved_to(
+                target + frame.image.min.to_vec2(),
+                &[screen],
+                1.0,
+            ));
+            assert_eq!(positions, [moved.window.min]);
+            assert_eq!(moved.image.size(), frame.image.size());
         } else {
             assert!(positions.is_empty());
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| matches!(command, ViewportCommand::InnerSize(_)))
+            );
         }
         if index == 4 {
             assert_eq!(cursor_reads, 0, "no idle cursor polling");

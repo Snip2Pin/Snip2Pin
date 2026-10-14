@@ -11,7 +11,7 @@ fn main() {
         event::WindowEvent,
         event_loop::{ActiveEventLoop, EventLoop},
         platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS},
-        window::{Theme, Window, WindowId},
+        window::{Theme, Window, WindowId, WindowLevel},
     };
 
     struct Lifecycle;
@@ -22,6 +22,9 @@ fn main() {
                     Window::default_attributes()
                         .with_title("Snip2Pin · 贴图")
                         .with_decorations(false)
+                        .with_resizable(false)
+                        .with_transparent(true)
+                        .with_window_level(WindowLevel::AlwaysOnTop)
                         .with_inner_size(LogicalSize::new(300.0, 200.0))
                         .with_visible(false),
                 )
@@ -46,6 +49,66 @@ fn main() {
                     .expect("primary screen")
                     .frame();
                 let desktop_top = primary.origin.y + primary.size.height;
+                let visible = screen.visibleFrame();
+                let usable = eframe::egui::Rect::from_min_size(
+                    eframe::egui::pos2(
+                        visible.origin.x as f32,
+                        (desktop_top - visible.origin.y - visible.size.height) as f32,
+                    ),
+                    eframe::egui::vec2(visible.size.width as f32, visible.size.height as f32),
+                );
+                let frame = snip2pin::pin::frame_geometry(
+                    snip2pin::geometry::Placement {
+                        position: [target.origin.x as f32, usable.min.y + 100.0],
+                        size: [target.size.width as f32, target.size.height as f32],
+                    },
+                    usable,
+                    1.0,
+                    1.0,
+                );
+                let mut moved = frame.moved_to(
+                    eframe::egui::pos2(
+                        target.origin.x as f32,
+                        usable.min.y - frame.image.height() / 2.0,
+                    ),
+                    &[usable],
+                    1.0,
+                );
+                moved.fit_host_top();
+                target = objc2_foundation::NSRect::new(
+                    objc2_foundation::NSPoint::new(
+                        f64::from(moved.window.min.x),
+                        desktop_top - f64::from(moved.window.max.y),
+                    ),
+                    objc2_foundation::NSSize::new(
+                        f64::from(moved.window.width()),
+                        f64::from(moved.window.height()),
+                    ),
+                );
+                assert_eq!(
+                    native.constrainFrameRect_toScreen(target, Some(&screen)),
+                    target,
+                    "native host must not be moved by the menu-bar constraint"
+                );
+                assert_eq!(
+                    moved.image.size(),
+                    frame.image.size(),
+                    "original image pixels are not scaled"
+                );
+                assert_eq!(moved.image.min.y, 0.0, "picture touches the menu bar");
+                assert!(
+                    eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        moved.window.size()
+                    )
+                    .contains_rect(moved.image),
+                    "complete image stays inside the native host"
+                );
+                for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
+                    assert!(usable.contains_rect(button.translate(moved.window.min.to_vec2())));
+                }
+                let _ = window
+                    .request_inner_size(LogicalSize::new(target.size.width, target.size.height));
                 window.set_outer_position(LogicalPosition::new(
                     target.origin.x,
                     desktop_top - target.origin.y - target.size.height,
@@ -53,7 +116,7 @@ fn main() {
                 assert_eq!(
                     native.frame().origin,
                     target.origin,
-                    "upper half can leave screen"
+                    "image-aware native host is accepted without a position correction"
                 );
                 window.set_theme(Some(Theme::Dark));
                 window.set_theme(Some(Theme::Light));
