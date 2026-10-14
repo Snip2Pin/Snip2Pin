@@ -151,6 +151,15 @@ pub fn prepare_floating_windows() {
                 if window.collectionBehavior() != behavior {
                     window.setCollectionBehavior(behavior);
                 }
+                if title == "Snip2Pin · 贴图" {
+                    // Floating-level windows are constrained below the menu
+                    // bar. Status-level pins may leave the top edge; selection
+                    // layers remain above them and no Space is created.
+                    let level = objc2_core_graphics::kCGStatusWindowLevel as isize;
+                    if window.level() != level {
+                        window.setLevel(level);
+                    }
+                }
                 if title == "Snip2Pin · 框选" {
                     // The demo is a regular small test window; it need not
                     // cover system UI or block other apps during development.

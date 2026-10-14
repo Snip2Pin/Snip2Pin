@@ -60,6 +60,7 @@ impl Coordinates {
 pub struct Frame {
     pub window: Rect,
     pub image: Rect,
+    pub controls_area: Rect,
     pub toolbar_below: bool,
     pub top_edge: bool,
 }
@@ -91,6 +92,7 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     Frame {
         window: Rect::from_min_size(origin, window_size),
         image,
+        controls_area: scale_rect(screen, ratio),
         toolbar_below,
         top_edge,
     }
@@ -101,6 +103,18 @@ pub fn toolbar_below(window: Rect, screen: Rect) -> bool {
 }
 
 impl Frame {
+    /// Allow the picture past the top, stopping only when its lower controls
+    /// reach the display edge. Positions and native insets are viewport points.
+    pub fn upward_drag_position(&self, outer: Pos2, inset: Vec2) -> Pos2 {
+        let lower_toolbar_top = self.image.max.y + METRICS.image_gap;
+        egui::pos2(
+            outer.x,
+            outer
+                .y
+                .max(self.controls_area.min.y - lower_toolbar_top - inset.y),
+        )
+    }
+
     pub fn toolbar_rects(&self) -> (Rect, Rect) {
         let close = Rect::from_min_size(
             egui::pos2(
@@ -123,13 +137,23 @@ impl Frame {
 
     pub fn place_controls(&mut self, inner: Rect, screens: &[Rect], fallback: Rect, ratio: f32) {
         let image = self.image.translate(inner.min.to_vec2());
-        let screen = screens
+        self.controls_area = screens
             .iter()
             .copied()
             .map(|area| scale_rect(area, ratio))
-            .find(|area| area.contains(image.center()))
+            .min_by(|left, right| {
+                left.distance_to_pos(image.center())
+                    .total_cmp(&right.distance_to_pos(image.center()))
+            })
             .unwrap_or(scale_rect(fallback, ratio));
-        self.toolbar_below = toolbar_below(inner, screen);
+        self.toolbar_below = toolbar_below(inner, self.controls_area);
+        let row = METRICS.toolbar_height();
+        if self.toolbar_below
+            && image.max.y + row > self.controls_area.max.y
+            && image.min.y - row >= self.controls_area.min.y
+        {
+            self.toolbar_below = false;
+        }
     }
 }
 

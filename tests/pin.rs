@@ -5,6 +5,136 @@ use snip2pin::{
 };
 
 #[test]
+fn tall_pins_keep_a_reachable_row_before_and_after_moving_off_the_top() {
+    let display = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
+    let usable = Rect::from_min_max(egui::pos2(0.0, 28.0), display.max);
+    let mut frame = pin::frame_geometry(
+        Placement {
+            position: [0.0, 0.0],
+            size: display.size().into(),
+        },
+        usable,
+        1.0,
+        1.0,
+    );
+    frame.place_controls(frame.window, &[display], usable, 1.0);
+    assert!(
+        !frame.toolbar_below,
+        "a tall initial pin needs its visible upper row"
+    );
+    let position = frame.window.min - egui::vec2(0.0, display.height() / 2.0);
+    frame.place_controls(
+        Rect::from_min_size(position, frame.window.size()),
+        &[display],
+        usable,
+        1.0,
+    );
+    assert!(
+        frame.toolbar_below,
+        "the lower row becomes reachable when the image leaves the top"
+    );
+    for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
+        assert!(display.contains_rect(button.translate(position.to_vec2())));
+    }
+}
+
+#[test]
+fn small_images_can_leave_the_physical_top_without_a_menu_bar_limit() {
+    let display = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
+    let usable = Rect::from_min_max(egui::pos2(0.0, 28.0), display.max);
+    let mut frame = pin::frame_geometry(
+        Placement {
+            position: [100.0, 28.0],
+            size: [12.0, 8.0],
+        },
+        usable,
+        1.0,
+        1.0,
+    );
+    frame.place_controls(frame.window, &[display], usable, 1.0);
+    let position = frame.upward_drag_position(
+        egui::pos2(frame.window.min.x, -display.height()),
+        Vec2::ZERO,
+    );
+    assert!(position.y + frame.image.max.y < display.min.y);
+    frame.place_controls(
+        Rect::from_min_size(position, frame.window.size()),
+        &[display],
+        usable,
+        1.0,
+    );
+    let (copy, close) = frame.toolbar_rects();
+    for button in [copy, close] {
+        assert!(display.contains_rect(button.translate(position.to_vec2())));
+    }
+}
+
+#[test]
+fn upward_boundary_depends_on_lower_controls_instead_of_image_top() {
+    for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
+        for ratio in [1.0, 0.8] {
+            let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
+            let frame = pin::frame_geometry(
+                Placement {
+                    position: (origin + Vec2::splat(100.0)).into(),
+                    size: [193.0, 121.0],
+                },
+                screen,
+                ratio,
+                ratio.recip(),
+            );
+            let inset = egui::vec2(4.0, 7.0) * ratio;
+            for distance in [frame.image.height() / 2.0, frame.image.height() * 2.0] {
+                let candidate = egui::pos2(
+                    frame.window.min.x,
+                    frame.controls_area.min.y - frame.image.min.y - distance,
+                ) - inset;
+                let position = frame.upward_drag_position(candidate, inset);
+                let inner = Rect::from_min_size(position + inset, frame.window.size());
+                let image = frame.image.translate(inner.min.to_vec2());
+                assert!(image.min.y < frame.controls_area.min.y);
+                assert!((image.size() - frame.image.size()).length() < 0.001);
+                let mut moved = frame;
+                moved.place_controls(inner, &[screen], screen, ratio);
+                assert!(moved.toolbar_below);
+                for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
+                    assert!(
+                        moved
+                            .controls_area
+                            .expand(0.001)
+                            .contains_rect(button.translate(inner.min.to_vec2()))
+                    );
+                }
+                if distance > frame.image.height() {
+                    assert!(
+                        image.max.y < frame.controls_area.min.y,
+                        "even the entire image may leave the usable area"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn an_offscreen_image_keeps_the_work_area_of_its_nearest_monitor() {
+    let left = Rect::from_min_size(egui::pos2(-680.0, -172.0), egui::vec2(680.0, 420.0));
+    let right = Rect::from_min_size(egui::pos2(0.0, 28.0), left.size());
+    let mut frame = pin::frame_geometry(
+        Placement {
+            position: [-500.0, -50.0],
+            size: [193.0, 121.0],
+        },
+        left,
+        1.0,
+        1.0,
+    );
+    let inner = frame.window.translate(egui::vec2(0.0, -left.height()));
+    frame.place_controls(inner, &[right, left], right, 1.0);
+    assert_eq!(frame.controls_area, left);
+}
+
+#[test]
 fn dragging_can_put_the_image_at_the_top_while_margins_leave_the_work_area() {
     for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
         for (ratio, grid) in [(1.0, 1.0), (0.8, 1.25)] {

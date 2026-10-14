@@ -2,6 +2,93 @@ use super::*;
 use std::sync::mpsc;
 
 #[test]
+fn upward_drag_allows_the_image_offscreen_but_keeps_lower_buttons_reachable() {
+    let ctx = egui::Context::default();
+    let texture = ctx.load_texture(
+        "pin",
+        egui::ColorImage::filled([2, 2], Color32::WHITE),
+        egui::TextureOptions::NEAREST,
+    );
+    let (sender, _) = mpsc::channel();
+    let screen = Rect::from_min_size(egui::pos2(0.0, 28.0), egui::vec2(680.0, 420.0));
+    let frame = frame_geometry(
+        Placement {
+            position: [100.0, 100.0],
+            size: [193.0, 121.0],
+        },
+        screen,
+        1.0,
+        1.0,
+    );
+    let press = frame.image.center_bottom() - egui::vec2(0.0, 1.0);
+    let cursor = egui::pos2(frame.window.min.x + press.x, 0.0);
+    let local = cursor - frame.window.min.to_vec2();
+    let mut drag = Drag::default();
+    let mut requested = None;
+    for events in [
+        vec![egui::Event::PointerMoved(press)],
+        vec![egui::Event::PointerButton {
+            pos: press,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        vec![egui::Event::PointerMoved(local)],
+    ] {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, frame.window.size())),
+            events,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                inner_rect: Some(frame.window),
+                outer_rect: Some(frame.window),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(input, |ui| {
+            show(
+                ui,
+                Model {
+                    id: 1,
+                    texture: &texture,
+                    frame,
+                    events: &sender,
+                },
+                &mut drag,
+                || Some(cursor.into()),
+            )
+        });
+        output.textures_delta.clear();
+        for command in &output.viewport_output[&egui::ViewportId::ROOT].commands {
+            if let ViewportCommand::OuterPosition(position) = command {
+                requested = Some(*position);
+            }
+        }
+    }
+    let position = requested.expect("drag requests a position");
+    let inner = Rect::from_min_size(position, frame.window.size());
+    let image = frame.image.translate(position.to_vec2());
+    assert!(
+        image.min.y < 0.0,
+        "the picture may pass the physical screen top"
+    );
+    assert_eq!(image.size(), frame.image.size());
+    let mut moved = frame;
+    moved.place_controls(inner, &[screen], screen, 1.0);
+    assert!(moved.toolbar_below);
+    let (copy, close) = moved.toolbar_rects();
+    for button in [copy, close] {
+        assert!(
+            screen.contains_rect(button.translate(position.to_vec2())),
+            "lower controls must remain visible even when the image leaves the screen"
+        );
+    }
+}
+
+#[test]
 fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries() {
     let ctx = egui::Context::default();
     let texture = ctx.load_texture(
@@ -192,6 +279,7 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
         let frame = Frame {
             window: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 140.0)),
             image,
+            controls_area: Rect::from_min_size(Pos2::ZERO, egui::vec2(220.0, 180.0)),
             toolbar_below: below,
             top_edge: false,
         };
@@ -267,6 +355,7 @@ fn close_button_tracks_hover_and_pointer_leave_without_changing_image_bounds() {
     let layout = Frame {
         window: bounds,
         image: image_rect,
+        controls_area: bounds,
         toolbar_below: false,
         top_edge: false,
     };

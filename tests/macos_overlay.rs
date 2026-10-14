@@ -95,6 +95,8 @@ fn main() {
                 true,
             )
         };
+        pin.setTitle(&NSString::from_str("Snip2Pin · 贴图"));
+        platform::prepare_floating_windows();
         // AppKit rounds fractional window dimensions to integral native points.
         // Keep that rounding in the transparent window, not in the captured image.
         let window_size = NSSize::new(target.size.width.ceil(), target.size.height.ceil());
@@ -123,6 +125,40 @@ fn main() {
             pin.frame().size,
             window_size,
             "top-edge movement cannot shrink the image"
+        );
+        let offscreen = NSRect::new(
+            NSPoint::new(
+                target.origin.x,
+                (image_top + window_size.height / 2.0 - window_size.height).floor(),
+            ),
+            window_size,
+        );
+        pin.setLevel(objc2_core_graphics::kCGFloatingWindowLevel as isize);
+        assert_ne!(
+            pin.constrainFrameRect_toScreen(offscreen, Some(&screen)),
+            offscreen,
+            "a normal floating window reproduces the system's top-edge restriction"
+        );
+        platform::prepare_floating_windows();
+        assert_eq!(
+            pin.level(),
+            objc2_core_graphics::kCGStatusWindowLevel as isize
+        );
+        assert!(
+            pin.level() < window.level(),
+            "capture layers remain above existing pins"
+        );
+        assert_eq!(
+            pin.constrainFrameRect_toScreen(offscreen, Some(&screen)),
+            offscreen,
+            "the native pin must allow its upper half to leave the screen while lower controls remain reachable"
+        );
+        pin.setFrameOrigin(offscreen.origin);
+        platform::prepare_floating_windows();
+        assert_eq!(
+            pin.frame(),
+            offscreen,
+            "preparation must not snap an offscreen pin back into place"
         );
         assert!(!pin.isVisible());
         assert!(!application.isActive());

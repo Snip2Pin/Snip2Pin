@@ -336,14 +336,10 @@ impl Snip2Pin {
                 self.layers
                     .values()
                     .map(|layer| {
-                        let area = if self.demo {
-                            egui::Rect::from_min_size(
-                                layer.display.position().into(),
-                                layer.display.logical_size().into(),
-                            )
-                        } else {
-                            platform::pin_work_area(&layer.display)
-                        };
+                        let area = egui::Rect::from_min_size(
+                            layer.display.position().into(),
+                            layer.display.logical_size().into(),
+                        );
                         // Normalize mixed-DPI display bounds to the capture's
                         // coordinate scale before the viewport applies its DPI.
                         let factor = if cfg!(target_os = "macos") {

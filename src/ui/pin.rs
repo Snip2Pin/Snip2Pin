@@ -21,6 +21,7 @@ fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
     Frame {
         window: Rect::NOTHING,
         image,
+        controls_area: Rect::NOTHING,
         toolbar_below: below,
         top_edge: false,
     }
@@ -99,8 +100,16 @@ pub fn show(
         && let Some(pointer) = pointer
         && let Some(position) = drag.move_to(pointer, &coordinates)
     {
-        ui.ctx()
-            .send_viewport_cmd(ViewportCommand::OuterPosition(position));
+        let (inner, outer) =
+            ui.input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
+        let inset = inner
+            .zip(outer)
+            .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
+        let position = frame.upward_drag_position(position, inset);
+        if outer.is_none_or(|outer| outer.min != position) {
+            ui.ctx()
+                .send_viewport_cmd(ViewportCommand::OuterPosition(position));
+        }
     }
     if !ui.input(|input| input.pointer.primary_down()) {
         drag.end();
