@@ -29,7 +29,7 @@ keep it above other windows, drag to move, and double-click to close.
 macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制」
 （较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，再重新打开应用。
 
-采用 GitHub 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
+采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
 
 ### English
 
@@ -52,7 +52,7 @@ immediately; local update installs apply the saved icon to Finder and Launchpad.
 On first use on macOS, allow Snip2Pin in System Settings → Privacy & Security →
 Screen Recording (Screen & System Audio Recording on newer macOS), then reopen it.
 
-Distribution uses GitHub packages, outside the App Store. Packages marked
+Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
 block them. Move the macOS app to Applications, then follow [Apple's instructions](https://support.apple.com/en-us/102445)
 if opening is blocked. Updates to these packages may require screen capture permission again.
