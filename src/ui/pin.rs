@@ -88,7 +88,7 @@ pub fn show_with_host(
     let response = ui
         .interact(image, ui.id().with("image-drag"), Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text("拖动移动 · 双击关闭");
+        .on_hover_ui(|ui| super::tooltip(ui, "拖动移动 · 双击关闭"));
     let hovered = ui
         .input(|input| input.pointer.hover_pos())
         .is_some_and(|point| bounds.contains(point));
@@ -103,7 +103,7 @@ pub fn show_with_host(
                     Sense::click_and_drag(),
                 )
                 .on_hover_cursor(corner.cursor())
-                .on_hover_text("拖动等比缩放 · Shift 自由缩放");
+                .on_hover_ui(|ui| super::tooltip(ui, "拖动等比缩放 · Shift 自由缩放"));
             (corner, response)
         })
         .collect::<Vec<_>>();
@@ -245,7 +245,7 @@ pub fn show_with_host(
     if hovered {
         let copy = ui
             .put(copy_rect, egui::Button::new("").fill(PIN.button_fill))
-            .on_hover_text("复制");
+            .on_hover_ui(|ui| super::tooltip(ui, "复制"));
         copy.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "复制")
         });

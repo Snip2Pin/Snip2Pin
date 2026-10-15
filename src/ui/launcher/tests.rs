@@ -132,6 +132,55 @@ fn compact_home_keeps_capture_shortcut_and_pin_actions_reachable() {
 }
 
 #[test]
+fn capture_tooltip_wraps_completely_inside_the_viewport() {
+    for width in [280.0, LAUNCHER.window[0], 600.0] {
+        for font_size in [13.0, 20.0] {
+            let ctx = egui::Context::default();
+            ctx.global_style_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(font_size));
+            });
+            let size = egui::vec2(width, 600.0);
+            let _ = frame(&ctx, size, vec![], false);
+            let (output, _) = frame(&ctx, size, vec![], false);
+            let capture = visible_text(&output, "截图并置顶").center();
+            let _ = frame(&ctx, size, vec![Event::PointerMoved(capture)], false);
+            let mut output = frame(&ctx, size, vec![], false).0;
+            for _ in 0..3 {
+                output = frame(&ctx, size, vec![], false).0;
+            }
+            let tooltip = output
+                .shapes
+                .iter()
+                .find(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text().starts_with("拖动框选")
+                    )
+                })
+                .expect("hover must show the real capture tooltip");
+            let egui::Shape::Text(text) = &tooltip.shape else {
+                unreachable!()
+            };
+            assert!(text.galley.text().ends_with("双击关闭。"));
+            let painted = tooltip.shape.visual_bounding_rect();
+            assert!(
+                Rect::from_min_size(Pos2::ZERO, size)
+                    .expand(1.0)
+                    .contains_rect(painted),
+                "tooltip exceeds viewport: width={width}, font={font_size}, {painted:?}"
+            );
+            assert!(
+                tooltip.clip_rect.expand(1.0).contains_rect(painted),
+                "tooltip text is clipped: {painted:?} vs {:?}",
+                tooltip.clip_rect
+            );
+        }
+    }
+}
+
+#[test]
 fn long_shortcut_wraps_without_losing_the_change_action() {
     let ctx = egui::Context::default();
     let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(210.0, 100.0));
