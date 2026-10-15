@@ -9,7 +9,7 @@ license = "MIT"
 publish = false
 
 [workspace]
-members = ["xtask"]
+members = ["xtask", "preview"]
 default-members = ["."]
 resolver = "3"
 
@@ -17,11 +17,13 @@ resolver = "3"
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 global-hotkey = "0.8.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
-xcap = { version = "0.9.8", default-features = false }
-directories = "6.0"
 resvg = { version = "0.48.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+xcap = { version = "0.9.8", default-features = false }
+directories = "6.0"
 tempfile = "3.27"
 tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
 
@@ -29,8 +31,8 @@ tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] 
 winit = { version = "0.30.13", default-features = false }
 objc2-core-graphics = "0.3.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSScreen", "NSAppearance"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSUserDefaults", "NSData"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSScreen", "NSAppearance", "NSWorkspace", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSUserDefaults", "NSData", "NSBundle", "NSURL"] }
 plist = "1.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -41,7 +43,7 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.100"
 windows-result = "0.100"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [profile.release]
 lto = "thin"

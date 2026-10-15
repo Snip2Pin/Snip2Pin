@@ -81,17 +81,20 @@ pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32)
     let screen_top = (screen.min.y * ratio * grid).ceil() / grid;
     let vertical_margin = METRICS.padding + METRICS.toolbar_height();
     let top_edge = position.y - vertical_margin < screen_top;
-    let mut toolbar_side = ToolbarSide::Top;
-    if top_edge {
-        position.y = position.y.max(screen_top + METRICS.padding);
-        toolbar_side = ToolbarSide::Bottom;
-        if position.y + size.y + vertical_margin > screen.max.y * ratio {
-            toolbar_side = ToolbarSide::Top;
-            position.y = position.y.max(screen_top + vertical_margin);
-        }
-    }
+    position.y = position.y.max(screen_top);
     let mut frame = image_frame(position, size, scale_rect(screen, ratio), grid);
-    frame.toolbar_side = toolbar_side;
+    frame.place_controls(frame.window, &[], frame.controls_area, 1.0);
+    let (copy, close) = frame.toolbar_rects();
+    if !frame
+        .controls_area
+        .contains_rect(copy.union(close).translate(frame.window.min.to_vec2()))
+    {
+        // Move only when no side can keep controls reachable at the source
+        // position. Tall images can use a side instead of being pushed down.
+        position.y = position.y.max(screen_top + METRICS.toolbar_height());
+        frame = image_frame(position, size, scale_rect(screen, ratio), grid);
+        frame.place_controls(frame.window, &[], frame.controls_area, 1.0);
+    }
     frame.top_edge = top_edge;
     frame
 }
@@ -260,13 +263,25 @@ fn scale_rect(rect: Rect, ratio: f32) -> Rect {
     Rect::from_min_max(rect.min * ratio, rect.max * ratio)
 }
 
+/// Apply the desktop's top-window constraint without changing image dimensions.
+pub fn host_frame(frame: Frame) -> Frame {
+    #[cfg(target_os = "macos")]
+    {
+        let mut frame = frame;
+        frame.fit_host_top();
+        frame
+    }
+    #[cfg(not(target_os = "macos"))]
+    frame
+}
+
 #[derive(Default)]
 pub struct Preparation {
     requested: bool,
-    image_offset: Option<Vec2>,
+    image_native: Option<Rect>,
+    system_drag_origin: Option<Pos2>,
     pub drag: Drag,
     pub resize: Resize,
-    size_native: Option<Vec2>,
 }
 
 pub enum Prepared {
@@ -281,7 +296,7 @@ impl Preparation {
         mut frame: Frame,
         inner: Option<Rect>,
         outer: Option<Rect>,
-        ratio: f32,
+        _ratio: f32,
     ) -> Prepared {
         if !self.requested {
             self.requested = true;
@@ -293,50 +308,106 @@ impl Preparation {
                 outer_position: frame.window.min - inset,
             };
         }
-        let first = self.image_offset.is_none();
-        if let Some(size) = self.size_native {
-            frame.image = Rect::from_min_size(frame.image.min, size / frame.grid);
-        }
-        let offset = *self.image_offset.get_or_insert_with(|| {
-            let mut offset = inner.map_or(Vec2::ZERO, |rect| frame.window.min - rect.min);
-            if frame.top_edge {
-                offset.y = 0.0;
+        let first = self.image_native.is_none();
+        let host = inner.unwrap_or(frame.window);
+        if let Some(previous) = self.system_drag_origin {
+            self.system_drag_origin = Some(host.min * frame.grid);
+            if let Some(image) = &mut self.image_native {
+                *image = image.translate(host.min * frame.grid - previous);
             }
-            offset / ratio
+        }
+        let image = *self.image_native.get_or_insert_with(|| {
+            let mut origin = frame.window.min;
+            if frame.top_edge {
+                origin.y = host.min.y;
+            }
+            scale_rect(frame.image.translate(origin.to_vec2()), frame.grid)
         });
-        frame.image = if let Some(position) = self.drag.position(frame.grid) {
-            Rect::from_min_size(
-                (position - inner.unwrap_or(frame.window).min).to_pos2(),
-                frame.image.size(),
-            )
-        } else {
-            frame.image.translate(offset * ratio)
-        };
+        frame.image = scale_rect(image, 1.0 / frame.grid).translate(-host.min.to_vec2());
         Prepared::Paint { frame, first }
     }
 
-    pub fn set_size(&mut self, size: Vec2, grid: f32) {
-        self.size_native = Some(size * grid);
+    /// Commit user intent atomically. Native acknowledgements only locate paint.
+    pub fn commit(&mut self, frame: Frame) {
+        self.image_native = Some(scale_rect(
+            frame.image.translate(frame.window.min.to_vec2()),
+            frame.grid,
+        ));
+    }
+
+    pub fn image(&self, grid: f32) -> Option<Rect> {
+        self.image_native.map(|image| scale_rect(image, 1.0 / grid))
+    }
+
+    pub fn begin_system_drag(&mut self, origin_native: Pos2) {
+        self.system_drag_origin = Some(origin_native);
+    }
+
+    pub fn end_system_drag(&mut self) {
+        self.system_drag_origin = None;
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Corner {
+pub enum ResizeHandle {
+    Left,
+    Right,
+    Top,
+    Bottom,
     TopLeft,
     TopRight,
     BottomLeft,
     BottomRight,
 }
 
-impl Corner {
-    pub const ALL: [Self; 4] = [
+impl ResizeHandle {
+    pub const CORNERS: [Self; 4] = [
         Self::TopLeft,
         Self::TopRight,
         Self::BottomLeft,
         Self::BottomRight,
     ];
+    pub const ALL: [Self; 8] = [
+        Self::Left,
+        Self::Right,
+        Self::Top,
+        Self::Bottom,
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+    pub fn hit_rect(self, rect: Rect, width: f32) -> Rect {
+        // Partition the perimeter even for narrow images; no handle disables
+        // another direction or covers the entire draggable image.
+        let hit = Vec2::new(
+            width.min(rect.width() / 3.0),
+            width.min(rect.height() / 3.0),
+        );
+        match self {
+            Self::Left | Self::Right => {
+                Rect::from_center_size(self.point(rect), egui::vec2(hit.x, rect.height() - hit.y))
+            }
+            Self::Top | Self::Bottom => {
+                Rect::from_center_size(self.point(rect), egui::vec2(rect.width() - hit.x, hit.y))
+            }
+            _ => Rect::from_center_size(self.point(rect), hit),
+        }
+    }
+    pub fn cursor(self) -> egui::CursorIcon {
+        match self {
+            Self::Left | Self::Right => egui::CursorIcon::ResizeHorizontal,
+            Self::Top | Self::Bottom => egui::CursorIcon::ResizeVertical,
+            Self::TopLeft | Self::BottomRight => egui::CursorIcon::ResizeNwSe,
+            _ => egui::CursorIcon::ResizeNeSw,
+        }
+    }
     pub fn point(self, rect: Rect) -> Pos2 {
         match self {
+            Self::Left => rect.left_center(),
+            Self::Right => rect.right_center(),
+            Self::Top => rect.center_top(),
+            Self::Bottom => rect.center_bottom(),
             Self::TopLeft => rect.left_top(),
             Self::TopRight => rect.right_top(),
             Self::BottomLeft => rect.left_bottom(),
@@ -345,6 +416,10 @@ impl Corner {
     }
     fn opposite(self) -> Self {
         match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
             Self::TopLeft => Self::BottomRight,
             Self::TopRight => Self::BottomLeft,
             Self::BottomLeft => Self::TopRight,
@@ -353,6 +428,10 @@ impl Corner {
     }
     fn direction(self) -> Vec2 {
         match self {
+            Self::Left => egui::vec2(-1.0, 0.0),
+            Self::Right => egui::vec2(1.0, 0.0),
+            Self::Top => egui::vec2(0.0, -1.0),
+            Self::Bottom => egui::vec2(0.0, 1.0),
             Self::TopLeft => egui::vec2(-1.0, -1.0),
             Self::TopRight => egui::vec2(1.0, -1.0),
             Self::BottomLeft => egui::vec2(-1.0, 1.0),
@@ -362,7 +441,7 @@ impl Corner {
 }
 
 struct ResizeAnchor {
-    corner: Corner,
+    corner: ResizeHandle,
     image: Rect,
     pointer: Pos2,
 }
@@ -373,7 +452,7 @@ pub struct Resize {
 }
 
 impl Resize {
-    pub fn begin(&mut self, corner: Corner, image: Rect, pointer: Pos2) {
+    pub fn begin(&mut self, corner: ResizeHandle, image: Rect, pointer: Pos2) {
         self.anchor = Some(ResizeAnchor {
             corner,
             image,
@@ -395,6 +474,8 @@ impl Resize {
         let mut size = (anchor.image.size() + delta).max(minimum);
         let limit = if direction.y < 0.0 {
             top.map(|top| (anchor.image.max.y - top).max(minimum.y))
+        } else if direction.y == 0.0 && proportional {
+            top.map(|top| ((anchor.image.center().y - top) * 2.0).max(minimum.y))
         } else {
             None
         };
@@ -413,8 +494,21 @@ impl Resize {
             size.y = size.y.min(height);
         }
         let pivot = anchor.corner.opposite().point(anchor.image);
-        let point = pivot + size * direction;
-        Some(Rect::from_min_max(pivot.min(point), pivot.max(point)))
+        let axis = |pivot: f32, size: f32, direction: f32| {
+            if direction < 0.0 {
+                (pivot - size, pivot)
+            } else if direction > 0.0 {
+                (pivot, pivot + size)
+            } else {
+                (pivot - size / 2.0, pivot + size / 2.0)
+            }
+        };
+        let (left, right) = axis(pivot.x, size.x, direction.x);
+        let (top, bottom) = axis(pivot.y, size.y, direction.y);
+        Some(Rect::from_min_max(
+            egui::pos2(left, top),
+            egui::pos2(right, bottom),
+        ))
     }
     pub fn is_active(&self) -> bool {
         self.anchor.is_some()
@@ -430,14 +524,12 @@ impl Resize {
 pub struct Drag {
     anchor_native: Option<Vec2>,
     last_requested_native: Option<Pos2>,
-    image_position_native: Option<Pos2>,
 }
 
 impl Drag {
     pub fn begin(&mut self, offset: Vec2, origin: Pos2, coordinates: &Coordinates) {
         self.anchor_native = Some(offset * coordinates.cursor_scale);
         self.last_requested_native = Some(origin * coordinates.cursor_scale);
-        self.image_position_native = self.last_requested_native;
     }
 
     pub fn move_to(&mut self, cursor: [f32; 2], coordinates: &Coordinates) -> Option<Pos2> {
@@ -446,20 +538,11 @@ impl Drag {
             return None;
         }
         self.last_requested_native = Some(position);
-        self.image_position_native = Some(position);
         Some(coordinates.cursor(position.into()))
     }
 
     pub fn is_active(&self) -> bool {
         self.anchor_native.is_some()
-    }
-
-    pub fn position(&self, grid: f32) -> Option<Pos2> {
-        self.image_position_native.map(|position| position / grid)
-    }
-
-    pub fn set_position(&mut self, position: Pos2, coordinates: &Coordinates) {
-        self.image_position_native = Some(position * coordinates.cursor_scale);
     }
 
     pub fn end(&mut self) {

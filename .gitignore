@@ -11,3 +11,4 @@ dist/
 *.keychain
 *.keychain-db
 password.bin
+preview/pkg/

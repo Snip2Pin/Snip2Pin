@@ -46,6 +46,11 @@ CI 对 PR、`main` 推送和手动验证运行，取消同一分支的过期检�
 CI 在四种原生 runner 上验证开发包及 unverified 最终包结构、完整性和 `--version`，
 macOS 测试可使用不带证书的 ad-hoc 完整性签名，不访问本机或生产身份，不显示 GUI。
 
+WebAssembly 检查独立编译共享 UI，避免只在网页入口使用的代码漏检。无需为评审操作
+真实桌面：按 [交互验证记录](interactions.md) 构建生成图片沙箱，各评审使用独立
+headless 浏览器。沙箱不提供真实截图、系统剪贴板、自启或全局快捷键注册。
+本地 `packaging/macos/build.sh --install` 使用优化构建；这属于开发安装，不是发版。
+
 Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lock 必须提交。
 `deny.toml` 检查 RustSec、依赖许可证及来源，重复版本作为提示；不得为通过检查
 整体关闭策略。确需忽略公告时注明公告 ID、影响分析、上游修复和复查日期。

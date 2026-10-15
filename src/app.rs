@@ -14,6 +14,7 @@ use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry::{self, Placement},
     icon::{self, Variant},
+    permission::ScreenPermission,
     pin::{Coordinates, Preparation as PinPreparation, Prepared},
     session::CaptureGate,
     settings::{self, Binding, Preferences},
@@ -69,6 +70,7 @@ pub struct Snip2Pin {
     sender: Sender<Event>,
     phase: Phase,
     gate: CaptureGate,
+    capture_worker: Option<capture::Worker>,
     layers: BTreeMap<u32, Layer>,
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
@@ -89,10 +91,15 @@ pub struct Snip2Pin {
     exiting: bool,
     home_visible: bool,
     booting: bool,
+    permission: ScreenPermission,
+    relaunch: Arc<Mutex<Option<std::process::Command>>>,
 }
 
 impl Snip2Pin {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        relaunch: Arc<Mutex<Option<std::process::Command>>>,
+    ) -> Self {
         platform::install_fonts(&cc.egui_ctx);
         let demo = std::env::args().any(|argument| argument == "--demo");
         let (sender, events) = mpsc::channel();
@@ -189,6 +196,7 @@ impl Snip2Pin {
             sender,
             phase: Phase::Idle,
             gate: CaptureGate::default(),
+            capture_worker: None,
             layers,
             active_display: None,
             pins: BTreeMap::new(),
@@ -209,11 +217,28 @@ impl Snip2Pin {
             exiting: false,
             home_visible,
             booting: true,
+            permission: ScreenPermission::default(),
+            relaunch,
+        }
+    }
+
+    fn capture_command(&mut self, ctx: &egui::Context) {
+        if matches!(self.phase, Phase::Capturing) {
+            self.restore(ctx);
+        } else {
+            self.begin_capture(ctx);
         }
     }
 
     fn begin_capture(&mut self, ctx: &egui::Context) {
         if !matches!(self.phase, Phase::Idle) || self.recording {
+            return;
+        }
+        if !self.check_capture_permission(
+            ctx,
+            platform::capture_permission,
+            platform::request_capture_permission,
+        ) {
             return;
         }
         let Some(id) = self.gate.begin() else {
@@ -223,33 +248,83 @@ impl Snip2Pin {
         self.phase = Phase::Capturing;
         // Preserve the visible desktop while capturing. No hiding, animation,
         // fullscreen transition or artificial delay is needed.
-        let sender = self.sender.clone();
-        let ctx = ctx.clone();
-        let demo = self.demo;
         let demo_origin = ctx.input(|input| {
             input
                 .viewport()
                 .outer_rect
                 .map(|rect| [rect.min.x, rect.min.y])
         });
-        std::thread::spawn(move || {
-            let result = if demo {
-                let mut snapshot = capture::demo();
-                if let Some(origin) = demo_origin {
-                    snapshot.display.origin = origin;
+        if self.capture_worker.is_none() {
+            let sender = self.sender.clone();
+            let repaint = ctx.clone();
+            let demo = self.demo;
+            match capture::Worker::new(
+                move |origin, cancelled| {
+                    if demo {
+                        let mut snapshot = capture::demo();
+                        if let Some(origin) = origin {
+                            snapshot.display.origin = origin;
+                        }
+                        Ok(vec![snapshot])
+                    } else {
+                        capture::desktop(cancelled)
+                    }
+                },
+                move |id, result| {
+                    let pointer = (!demo && result.is_ok())
+                        .then(platform::pointer_position)
+                        .flatten();
+                    let _ = sender.send(Event::Ready(id, result, pointer));
+                    repaint.request_repaint_of(ViewportId::ROOT);
+                },
+            ) {
+                Ok(worker) => self.capture_worker = Some(worker),
+                Err(error) => {
+                    self.message = Some(error);
+                    self.restore(ctx);
+                    return;
                 }
-                Ok(vec![snapshot])
-            } else {
-                capture::desktop()
-            };
-            let pointer = if !demo && result.is_ok() {
-                platform::pointer_position()
-            } else {
-                None
-            };
-            let _ = sender.send(Event::Ready(id, result, pointer));
-            ctx.request_repaint_of(ViewportId::ROOT);
-        });
+            }
+        }
+        if let Some(worker) = &self.capture_worker
+            && let Err(error) = worker.request(id, demo_origin)
+        {
+            self.message = Some(error);
+            self.restore(ctx);
+        }
+        ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    fn check_capture_permission(
+        &mut self,
+        ctx: &egui::Context,
+        preflight: impl FnMut() -> bool,
+        request: impl FnOnce() -> bool,
+    ) -> bool {
+        if self.demo || self.permission.authorize(preflight, request) {
+            return true;
+        }
+        self.message = None;
+        self.tray_action(crate::tray::Action::Home, ctx);
+        false
+    }
+
+    fn restart(&mut self, ctx: &egui::Context) {
+        if self.demo {
+            return;
+        }
+        match platform::relaunch_command() {
+            Ok(command) => {
+                if let Ok(mut relaunch) = self.relaunch.lock() {
+                    *relaunch = Some(command);
+                } else {
+                    self.message = Some("无法准备重新打开应用。".into());
+                    return;
+                }
+                self.tray_action(crate::tray::Action::Quit, ctx);
+            }
+            Err(error) => self.message = Some(error),
+        }
     }
 
     fn tray_action(&mut self, action: crate::tray::Action, ctx: &egui::Context) {
@@ -265,7 +340,7 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
-            Action::Capture => self.begin_capture(ctx),
+            Action::Capture => self.capture_command(ctx),
             Action::ClosePins => {
                 self.pins.clear();
                 if matches!(
@@ -321,6 +396,10 @@ impl Snip2Pin {
     }
 
     fn restore(&mut self, ctx: &egui::Context) {
+        self.gate.cancel();
+        if let Some(worker) = &self.capture_worker {
+            worker.cancel();
+        }
         let was_selecting = matches!(self.phase, Phase::Selecting { .. });
         for (&display_id, layer) in &mut self.layers {
             layer.selection = None;
@@ -344,6 +423,19 @@ impl Snip2Pin {
         if !self.gate.complete(id) {
             return;
         }
+        let result = result.and_then(|snapshots| {
+            let limit = ctx.input(|input| input.max_texture_side);
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.pixels.size.iter().any(|side| *side > limit))
+            {
+                Err(format!(
+                    "当前显卡最多支持 {limit} 像素边长的截图，屏幕分辨率超出限制。"
+                ))
+            } else {
+                Ok(snapshots)
+            }
+        });
         match result {
             Ok(snapshots) if !snapshots.is_empty() => {
                 self.active_display = pointer
@@ -355,11 +447,14 @@ impl Snip2Pin {
                     .iter()
                     .map(|snapshot| {
                         let display = snapshot.display.clone();
-                        let texture =
-                            texture(ctx, &format!("selection-{}", display.id), &snapshot.pixels);
+                        let texture = ctx.load_texture(
+                            format!("selection-{}", display.id),
+                            snapshot.pixels.clone(),
+                            egui::TextureOptions::LINEAR,
+                        );
                         let selection = overlay::Selection {
                             texture,
-                            pixels: [snapshot.pixels.width(), snapshot.pixels.height()],
+                            pixels: snapshot.pixel_size(),
                             start: None,
                             focus_requested: false,
                         };
@@ -385,7 +480,11 @@ impl Snip2Pin {
             }
             result => {
                 self.message = Some(result.err().unwrap_or_else(|| "没有可用屏幕。".into()));
+                if !self.demo && !platform::capture_permission() {
+                    self.permission = ScreenPermission::Required;
+                }
                 self.restore(ctx);
+                self.tray_action(crate::tray::Action::Home, ctx);
             }
         }
     }
@@ -434,11 +533,11 @@ impl Snip2Pin {
             self.next_pin += 1;
             let placement = geometry::pin_placement(
                 rect,
-                [snapshot.pixels.width(), snapshot.pixels.height()],
+                snapshot.pixel_size(),
                 snapshot.display.position(),
                 snapshot.display.logical_size(),
             );
-            let pixels = Arc::new(color_image(&pixels));
+            let pixels = Arc::new(pixels);
             let texture = ctx.load_texture(
                 format!("pin-{}", self.next_pin),
                 pixels.clone(),
@@ -743,7 +842,7 @@ impl Snip2Pin {
             ctx.show_viewport_deferred(
                 ViewportId::from_hash_of(("pin", id)),
                 self.window_icon(egui::ViewportBuilder::default())
-                    .with_title("Snip2Pin · 贴图")
+                    .with_title(format!("Snip2Pin · 贴图 {id}"))
                     .with_decorations(false)
                     .with_transparent(true)
                     .with_has_shadow(false)
@@ -799,19 +898,26 @@ impl Snip2Pin {
                     if let Some(actual) = inner {
                         frame.place_controls(actual, &screen_areas, screen, ratio);
                     }
-                    ui::pin::show(
+                    ui::pin::show_with_host(
                         ui,
                         ui::pin::Model {
                             id,
                             texture: &texture,
                             frame,
-                            events: &events,
+                            events: &|action| {
+                                let _ = events.send(match action {
+                                    ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
+                                    ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
+                                });
+                            },
                             monitors: &screen_areas,
                             coordinate_ratio: ratio,
                             minimum_size: egui::Vec2::from(placement.size) * ratio / pixel_size,
+                            surface: ui::pin::Surface::Native,
                         },
                         &mut prepared,
                         platform::pointer_position,
+                        |frame| platform::layout_pin(id, frame),
                     );
                     if first_frame {
                         let _ = events.send(Event::PinReady(session, id));
@@ -829,7 +935,7 @@ impl eframe::App for Snip2Pin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if matches!(self.phase, Phase::Selecting { .. })
+        if !matches!(self.phase, Phase::Idle)
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
             self.restore(ctx);
@@ -842,7 +948,7 @@ impl eframe::App for Snip2Pin {
             match event {
                 Event::Capture => {
                     if Instant::now() >= self.suppress_shortcut_until {
-                        self.begin_capture(ctx);
+                        self.capture_command(ctx);
                     }
                 }
                 Event::Ready(id, result, pointer) => self.accept_capture(id, result, pointer, ctx),
@@ -862,8 +968,9 @@ impl eframe::App for Snip2Pin {
         }
         if let Some(tray) = &mut self.tray {
             tray.update(
-                matches!(self.phase, Phase::Idle) && !self.recording,
+                matches!(self.phase, Phase::Idle | Phase::Capturing) && !self.recording,
                 !self.pins.is_empty(),
+                matches!(self.phase, Phase::Capturing),
             );
             if !self.exiting && ctx.input(|input| input.viewport().close_requested()) {
                 self.home_visible = false;
@@ -892,12 +999,14 @@ impl eframe::App for Snip2Pin {
                 icon_texture: self.icon_texture.as_ref(),
                 recording: self.recording,
                 idle,
+                capturing: matches!(self.phase, Phase::Capturing),
                 demo: self.demo,
                 startup: self.startup.as_ref().map(|_| self.startup_enabled),
+                permission_required: self.permission == ScreenPermission::Required,
             },
         );
         match action {
-            Some(launcher::Action::Capture) => self.begin_capture(&ctx),
+            Some(launcher::Action::Capture) => self.capture_command(&ctx),
             Some(launcher::Action::ClosePins) => self.pins.clear(),
             Some(launcher::Action::RecordShortcut) => {
                 self.recording = !self.recording;
@@ -907,6 +1016,12 @@ impl eframe::App for Snip2Pin {
                 self.change_appearance(theme, icon, &ctx)
             }
             Some(launcher::Action::Startup(enabled)) => self.set_startup(enabled),
+            Some(launcher::Action::OpenCaptureSettings) => {
+                if let Err(error) = platform::open_capture_settings() {
+                    self.message = Some(error);
+                }
+            }
+            Some(launcher::Action::Restart) => self.restart(&ctx),
             None => {}
         }
         if self.recording {
@@ -919,7 +1034,7 @@ impl eframe::App for Snip2Pin {
                     .any(|event| self.preferences.binding.matches(event))
             })
         {
-            self.begin_capture(&ctx);
+            self.capture_command(&ctx);
         }
     }
 }

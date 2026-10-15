@@ -7,6 +7,10 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snip2pin::settings::Binding;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[path = "platform/work_area.rs"]
+mod work_area;
+
 #[cfg(target_os = "macos")]
 #[path = "platform/macos.rs"]
 mod macos;
@@ -16,25 +20,83 @@ mod macos;
 pub mod macos_icon;
 
 #[cfg(target_os = "macos")]
+#[path = "platform/macos_access.rs"]
+pub mod macos_access;
+
+pub fn capture_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    return objc2_core_graphics::CGPreflightScreenCaptureAccess();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+pub fn request_capture_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos_access::request();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+pub fn open_capture_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return macos_access::open_settings();
+    #[cfg(not(target_os = "macos"))]
+    Err("当前平台没有统一的屏幕录制授权设置入口。".into())
+}
+
+/// Prepare a user-requested relaunch; the caller runs it after the app has
+/// dropped all native windows and global shortcuts. No waiting or polling.
+pub fn relaunch_command() -> Result<std::process::Command, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+    {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command.arg("-n").arg(bundle);
+        return Ok(command);
+    }
+    Ok(std::process::Command::new(executable))
+}
+
+#[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
 /// Respect AppKit's top boundary using image-aware margins: the complete image
 /// can touch the menu bar, while controls switch below it before becoming hidden.
 pub fn pin_host(frame: snip2pin::pin::Frame) -> snip2pin::pin::Frame {
+    snip2pin::pin::host_frame(frame)
+}
+
+/// Apply one user gesture before rendering. No retry or runtime class changes.
+pub fn layout_pin(id: u64, frame: snip2pin::pin::Frame) -> Option<egui::Rect> {
     #[cfg(target_os = "macos")]
     {
-        let mut frame = frame;
-        frame.fit_host_top();
-        frame
+        let thread = objc2::MainThreadMarker::new()?;
+        let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+        let title = format!("Snip2Pin · 贴图 {id}");
+        let window = app
+            .windows()
+            .into_iter()
+            .find(|window| window.title().to_string() == title)?;
+        macos::layout_pin(&window, frame)
     }
     #[cfg(not(target_os = "macos"))]
-    frame
+    {
+        let _ = (id, frame);
+        None
+    }
 }
 
 /// Read usable display bounds on the UI thread; never show or activate windows.
 pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
     let bounds =
         egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    if let Some(area) = work_area::read(display) {
+        return area;
+    }
     #[cfg(target_os = "macos")]
     if let Some(thread) = objc2::MainThreadMarker::new() {
         let screens = objc2_app_kit::NSScreen::screens(thread);
@@ -117,7 +179,7 @@ pub fn prepare_floating_windows() -> Result<(), String> {
         let application = NSApplication::sharedApplication(main_thread);
         for window in application.windows() {
             let title = window.title().to_string();
-            if title == "Snip2Pin · 框选" || title == "Snip2Pin · 贴图" {
+            if title == "Snip2Pin · 框选" || title.starts_with("Snip2Pin · 贴图") {
                 let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
@@ -125,7 +187,7 @@ pub fn prepare_floating_windows() -> Result<(), String> {
                 if window.collectionBehavior() != behavior {
                     window.setCollectionBehavior(behavior);
                 }
-                if title == "Snip2Pin · 贴图" {
+                if title.starts_with("Snip2Pin · 贴图") {
                     macos::prepare_pin(&window)?;
                 }
                 if title == "Snip2Pin · 框选" {

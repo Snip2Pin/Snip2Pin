@@ -7,6 +7,7 @@ fn app() -> Snip2Pin {
         events,
         phase: Phase::Idle,
         gate: CaptureGate::default(),
+        capture_worker: None,
         layers: BTreeMap::new(),
         active_display: None,
         pins: BTreeMap::new(),
@@ -27,7 +28,153 @@ fn app() -> Snip2Pin {
         exiting: false,
         home_visible: true,
         booting: false,
+        permission: ScreenPermission::default(),
+        relaunch: Arc::new(Mutex::new(None)),
     }
+}
+
+#[test]
+fn pending_capture_can_be_cancelled_before_the_backend_returns() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let id = app.gate.begin().expect("capture");
+    app.phase = Phase::Capturing;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+        },
+    );
+    output.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    assert!(
+        matches!(app.phase, Phase::Idle),
+        "a late backend result cannot restart a cancelled selection"
+    );
+}
+
+#[test]
+fn capture_failure_is_visible_even_if_home_was_closed() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.home_visible = false;
+    let id = app.gate.begin().expect("capture");
+    app.phase = Phase::Capturing;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.accept_capture(id, Err("generated backend failure".into()), None, ctx);
+    });
+    assert_eq!(app.message.as_deref(), Some("generated backend failure"));
+    assert!(app.home_visible);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(true)));
+}
+
+#[test]
+#[ignore = "generated 4K handoff benchmark; run explicitly in debug and release"]
+fn capture_handoff_generated_4k_benchmark() {
+    let mut timings = Vec::new();
+    for _ in 0..3 {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|input| input.max_texture_side = 8192);
+        let mut app = app();
+        let snapshots = (0..2)
+            .map(|id| Snapshot {
+                display: Display {
+                    id,
+                    origin: [id as f32 * 3840.0, 0.0],
+                    size: [3840.0, 2160.0],
+                    scale: 1.0,
+                },
+                pixels: Arc::new(ColorImage::filled(
+                    [3840, 2160],
+                    egui::Color32::from_rgb(50, 100, 150),
+                )),
+            })
+            .collect();
+        let id = app.gate.begin().expect("capture");
+        app.phase = Phase::Capturing;
+        let started = Instant::now();
+        app.accept_capture(id, Ok(snapshots), None, &ctx);
+        timings.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    eprintln!("generated 2x4K capture handoff, UI-thread milliseconds: {timings:?}");
+}
+
+#[test]
+fn oversized_capture_shows_an_error_without_uploading_or_crashing() {
+    let ctx = egui::Context::default();
+    ctx.input_mut(|input| input.max_texture_side = 128);
+    let mut app = app();
+    let id = app.gate.begin().expect("capture");
+    app.phase = Phase::Capturing;
+    let mut snapshot = capture::demo();
+    snapshot.pixels = Arc::new(ColorImage::filled([129, 1], egui::Color32::BLACK));
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layers.is_empty());
+    assert!(
+        app.message
+            .as_deref()
+            .is_some_and(|message| message.contains("128"))
+    );
+    assert!(app.home_visible);
+}
+
+#[test]
+fn missing_permission_keeps_capture_idle_and_opens_an_actionable_home() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.demo = false;
+    app.home_visible = false;
+    let mut prompts = 0;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        assert!(!app.check_capture_permission(
+            ctx,
+            || false,
+            || {
+                prompts += 1;
+                false
+            }
+        ));
+        assert!(!app.check_capture_permission(ctx, || false, || panic!("no repeated prompt")));
+    });
+    assert_eq!(prompts, 1);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert_eq!(app.permission, ScreenPermission::Required);
+    assert!(app.home_visible);
+    assert!(app.layers.is_empty());
+    assert!(app.pins.is_empty());
+    assert!(
+        app.gate.begin().is_some(),
+        "permission failure cannot occupy the capture gate"
+    );
+    assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(true)));
+    assert!(app.check_capture_permission(&ctx, || true, || panic!("already granted")));
+    assert_eq!(app.permission, ScreenPermission::Granted);
+}
+
+#[test]
+fn demo_never_requests_permission_or_relaunches_the_real_application() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    assert!(app.check_capture_permission(
+        &ctx,
+        || panic!("demo must not preflight"),
+        || panic!("demo must not request")
+    ));
+    app.restart(&ctx);
+    assert!(!app.exiting);
+    assert!(app.relaunch.lock().expect("relaunch handle").is_none());
 }
 
 #[test]
@@ -250,7 +397,7 @@ fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
         width: 7,
         height: 9,
     };
-    let expected = color_image(&capture::crop(&snapshot.pixels, rect).expect("valid crop"));
+    let expected = capture::crop(&snapshot.pixels, rect).expect("valid crop");
     let id = app.gate.begin().expect("capture starts");
     app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -269,11 +416,20 @@ fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
     );
     assert_eq!(app.pins[&1].pixels.as_ref(), &expected);
 
+    let resized = ui::pin::frame_geometry(
+        Placement {
+            position: [100.0, 100.0],
+            size: [70.0, 45.0],
+        },
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0)),
+        1.0,
+        2.0,
+    );
     app.pins[&1]
         .prepared
         .lock()
         .expect("pin geometry")
-        .set_size(egui::vec2(70.0, 45.0), 2.0);
+        .commit(resized);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
     output.textures_delta.clear();
     assert_eq!(output.platform_output.commands.len(), 1);
@@ -341,7 +497,7 @@ fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
     app.demo = false;
     let mut snapshot = capture::demo();
     snapshot.display.size = [1440.0, 900.0];
-    snapshot.pixels = image::RgbaImage::new(2880, 1800);
+    snapshot.pixels = Arc::new(ColorImage::filled([2880, 1800], egui::Color32::TRANSPARENT));
     let id = app.gate.begin().expect("capture starts");
     app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
     let layer = layer_id(0);
@@ -615,10 +771,7 @@ fn image_bounds_switch_toolbar_for_initial_capture_and_dragging() {
         let actual = expected.window;
         // This callback paints after the drag's commands have been applied by
         // the native backend. Pointer command generation is covered in ui/pin.
-        pin.prepared.lock().expect("pin state").drag.set_position(
-            expected.image.min + actual.min.to_vec2(),
-            &Coordinates::new(1.0, 1.0, 1.0),
-        );
+        pin.prepared.lock().expect("pin state").commit(expected);
         let mut input = egui::RawInput {
             viewport_id: viewport,
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),

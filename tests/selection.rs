@@ -1,4 +1,4 @@
-use image::{Rgba, RgbaImage};
+use eframe::egui::{Color32, ColorImage};
 use snip2pin::{
     capture,
     geometry::{self, PixelRect},
@@ -52,7 +52,12 @@ fn invalid_and_empty_selections_are_rejected() {
 
 #[test]
 fn cropped_pixels_are_the_exact_selected_region() {
-    let image = RgbaImage::from_fn(10, 10, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+    let image = ColorImage::new(
+        [10, 10],
+        (0..10)
+            .flat_map(|y| (0..10).map(move |x| Color32::from_rgb(x, y, 0)))
+            .collect(),
+    );
     let cropped = capture::crop(
         &image,
         PixelRect {
@@ -63,14 +68,14 @@ fn cropped_pixels_are_the_exact_selected_region() {
         },
     )
     .expect("valid crop");
-    assert_eq!(cropped.dimensions(), (4, 2));
-    assert_eq!(cropped.get_pixel(0, 0), &Rgba([2, 3, 0, 255]));
-    assert_eq!(cropped.get_pixel(3, 1), &Rgba([5, 4, 0, 255]));
+    assert_eq!(cropped.size, [4, 2]);
+    assert_eq!(cropped[(0, 0)], Color32::from_rgb(2, 3, 0));
+    assert_eq!(cropped[(3, 1)], Color32::from_rgb(5, 4, 0));
 }
 
 #[test]
 fn malformed_crop_cannot_panic_or_read_outside_image() {
-    let image = RgbaImage::new(10, 10);
+    let image = ColorImage::filled([10, 10], Color32::TRANSPARENT);
     assert!(
         capture::crop(
             &image,

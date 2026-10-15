@@ -9,6 +9,8 @@ pub enum Action {
     RecordShortcut,
     Appearance(Theme, Icon),
     Startup(bool),
+    OpenCaptureSettings,
+    Restart,
 }
 
 pub struct Model<'a> {
@@ -19,8 +21,10 @@ pub struct Model<'a> {
     pub icon_texture: Option<&'a egui::TextureHandle>,
     pub recording: bool,
     pub idle: bool,
+    pub capturing: bool,
     pub demo: bool,
     pub startup: Option<bool>,
+    pub permission_required: bool,
 }
 
 pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
@@ -51,18 +55,26 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 );
                 ui.weak("自动复制，留在框选原位。");
                 ui.add_space(LAUNCHER.section_gap);
-                let capture =
-                    egui::Button::new(RichText::new("截图并置顶").color(LAUNCHER.capture_text))
-                        .fill(LAUNCHER.capture_fill)
-                        .stroke(egui::Stroke::NONE)
-                        .corner_radius(LAUNCHER.button_radius);
+                let capture = egui::Button::new(
+                    RichText::new(if model.capturing {
+                        "正在截图 · 点击取消"
+                    } else if model.permission_required {
+                        "授权后继续截图"
+                    } else {
+                        "截图并置顶"
+                    })
+                    .color(LAUNCHER.capture_text),
+                )
+                .fill(LAUNCHER.capture_fill)
+                .stroke(egui::Stroke::NONE)
+                .corner_radius(LAUNCHER.button_radius);
                 if ui
-                    .add_enabled_ui(model.idle && !model.recording, |ui| {
+                    .add_enabled_ui((model.idle || model.capturing) && !model.recording, |ui| {
                         ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture)
                     })
                     .inner
                     .on_hover_text(
-                        "拖动框选，Esc 取消。贴图可拖动、边角缩放，按 Shift 等比缩放，双击关闭。",
+                        "拖动框选，Esc 取消。贴图可拖动、边框或边角缩放，按 Shift 等比缩放，双击关闭。",
                     )
                     .clicked()
                 {
@@ -91,6 +103,22 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 }
                 if model.recording {
                     ui.weak("按下新的组合键，Esc 取消。");
+                }
+                if model.permission_required {
+                    ui.add_space(LAUNCHER.action_gap);
+                    ui.label("需要屏幕录制权限");
+                    ui.weak("打开系统设置，允许 Snip2Pin 后返回这里继续。");
+                    if ui.button("打开授权设置").clicked() {
+                        action = Some(Action::OpenCaptureSettings);
+                    }
+                    ui.weak("已允许但仍不可用时，请重新打开应用。");
+                    if ui
+                        .button("重新打开应用")
+                        .on_hover_text("重新打开会关闭当前贴图。")
+                        .clicked()
+                    {
+                        action = Some(Action::Restart);
+                    }
                 }
                 ui.add_space(LAUNCHER.section_gap);
                 ui.separator();

@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -179,6 +180,7 @@ impl Preferences {
         self.icon.resolve(self.theme.active(system))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text).map_err(|error| format!("读取设置失败：{error}")),
@@ -198,6 +200,7 @@ impl Preferences {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(self, path: &Path) -> Result<(), String> {
         let result = || -> Result<(), Box<dyn std::error::Error>> {
             let parent = path
@@ -215,6 +218,7 @@ impl Preferences {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| {
         dirs.config_dir()

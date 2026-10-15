@@ -1,10 +1,12 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use std::sync::{Arc, Mutex};
+
 mod app;
 mod platform;
 mod startup;
 mod tray;
-mod ui;
+use snip2pin::ui;
 
 fn main() {
     if let Err(error) = run() {
@@ -18,6 +20,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let action = arguments.next();
     if action.as_deref() == Some("--version") {
         println!("Snip2Pin {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if action.as_deref() == Some("--check-installation") {
+        platform::macos_access::check_installation()?;
+        println!(
+            "Installation identity and registration verified: {}",
+            snip2pin::APP_ID
+        );
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    if action.as_deref() == Some("--check-identity-migration") {
+        let target = arguments
+            .next()
+            .ok_or("--check-identity-migration needs an application path")?;
+        platform::macos_access::check_identity_migration(std::path::Path::new(&target))?;
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -69,10 +88,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         centered: true,
         ..Default::default()
     };
+    let relaunch = Arc::new(Mutex::new(None));
+    let relaunch_request = relaunch.clone();
     eframe::run_native(
         "Snip2Pin",
         platform::window_options(options),
-        Box::new(|cc| Ok(Box::new(app::Snip2Pin::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::Snip2Pin::new(cc, relaunch_request)))),
     )?;
+    if let Some(mut command) = relaunch
+        .lock()
+        .map_err(|_| "重新打开应用的请求不可用。")?
+        .take()
+    {
+        command.spawn()?;
+    }
     Ok(())
 }

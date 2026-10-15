@@ -25,8 +25,10 @@ fn frame(
                     icon_texture: None,
                     recording: busy,
                     idle: !busy,
+                    capturing: false,
                     demo: false,
                     startup: Some(false),
+                    permission_required: false,
                 },
             );
         },

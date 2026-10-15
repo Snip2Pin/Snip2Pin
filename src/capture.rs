@@ -1,7 +1,17 @@
+use eframe::egui::ColorImage;
 use image::RgbaImage;
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use xcap::Monitor;
 
 use crate::geometry::PixelRect;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod worker;
+#[cfg(not(target_arch = "wasm32"))]
+pub use worker::Worker;
 
 #[derive(Clone, Debug)]
 pub struct Display {
@@ -14,7 +24,21 @@ pub struct Display {
 
 pub struct Snapshot {
     pub display: Display,
-    pub pixels: RgbaImage,
+    pub pixels: Arc<ColorImage>,
+}
+
+impl Snapshot {
+    /// Convert on the capture worker. Selection and GPU upload share this allocation.
+    pub fn from_rgba(display: Display, pixels: RgbaImage) -> Self {
+        let size = [pixels.width() as usize, pixels.height() as usize];
+        Self {
+            display,
+            pixels: Arc::new(ColorImage::from_rgba_unmultiplied(size, pixels.as_raw())),
+        }
+    }
+    pub fn pixel_size(&self) -> [u32; 2] {
+        self.pixels.size.map(|length| length as u32)
+    }
 }
 
 impl Display {
@@ -45,23 +69,35 @@ impl Display {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn describe(monitor: &Monitor) -> Result<Display, String> {
     let result = || -> xcap::XCapResult<Display> {
-        let scale = monitor.scale_factor()?;
-        Ok(Display {
-            id: monitor.id()?,
-            origin: [monitor.x()? as f32, monitor.y()? as f32],
-            size: [monitor.width()? as f32, monitor.height()? as f32],
-            scale: if scale.is_finite() && scale > 0.0 {
-                scale
-            } else {
-                1.0
-            },
-        })
+        Ok(from_backend(
+            monitor.id()?,
+            [monitor.x()? as f32, monitor.y()? as f32],
+            [monitor.width()? as f32, monitor.height()? as f32],
+            monitor.scale_factor()?,
+        ))
     };
     result().map_err(|error| error.to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn from_backend(id: u32, origin: [f32; 2], size: [f32; 2], scale: f32) -> Display {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    Display {
+        id,
+        origin: origin.map(|value| value * backend_units(scale)),
+        size: size.map(|value| value * backend_units(scale)),
+        scale,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn displays() -> Result<Vec<Display>, String> {
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     monitors
@@ -70,39 +106,121 @@ pub fn displays() -> Result<Vec<Display>, String> {
         .collect()
 }
 
-pub fn desktop() -> Result<Vec<Snapshot>, String> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, String> {
     #[cfg(target_os = "macos")]
-    if !objc2_core_graphics::CGPreflightScreenCaptureAccess()
-        && !objc2_core_graphics::CGRequestScreenCaptureAccess()
-    {
-        return Err("需要屏幕录制权限。请在系统设置的「隐私与安全性 → 屏幕与系统音频录制」中允许 Snip2Pin，再重新打开应用。".into());
+    if !objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+        // The UI owns authorization. A worker must never present a permission
+        // dialog or capture while access is absent/revoked.
+        return Err("尚未获得屏幕录制权限，请在应用中打开授权设置。".into());
     }
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     if monitors.is_empty() {
         return Err("没有可用屏幕。".into());
     }
-    monitors
-        .into_iter()
-        .map(|monitor| {
-            let display = describe(&monitor)?;
-            let pixels = monitor.capture_image().map_err(|error| {
-                format!("截图失败：{error}。macOS 请检查屏幕录制权限；Linux 请检查桌面截图权限。")
-            })?;
-            if pixels.width() == 0 || pixels.height() == 0 {
-                return Err("系统没有返回有效的截图。".into());
-            }
-            Ok(Snapshot { display, pixels })
-        })
-        .collect()
+    let displays = monitors
+        .iter()
+        .map(describe)
+        .collect::<Result<Vec<_>, _>>()?;
+    if let ([monitor], [display]) = (monitors.as_slice(), displays.as_slice()) {
+        return capture_monitor(monitor, display.clone(), cancelled).map(|snapshot| vec![snapshot]);
+    }
+    // Portal capture on Linux is coordinated by the desktop; do not request
+    // concurrent permission dialogs. Windows/macOS capture independent displays.
+    collect_displays(
+        displays,
+        !cfg!(target_os = "linux"),
+        |display| {
+            let monitor = Monitor::all()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|monitor| monitor.id().ok() == Some(display.id))
+                .ok_or_else(|| "显示器已断开，请重新截图。".to_string())?;
+            capture_monitor(&monitor, display, cancelled)
+        },
+        cancelled,
+    )
 }
 
-pub fn crop(image: &RgbaImage, rect: PixelRect) -> Option<RgbaImage> {
+#[cfg(not(target_arch = "wasm32"))]
+fn capture_monitor(
+    monitor: &Monitor,
+    display: Display,
+    cancelled: &AtomicBool,
+) -> Result<Snapshot, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("截图已取消。".into());
+    }
+    let pixels = monitor
+        .capture_image()
+        .map_err(|error| format!("截图失败：{error}。请检查系统截图权限。"))?;
+    if pixels.width() == 0 || pixels.height() == 0 {
+        return Err("系统没有返回有效的截图。".into());
+    }
+    Ok(Snapshot::from_rgba(display, pixels))
+}
+
+/// xcap's X11 descriptor divides XRandR coordinates by Xft scale, whereas our
+/// non-macOS native domain (including the X11 pointer) uses physical pixels.
+#[cfg(not(target_arch = "wasm32"))]
+fn backend_units(scale: f32) -> f32 {
+    if cfg!(target_os = "linux") {
+        scale
+    } else {
+        1.0
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_displays(
+    displays: Vec<Display>,
+    parallel: bool,
+    capture: impl Fn(Display) -> Result<Snapshot, String> + Sync,
+    cancelled: &AtomicBool,
+) -> Result<Vec<Snapshot>, String> {
+    let capture = |display| {
+        if cancelled.load(Ordering::Acquire) {
+            Err("截图已取消。".into())
+        } else {
+            capture(display)
+        }
+    };
+    if !parallel || displays.len() < 2 {
+        return displays.into_iter().map(capture).collect();
+    }
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = displays
+            .into_iter()
+            .map(|display| {
+                let capture = &capture;
+                scope.spawn(move || capture(display))
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| job.join().map_err(|_| "截图任务异常结束。".to_string())?)
+            .collect()
+    })
+}
+
+pub fn crop(image: &ColorImage, rect: PixelRect) -> Option<ColorImage> {
     let right = rect.x.checked_add(rect.width)?;
     let bottom = rect.y.checked_add(rect.height)?;
-    if rect.width == 0 || rect.height == 0 || right > image.width() || bottom > image.height() {
+    if rect.width == 0
+        || rect.height == 0
+        || right as usize > image.size[0]
+        || bottom as usize > image.size[1]
+    {
         return None;
     }
-    Some(image::imageops::crop_imm(image, rect.x, rect.y, rect.width, rect.height).to_image())
+    let mut pixels = Vec::with_capacity(rect.width as usize * rect.height as usize);
+    for y in rect.y..bottom {
+        let start = y as usize * image.size[0] + rect.x as usize;
+        pixels.extend_from_slice(&image.pixels[start..start + rect.width as usize]);
+    }
+    Some(ColorImage::new(
+        [rect.width as usize, rect.height as usize],
+        pixels,
+    ))
 }
 
 /// Generated pixels for development/CI: this never reads the desktop.
@@ -115,14 +233,110 @@ pub fn demo() -> Snapshot {
     };
     const PIXELS: [u32; 2] = [960, 600];
     const CELL_SIZE: u32 = 80;
-    const COLORS: [image::Rgba<u8>; 2] = [
-        image::Rgba([70, 132, 110, 255]),
-        image::Rgba([225, 238, 228, 255]),
+    const COLORS: [eframe::egui::Color32; 2] = [
+        eframe::egui::Color32::from_rgb(70, 132, 110),
+        eframe::egui::Color32::from_rgb(225, 238, 228),
     ];
     Snapshot {
         display: DISPLAY,
-        pixels: RgbaImage::from_fn(PIXELS[0], PIXELS[1], |x, y| {
-            COLORS[((x / CELL_SIZE + y / CELL_SIZE) % COLORS.len() as u32) as usize]
-        }),
+        pixels: Arc::new(ColorImage::new(
+            PIXELS.map(|size| size as usize),
+            (0..PIXELS[1])
+                .flat_map(|y| {
+                    (0..PIXELS[0]).map(move |x| {
+                        COLORS[((x / CELL_SIZE + y / CELL_SIZE) % COLORS.len() as u32) as usize]
+                    })
+                })
+                .collect(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    #[test]
+    fn backend_descriptors_use_one_native_domain_and_validate_scale_first() {
+        let display = from_backend(1, [-1920.0, 40.0], [1920.0, 1080.0], 2.0);
+        let units = if cfg!(target_os = "linux") { 2.0 } else { 1.0 };
+        assert_eq!(display.origin, [-1920.0 * units, 40.0 * units]);
+        assert_eq!(display.size, [1920.0 * units, 1080.0 * units]);
+        if cfg!(target_os = "linux") {
+            assert_eq!(display.position(), [-1920.0, 40.0]);
+            assert_eq!(display.logical_size(), [1920.0, 1080.0]);
+            assert!(display.contains([-3800.0, 100.0]));
+        }
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let display = from_backend(1, [-100.0, 20.0], [200.0, 100.0], scale);
+            assert_eq!(display.scale, 1.0);
+            assert_eq!(display.origin, [-100.0, 20.0]);
+            assert_eq!(display.size, [200.0, 100.0]);
+        }
+    }
+
+    #[test]
+    fn independent_displays_start_together_and_keep_topology_order() {
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let capture = std::thread::spawn(move || {
+            let wait = Mutex::new(wait);
+            let first = demo().display;
+            let mut second = first.clone();
+            second.id = 1;
+            collect_displays(
+                vec![first, second],
+                true,
+                |display| {
+                    entered.send(display.id).expect("entered");
+                    wait.lock().expect("wait").recv().expect("release");
+                    Ok(Snapshot {
+                        display,
+                        pixels: Arc::new(ColorImage::filled([1, 1], eframe::egui::Color32::BLACK)),
+                    })
+                },
+                &AtomicBool::new(false),
+            )
+        });
+        let first = started.recv_timeout(Duration::from_secs(5));
+        let second = started.recv_timeout(Duration::from_secs(5));
+        release.send(()).expect("release");
+        release.send(()).expect("release");
+        assert!(
+            first.is_ok() && second.is_ok(),
+            "both backends must enter before either finishes"
+        );
+        let frames = capture.join().expect("capture thread").expect("frames");
+        assert_eq!(
+            frames
+                .iter()
+                .map(|frame| frame.display.id)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn cancelling_a_serial_backend_stops_before_the_next_display() {
+        let cancelled = AtomicBool::new(false);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let display = demo().display;
+        let result = collect_displays(
+            vec![display.clone(), display],
+            false,
+            |display| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                cancelled.store(true, Ordering::Release);
+                Ok(Snapshot {
+                    display,
+                    pixels: Arc::new(ColorImage::filled([1, 1], eframe::egui::Color32::BLACK)),
+                })
+            },
+            &cancelled,
+        );
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }

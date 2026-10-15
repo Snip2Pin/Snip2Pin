@@ -3619,6 +3619,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "snip2pin-preview"
+version = "0.2.0"
+dependencies = [
+ "eframe",
+ "snip2pin",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

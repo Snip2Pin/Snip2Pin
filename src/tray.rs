@@ -15,7 +15,7 @@ pub struct Tray {
     _icon: TrayIcon,
     capture: MenuItem,
     close_pins: MenuItem,
-    state: Option<(bool, bool)>,
+    state: Option<(bool, bool, bool)>,
 }
 
 impl Tray {
@@ -85,13 +85,18 @@ impl Tray {
         })
     }
 
-    pub fn update(&mut self, capture: bool, has_pins: bool) {
-        if self.state == Some((capture, has_pins)) {
+    pub fn update(&mut self, capture: bool, has_pins: bool, capturing: bool) {
+        if self.state == Some((capture, has_pins, capturing)) {
             return;
         }
         self.capture.set_enabled(capture);
+        self.capture.set_text(if capturing {
+            "取消截图"
+        } else {
+            "截图并置顶"
+        });
         self.close_pins.set_enabled(has_pins);
-        self.state = Some((capture, has_pins));
+        self.state = Some((capture, has_pins, capturing));
     }
 }
 

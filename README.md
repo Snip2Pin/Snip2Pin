@@ -18,7 +18,7 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，拖动边角可缩放，按住 Shift 等比缩放，双击关闭；悬停显示复制图标和 ×。复制使用原始截图，macOS 贴图不遮挡 Dock 和菜单栏。
+- 拖动贴图可移动，拖动边框或边角可缩放，按住 Shift 等比缩放，双击关闭；悬停显示复制图标和 ×。复制使用原始截图，贴图按钮避开系统栏。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出。关闭主页会留在后台；主窗口可开启「开机自启」，默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
@@ -26,8 +26,8 @@ keep it above other windows, drag to move, and double-click to close.
 
 主题默认跟随系统，图标默认跟随主题；均可在主窗口修改，设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
 
-macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制」
-（较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，再重新打开应用。
+macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内「打开授权设置」，
+允许 Snip2Pin 后点击「授权后继续截图」；若仍未生效，点击「重新打开应用」。
 
 采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
 
@@ -36,7 +36,7 @@ macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制�
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
-- Drag a pin to move it, drag corners to resize, and hold **Shift** to keep its
+- Drag a pin to move it, drag edges or corners to resize, and hold **Shift** to keep its
   proportions. Double-click to close; hover for **Copy** and **×**. Copy uses the
   original screenshot; macOS pins stay below the Dock and menu bar.
 - The menu bar / tray offers Home, Capture, Close All and Quit. Closing Home keeps
@@ -49,8 +49,10 @@ Theme follows the system and icons follow the theme by default. Change either
 in the main window; settings are saved automatically. On macOS, Dock icons update
 immediately; local update installs apply the saved icon to Finder and Launchpad.
 
-On first use on macOS, allow Snip2Pin in System Settings → Privacy & Security →
-Screen Recording (Screen & System Audio Recording on newer macOS), then reopen it.
+On first capture on macOS, allow screen recording. If access is missing, use
+**“打开授权设置” (Open permission settings)**, allow Snip2Pin, then click
+**“授权后继续截图” (Continue after authorizing)**. If needed, use
+**“重新打开应用” (Reopen app)**.
 
 Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
@@ -148,7 +150,11 @@ on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
 (`~/.config/Snip2Pin` by default) on Linux. The app identifier is `io.github.Snip2Pin.Snip2Pin`.
 Explicit identifier migrations use `--install --migrate-identity`, preserving the
 same signing certificate; macOS may require screen permission again after that
-one-time identity change. Subsequent updates use ordinary `--install`.
+one-time identity change. Migration checks require Snip2Pin and System Settings
+to be fully closed, preventing cached identities from sending permission grants
+to the old app ID. Subsequent updates use ordinary `--install`. Installation
+verifies the app's bundle identity and registered path, restoring the previous
+app if validation fails.
 This script builds and optionally installs a local development bundle. Distribution
 uses the manual workflows in [the release guide](docs/workflow.md). The default
 `unverified` mode needs no paid certificate; `signed` requires production credentials
@@ -181,6 +187,7 @@ src/
   geometry.rs      Viewport-to-pixel conversion and original-position sizing
   pin.rs           Pin layout, coordinates, preparation, dragging and resizing
   session.rs       Single-capture gate and stale-result rejection
+  permission.rs    User-driven permission state; no native dialogs or polling
   app.rs           Event-driven capture/window lifecycle
   platform.rs      Global shortcut and local font/icon adapters
   settings.rs      Shortcut validation, theme/icon settings, local preferences
