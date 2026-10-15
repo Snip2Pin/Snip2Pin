@@ -132,6 +132,21 @@ fn main() {
                     target,
                     "appearance changes preserve original size and position"
                 );
+                native.setTitle(&objc2_foundation::NSString::from_str("Snip2Pin · 贴图 42"));
+                let resized = moved.resized_to(
+                    eframe::egui::Rect::from_min_size(
+                        moved.image.min + moved.window.min.to_vec2(),
+                        moved.image.size() + eframe::egui::vec2(43.0, 27.0),
+                    ),
+                    &[usable],
+                    1.0,
+                );
+                let actual = platform::layout_pin(42, resized).expect("synchronous layout");
+                assert_eq!(actual, resized.window);
+                let inner = window.inner_size().to_logical::<f64>(window.scale_factor());
+                assert_eq!(inner.width, f64::from(actual.width()));
+                assert_eq!(inner.height, f64::from(actual.height()));
+                assert_eq!(native.class(), original_class);
                 assert!(!native.isVisible());
                 assert!(!app.isActive());
                 tested = true;

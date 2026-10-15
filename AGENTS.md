@@ -15,7 +15,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
-- 自动覆盖所有显示器，每次截图刷新屏幕布局；贴图初始保持截图原始尺寸，禁止自动缩放或拉伸。用户可拖动图片边角自由缩放，按住 Shift 保持本次缩放开始时的比例。顶部空间不足时只调整位置和留白，不能借此缩放图片。
+- 自动覆盖所有显示器，每次截图刷新屏幕布局；贴图初始保持截图原始尺寸，禁止自动缩放或拉伸。用户可拖动图片四边和四角自由缩放，窄图也须保留八个方向，按住 Shift 保持本次缩放开始时的比例。顶部空间不足时优先尝试其他方向摆放按钮，只调整必要的位置和留白，不能借此缩放图片。
 - 手动缩放只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。缩放锚点、图片位置和尺寸以原生坐标保存，适配 DPI 和缩放变化；复制、关闭按钮仍须在可用区内。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页和正常关闭行为。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
@@ -56,14 +56,20 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 出现偏移或位置异常时，先定位坐标单位、DPI、缩放、窗口边框、原生系统约束及生命周期中的根因。不得用反复移动、缩放、重试或轮询来掩盖错误；之前用定位重试补偿偏移既未解决根因，又引入了死循环问题，不能再采用这种做法。
 - 图标放到图片下方的目的是让用户操作更顺畅：图片移动时复制和关闭图标仍应留在屏幕内并可操作。“顶部时把图标放下面”只是实现手段；macOS 顶部应让完整图片贴紧菜单栏下缘，不能被旧的透明上边距阻挡，也不能用裁切实现。其他方向应保留图片越界移动能力。
 - 验证用户最终能否完成操作，而不只验证中间数值或某个分支。涉及窗口行为时，检查真实的平台约束和完整交互路径；布局计算正确或隐藏窗口能设置位置，不代表用户拖动时一定正确。明确区分自动化验证与用户实际交互验证，发现缺口时补足测试。
+- 贴图以一个原生桌面坐标 Rect 保存位置与显示尺寸；手势锚点不能兼任持久几何。延迟、分批或乱序的原生窗口反馈只影响局部绘制位置，不能覆盖用户期望。系统拖动是显式手势，只在该手势期间吸收原生位移，跨 DPI 时先统一坐标单位。
+- 窗口布局与渲染的时序必须按实际后端验证。macOS 手势通过窄适配器在绘制前一次设置窗口位置和尺寸，读取实际内容边界并更新绘制裁剪；其他异步宿主按已观察边界绘制、等待事件重绘。不得把“先应用全部窗口命令”的理想测试当成后端行为，也不得用巨大透明窗口或定位重试掩盖时序问题。
+- 截图线程使用有界队列，取消立即恢复 UI、丢弃晚到结果并阻止尚未开始的后续屏幕采集，不承诺强停正在执行的系统调用。像素转换在工作线程完成，截图数据与纹理上传共享不可变图片；上传前验证 GPU 纹理边长上限。多屏并行不跨线程搬运非 Send 原生句柄，Linux Portal 不并发请求。
+- GUI 沙箱复用实际 Rust 视图和几何，不复制一套 HTML 产品界面；仅使用生成图片，禁止真实截图、系统剪贴板、权限、自启和全局快捷键操作。多 agent 评审使用各自独立的 headless 浏览器上下文；浏览器交互和隐藏原生几何验证都不能替代合成器视觉验收。
 
 ## Structure
 
-- `src/capture.rs`: monitor enumeration and in-memory screen capture.
+- `src/capture.rs`, `src/capture/worker.rs`: monitor enumeration, shared in-memory pixels and bounded cancellable capture work.
 - `src/geometry.rs`: validated pixel selection and original-position pin placement.
 - `src/pin.rs`: pin layout metrics, coordinate conversion, one-time preparation, and drag anchoring.
 - `src/app.rs`: capture state machine, events, and window lifecycle.
 - `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
+- `preview/`: local WebAssembly sandbox using the same Rust UI and generated images; no native services.
+- `docs/interactions.md`: interaction architecture, measured capture handoff and independent review findings.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: pin stacking adapter, preserving the backend's window class and observation lifecycle.

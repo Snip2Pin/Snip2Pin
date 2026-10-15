@@ -26,6 +26,7 @@ fn run() -> Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["check"] => check(),
+        ["preview", font] => preview(Path::new(font)),
         ["check-messages", base, head, title] => messages::check(base, head, title),
         ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
         ["verify-candidate", directory, target] => release::verify_candidate(Path::new(directory), target),
@@ -58,6 +59,56 @@ fn root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_owned()
+}
+
+fn preview(font: &Path) -> Result {
+    if !font.is_file() {
+        return Err("preview requires an existing local CJK font file".into());
+    }
+    let lock: toml::Value = toml::from_str(&std::fs::read_to_string("Cargo.lock")?)?;
+    let version = lock["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("wasm-bindgen"))
+        })
+        .and_then(|package| package["version"].as_str())
+        .ok_or("wasm-bindgen missing from lock file")?;
+    let installed = output(Command::new("wasm-bindgen").arg("--version"))?;
+    if installed != format!("wasm-bindgen {version}") {
+        return Err(format!(
+            "install matching tool: cargo install wasm-bindgen-cli --version {version} --locked"
+        )
+        .into());
+    }
+    execute(Command::new("cargo").args([
+        "build",
+        "--locked",
+        "--package",
+        "snip2pin-preview",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]))?;
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"));
+    execute(
+        Command::new("wasm-bindgen")
+            .arg(target.join("wasm32-unknown-unknown/debug/snip2pin_preview.wasm"))
+            .args([
+                "--target",
+                "web",
+                "--out-dir",
+                "preview/pkg",
+                "--no-typescript",
+            ]),
+    )?;
+    std::fs::copy(font, "preview/pkg/font.ttf")?;
+    println!(
+        "Sandbox ready. Serve preview/ on 127.0.0.1; generated files and local font are ignored by Git."
+    );
+    Ok(())
 }
 
 fn output(command: &mut Command) -> Result<String> {

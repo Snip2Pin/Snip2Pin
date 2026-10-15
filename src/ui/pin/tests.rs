@@ -1,8 +1,17 @@
 use super::*;
+use Action as Event;
 use egui::Vec2;
 use std::sync::mpsc;
 
 fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<ViewportCommand>) {
+    resize_trace_with_host(start, delta, false)
+}
+
+fn resize_trace_with_host(
+    start: fn(&Rect) -> Pos2,
+    delta: Vec2,
+    synchronous: bool,
+) -> (Rect, Rect, Vec<ViewportCommand>) {
     let ctx = egui::Context::default();
     let texture = ctx.load_texture(
         "trace",
@@ -11,7 +20,7 @@ fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<Viewp
     );
     let (events, _) = mpsc::channel();
     let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 800.0));
-    let initial = crate::platform::pin_host(frame_geometry(
+    let initial = snip2pin::pin::host_frame(frame_geometry(
         Placement {
             position: [160.0, 160.0],
             size: [240.0, 160.0],
@@ -58,20 +67,32 @@ fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<Viewp
             .get_mut(&egui::ViewportId::ROOT)
             .expect("root")
             .outer_rect = Some(host);
+        let mut painted_host = host;
         let mut output = ctx.run_ui(input, |ui| {
-            show(
+            show_with_host(
                 ui,
                 Model {
                     id: 1,
                     texture: &texture,
                     frame,
-                    events: &events,
+                    events: &|event| {
+                        let _ = events.send(event);
+                    },
                     monitors: &[area],
                     coordinate_ratio: 1.0,
                     minimum_size: Vec2::splat(1.0),
+                    surface: Surface::Native,
                 },
                 &mut prepared,
                 || Some((point + host.min.to_vec2()).into()),
+                |frame| {
+                    if synchronous {
+                        painted_host = frame.window;
+                        Some(frame.window)
+                    } else {
+                        None
+                    }
+                },
             );
         });
         output.textures_delta.clear();
@@ -80,6 +101,12 @@ fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<Viewp
             .iter()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                    if synchronous {
+                        assert!(
+                            shape.clip_rect.contains_rect(mesh.calc_bounds()),
+                            "new image must not retain the old host clip"
+                        );
+                    }
                     Some(mesh.calc_bounds())
                 }
                 _ => None,
@@ -88,19 +115,8 @@ fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<Viewp
         let commands = output.viewport_output[&egui::ViewportId::ROOT]
             .commands
             .clone();
-        let mut applied_host = host;
-        for command in &commands {
-            match command {
-                ViewportCommand::OuterPosition(origin) => {
-                    applied_host = Rect::from_min_size(*origin, applied_host.size())
-                }
-                ViewportCommand::InnerSize(size) => {
-                    applied_host = Rect::from_min_size(applied_host.min, *size)
-                }
-                _ => {}
-            }
-        }
-        last = Some((painted.translate(applied_host.min.to_vec2()), commands));
+        // eframe swaps this image before dispatching viewport commands.
+        last = Some((painted.translate(painted_host.min.to_vec2()), commands));
     }
     let (painted, commands) = last.expect("trace");
     (
@@ -122,6 +138,18 @@ fn resized_content_and_host_change_in_the_same_frame_without_pivot_jitter() {
         original.size() + egui::vec2(40.0, 20.0),
         "paint cannot lag one resize event behind the host"
     );
+}
+
+#[test]
+fn synchronous_layout_precedes_paint_and_updates_the_old_clip() {
+    let (original, painted, commands) =
+        resize_trace_with_host(Rect::left_top, egui::vec2(-200.0, -80.0), true);
+    assert_eq!(painted.max, original.max);
+    assert_eq!(painted.size(), original.size() + egui::vec2(200.0, 80.0));
+    assert!(commands.iter().all(|command| !matches!(
+        command,
+        ViewportCommand::InnerSize(_) | ViewportCommand::OuterPosition(_)
+    )));
 }
 
 #[test]
@@ -225,10 +253,13 @@ fn corner_drag_resizes_instead_of_moving_and_shift_preserves_aspect_ratio() {
                         id: 1,
                         texture: &texture,
                         frame,
-                        events: &sender,
+                        events: &|event| {
+                            let _ = sender.send(event);
+                        },
                         monitors: &[screen],
                         coordinate_ratio: 1.0,
                         minimum_size: Vec2::splat(1.0),
+                        surface: Surface::Native,
                     },
                     &mut prepared,
                     || global_cursor.then_some((point + frame.window.min.to_vec2()).into()),
@@ -316,10 +347,13 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
                     id: 1,
                     texture: &texture,
                     frame,
-                    events: &sender,
+                    events: &|event| {
+                        let _ = sender.send(event);
+                    },
                     monitors: &[],
                     coordinate_ratio: 1.0,
                     minimum_size: Vec2::splat(1.0),
+                    surface: Surface::Native,
                 },
                 &mut drag,
                 || Some(cursor.into()),
@@ -333,10 +367,7 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
         }
     }
     let position = requested.expect("drag requests a position");
-    let image_origin = drag
-        .drag
-        .position(frame.grid)
-        .expect("logical image position");
+    let image_origin = drag.image(frame.grid).expect("logical image position").min;
     let image = Rect::from_min_size(image_origin, frame.image.size());
     if cfg!(target_os = "macos") {
         assert_eq!(
@@ -350,7 +381,7 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
         );
     }
     assert_eq!(image.size(), frame.image.size());
-    let moved = crate::platform::pin_host(frame.moved_to(image_origin, &[screen], 1.0));
+    let moved = snip2pin::pin::host_frame(frame.moved_to(image_origin, &[screen], 1.0));
     assert_eq!(moved.window.min, position);
     assert!((moved.toolbar_side == ToolbarSide::Bottom));
     let (copy, close) = moved.toolbar_rects();
@@ -428,10 +459,13 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
                     id: 1,
                     texture: &texture,
                     frame,
-                    events: &sender,
+                    events: &|event| {
+                        let _ = sender.send(event);
+                    },
                     monitors: &[],
                     coordinate_ratio: 1.0,
                     minimum_size: Vec2::splat(1.0),
+                    surface: Surface::Native,
                 },
                 &mut drag,
                 || {
@@ -455,7 +489,7 @@ fn pointer_drag_moves_the_image_to_the_top_without_native_drag_or_idle_retries()
             })
             .collect();
         if index == 2 {
-            let moved = crate::platform::pin_host(frame.moved_to(
+            let moved = snip2pin::pin::host_frame(frame.moved_to(
                 target + frame.image.min.to_vec2(),
                 &[screen],
                 1.0,
@@ -613,10 +647,13 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
                             id: 41,
                             texture: &texture,
                             frame,
-                            events: &sender,
+                            events: &|event| {
+                                let _ = sender.send(event);
+                            },
                             monitors: &[],
                             coordinate_ratio: 1.0,
                             minimum_size: Vec2::splat(1.0),
+                            surface: Surface::Native,
                         },
                         &mut Preparation::default(),
                         || panic!("toolbar must not read the desktop cursor"),
@@ -687,10 +724,13 @@ fn close_button_tracks_hover_and_pointer_leave_without_changing_image_bounds() {
                         id: 1,
                         texture: &texture,
                         frame: layout,
-                        events: &sender,
+                        events: &|event| {
+                            let _ = sender.send(event);
+                        },
                         monitors: &[],
                         coordinate_ratio: 1.0,
                         minimum_size: Vec2::splat(1.0),
+                        surface: Surface::Native,
                     },
                     &mut Preparation::default(),
                     || panic!("hover must not read the desktop cursor"),

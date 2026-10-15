@@ -21,6 +21,7 @@ pub struct Model<'a> {
     pub icon_texture: Option<&'a egui::TextureHandle>,
     pub recording: bool,
     pub idle: bool,
+    pub capturing: bool,
     pub demo: bool,
     pub startup: Option<bool>,
     pub permission_required: bool,
@@ -55,7 +56,9 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 ui.weak("自动复制，留在框选原位。");
                 ui.add_space(LAUNCHER.section_gap);
                 let capture = egui::Button::new(
-                    RichText::new(if model.permission_required {
+                    RichText::new(if model.capturing {
+                        "正在截图 · 点击取消"
+                    } else if model.permission_required {
                         "授权后继续截图"
                     } else {
                         "截图并置顶"
@@ -66,12 +69,12 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 .stroke(egui::Stroke::NONE)
                 .corner_radius(LAUNCHER.button_radius);
                 if ui
-                    .add_enabled_ui(model.idle && !model.recording, |ui| {
+                    .add_enabled_ui((model.idle || model.capturing) && !model.recording, |ui| {
                         ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture)
                     })
                     .inner
                     .on_hover_text(
-                        "拖动框选，Esc 取消。贴图可拖动、边角缩放，按 Shift 等比缩放，双击关闭。",
+                        "拖动框选，Esc 取消。贴图可拖动、边框或边角缩放，按 Shift 等比缩放，双击关闭。",
                     )
                     .clicked()
                 {

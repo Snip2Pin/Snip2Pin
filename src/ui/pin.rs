@@ -1,10 +1,7 @@
-use std::sync::mpsc::Sender;
-
 use eframe::egui::{
     self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, ViewportCommand,
 };
 
-use crate::app::Event;
 #[cfg(test)]
 use snip2pin::geometry::Placement;
 
@@ -12,10 +9,22 @@ use snip2pin::geometry::Placement;
 use snip2pin::pin::Prepared;
 #[cfg(test)]
 use snip2pin::pin::ToolbarSide;
-use snip2pin::pin::{Coordinates, Corner, Preparation};
+use snip2pin::pin::{Coordinates, Preparation, ResizeHandle};
 pub use snip2pin::pin::{Frame, frame_geometry};
 
 use super::{icons::paint_copy_icon, style::PIN};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    CopyPin(u64),
+    ClosePin(u64),
+}
+
+#[derive(Clone, Copy)]
+pub enum Surface {
+    Native,
+    Embedded,
+}
 
 #[cfg(test)]
 fn toolbar_rects(image: Rect, below: bool) -> (Rect, Rect) {
@@ -39,82 +48,62 @@ pub struct Model<'a> {
     pub id: u64,
     pub texture: &'a TextureHandle,
     pub frame: Frame,
-    pub events: &'a Sender<Event>,
+    pub events: &'a dyn Fn(Action),
     pub monitors: &'a [Rect],
     pub coordinate_ratio: f32,
     pub minimum_size: egui::Vec2,
+    pub surface: Surface,
 }
 
 pub fn show(
     ui: &mut egui::Ui,
     model: Model<'_>,
     prepared: &mut Preparation,
+    cursor: impl FnMut() -> Option<[f32; 2]>,
+) {
+    show_with_host(ui, model, prepared, cursor, |_| None);
+}
+
+/// A native adapter may commit geometry before shapes reach the renderer.
+pub fn show_with_host(
+    ui: &mut egui::Ui,
+    model: Model<'_>,
+    prepared: &mut Preparation,
     mut cursor: impl FnMut() -> Option<[f32; 2]>,
+    mut layout: impl FnMut(Frame) -> Option<Rect>,
 ) {
     let Model {
         id,
         texture,
-        frame,
+        mut frame,
         events,
         monitors,
         coordinate_ratio,
         minimum_size,
+        surface,
     } = model;
-    let bounds = ui.max_rect();
+    let (copy, close) = frame.toolbar_rects();
+    let bounds = frame.image.expand(PIN.resize_hit).union(copy).union(close);
     let image = frame.image;
-    ui.painter()
-        .add(PIN.shadow.as_shape(image, PIN.shadow_radius));
-    ui.painter().image(
-        texture.id(),
-        image,
-        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
-    );
-    ui.painter().rect_stroke(
-        image,
-        0,
-        Stroke::new(
-            1.0 / ui.ctx().pixels_per_point(),
-            Color32::from_white_alpha(PIN.border_alpha),
-        ),
-        StrokeKind::Outside,
-    );
-    let (copy_rect, close_rect) = frame.toolbar_rects();
-    let response = ui.interact(image, ui.id().with("image-drag"), Sense::click_and_drag());
+    let response = ui
+        .interact(image, ui.id().with("image-drag"), Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::Grab)
+        .on_hover_text("拖动移动 · 双击关闭");
     let hovered = ui
         .input(|input| input.pointer.hover_pos())
         .is_some_and(|point| bounds.contains(point));
-    let handles = Corner::ALL
+    let handles = ResizeHandle::ALL
         .into_iter()
-        .filter(|corner| {
-            *corner == Corner::BottomRight || image.size().min_elem() >= PIN.resize_hit * 2.0
-        })
         .map(|corner| {
-            let point = corner.point(image);
-            let hit = Rect::from_center_size(point, egui::Vec2::splat(PIN.resize_hit));
+            let hit = corner.hit_rect(image, PIN.resize_hit);
             let response = ui
                 .interact(
                     hit,
                     ui.id().with(("resize", corner)),
                     Sense::click_and_drag(),
                 )
-                .on_hover_cursor(match corner {
-                    Corner::TopLeft | Corner::BottomRight => egui::CursorIcon::ResizeNwSe,
-                    _ => egui::CursorIcon::ResizeNeSw,
-                });
-            if hovered {
-                let delta = image.center() - point;
-                let inward = egui::vec2(delta.x.signum(), delta.y.signum());
-                let stroke = Stroke::new(1.0, Color32::WHITE);
-                ui.painter().line_segment(
-                    [point, point + egui::vec2(inward.x * PIN.resize_mark, 0.0)],
-                    stroke,
-                );
-                ui.painter().line_segment(
-                    [point, point + egui::vec2(0.0, inward.y * PIN.resize_mark)],
-                    stroke,
-                );
-            }
+                .on_hover_cursor(corner.cursor())
+                .on_hover_text("拖动缩放 · Shift 等比");
             (corner, response)
         })
         .collect::<Vec<_>>();
@@ -173,11 +162,13 @@ pub fn show(
             resized.min / coordinates.grid,
             resized.max / coordinates.grid,
         );
-        let next = crate::platform::pin_host(frame.resized_to(image, monitors, coordinate_ratio));
-        apply_frame(ui, next, prepared, &coordinates, true);
+        let next = snip2pin::pin::host_frame(frame.resized_to(image, monitors, coordinate_ratio));
+        frame = apply_frame(ui, next, prepared, surface, &mut layout);
     }
     if response.drag_started() && !prepared.resize.is_active() {
-        let native = ui.input(|input| input.viewport().inner_rect);
+        let native = ui
+            .input(|input| input.viewport().inner_rect)
+            .or_else(|| matches!(surface, Surface::Embedded).then_some(frame.window));
         if let Some(inner) = native
             && let Some(press) = ui.input(|input| input.pointer.press_origin())
             && pointer.is_some()
@@ -188,6 +179,7 @@ pub fn show(
                 &coordinates,
             );
         } else {
+            prepared.begin_system_drag(host.min * coordinates.grid);
             ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
         }
     }
@@ -207,13 +199,49 @@ pub fn show(
         let origin = frame.drag_position(proposed, inset, monitors, coordinate_ratio);
         let image_origin = frame.image.min + (origin + inset).to_vec2();
         let moved =
-            crate::platform::pin_host(frame.moved_to(image_origin, monitors, coordinate_ratio));
-        apply_frame(ui, moved, prepared, &coordinates, false);
+            snip2pin::pin::host_frame(frame.moved_to(image_origin, monitors, coordinate_ratio));
+        frame = apply_frame(ui, moved, prepared, surface, &mut layout);
     }
     if !ui.input(|input| input.pointer.primary_down()) {
         prepared.drag.end();
         prepared.resize.end();
+        prepared.end_system_drag();
     }
+    let image = frame.image;
+    ui.painter()
+        .add(PIN.shadow.as_shape(image, PIN.shadow_radius));
+    ui.painter().image(
+        texture.id(),
+        image,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    ui.painter().rect_stroke(
+        image,
+        0,
+        Stroke::new(
+            1.0 / ui.ctx().pixels_per_point(),
+            Color32::from_white_alpha(PIN.border_alpha),
+        ),
+        StrokeKind::Outside,
+    );
+    if hovered {
+        for corner in ResizeHandle::CORNERS {
+            let point = corner.point(image);
+            let delta = image.center() - point;
+            let inward = egui::vec2(delta.x.signum(), delta.y.signum());
+            let stroke = Stroke::new(1.0, Color32::WHITE);
+            ui.painter().line_segment(
+                [point, point + egui::vec2(inward.x * PIN.resize_mark, 0.0)],
+                stroke,
+            );
+            ui.painter().line_segment(
+                [point, point + egui::vec2(0.0, inward.y * PIN.resize_mark)],
+                stroke,
+            );
+        }
+    }
+    let (copy_rect, close_rect) = frame.toolbar_rects();
     if hovered {
         let copy = ui
             .put(copy_rect, egui::Button::new("").fill(PIN.button_fill))
@@ -223,7 +251,7 @@ pub fn show(
         });
         paint_copy_icon(ui, copy.rect);
         if copy.clicked() {
-            let _ = events.send(Event::CopyPin(id));
+            events(Action::CopyPin(id));
             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
         }
     }
@@ -241,29 +269,38 @@ pub fn show(
             input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
         })
     {
-        let _ = events.send(Event::ClosePin(id));
+        events(Action::ClosePin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
 }
 
 fn apply_frame(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     frame: Frame,
     prepared: &mut Preparation,
-    coordinates: &Coordinates,
-    resized: bool,
-) {
+    surface: Surface,
+    layout: &mut impl FnMut(Frame) -> Option<Rect>,
+) -> Frame {
+    prepared.commit(frame);
+    if matches!(surface, Surface::Embedded) {
+        let mut embedded = frame;
+        embedded.image = frame.image.translate(frame.window.min.to_vec2());
+        embedded.window = ui.max_rect();
+        return embedded;
+    }
+    let image = frame.image.translate(frame.window.min.to_vec2());
+    if let Some(actual) = layout(frame) {
+        ui.set_clip_rect(Rect::from_min_size(Pos2::ZERO, actual.size()));
+        let mut painted = frame;
+        painted.window = actual;
+        painted.image = image.translate(-actual.min.to_vec2());
+        return painted;
+    }
     let (inner, outer) =
         ui.input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
     let inset = inner
         .zip(outer)
         .map_or(egui::Vec2::ZERO, |(inner, outer)| inner.min - outer.min);
-    prepared
-        .drag
-        .set_position(frame.image.min + frame.window.min.to_vec2(), coordinates);
-    if resized {
-        prepared.set_size(frame.image.size(), frame.grid);
-    }
     if inner.is_none_or(|inner| inner.size() != frame.window.size()) {
         ui.ctx()
             .send_viewport_cmd(ViewportCommand::InnerSize(frame.window.size()));
@@ -273,6 +310,12 @@ fn apply_frame(
         ui.ctx()
             .send_viewport_cmd(ViewportCommand::OuterPosition(position));
     }
+    ui.ctx().request_repaint();
+    let mut painted = frame;
+    let observed = inner.unwrap_or(frame.window);
+    painted.window = observed;
+    painted.image = image.translate(-observed.min.to_vec2());
+    painted
 }
 
 #[cfg(test)]

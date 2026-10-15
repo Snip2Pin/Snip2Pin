@@ -18,7 +18,7 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，拖动边角可缩放，按住 Shift 等比缩放，双击关闭；悬停显示复制图标和 ×。复制使用原始截图，macOS 贴图不遮挡 Dock 和菜单栏。
+- 拖动贴图可移动，拖动边框或边角可缩放，按住 Shift 等比缩放，双击关闭；悬停显示复制图标和 ×。复制使用原始截图，贴图按钮避开系统栏。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出。关闭主页会留在后台；主窗口可开启「开机自启」，默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
@@ -36,7 +36,7 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
-- Drag a pin to move it, drag corners to resize, and hold **Shift** to keep its
+- Drag a pin to move it, drag edges or corners to resize, and hold **Shift** to keep its
   proportions. Double-click to close; hover for **Copy** and **×**. Copy uses the
   original screenshot; macOS pins stay below the Dock and menu bar.
 - The menu bar / tray offers Home, Capture, Close All and Quit. Closing Home keeps

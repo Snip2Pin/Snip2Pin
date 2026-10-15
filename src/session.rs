@@ -6,6 +6,9 @@ pub struct CaptureGate {
 }
 
 impl CaptureGate {
+    pub fn cancel(&mut self) {
+        self.active = None;
+    }
     pub fn begin(&mut self) -> Option<u64> {
         if self.active.is_some() {
             return None;

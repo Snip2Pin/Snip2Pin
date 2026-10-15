@@ -6,9 +6,9 @@ use snip2pin::{
 
 #[test]
 fn every_resize_corner_keeps_its_opposite_pivot_and_shift_locks_proportions() {
-    use pin::{Corner, Resize};
+    use pin::{Resize, ResizeHandle};
     let image = Rect::from_min_size(egui::pos2(-300.0, 100.0), egui::vec2(200.0, 100.0));
-    for corner in Corner::ALL {
+    for corner in ResizeHandle::CORNERS {
         let point = corner.point(image);
         let sign = egui::vec2(
             (point.x - image.center().x).signum(),
@@ -72,7 +72,7 @@ fn every_resize_corner_keeps_its_opposite_pivot_and_shift_locks_proportions() {
 fn proportional_top_resize_stops_at_menu_bar_without_moving_the_opposite_corner() {
     let image = Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 100.0));
     let mut resize = pin::Resize::default();
-    resize.begin(pin::Corner::TopLeft, image, image.min);
+    resize.begin(pin::ResizeHandle::TopLeft, image, image.min);
     let next = resize
         .update(
             egui::pos2(-300.0, -300.0),
@@ -97,7 +97,14 @@ fn manual_resize_survives_release_and_zoom_without_changing_source_placement() {
     let mut prepared = Preparation::default();
     let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
     let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
-    prepared.set_size(egui::vec2(300.0, 140.0), 1.0);
+    prepared.commit(frame.resized_to(
+        Rect::from_min_size(
+            frame.image.min + frame.window.min.to_vec2(),
+            egui::vec2(300.0, 140.0),
+        ),
+        &[area],
+        1.0,
+    ));
     let zoomed = pin::frame_geometry(placement, area, 0.5, 2.0);
     let Prepared::Paint { frame: painted, .. } =
         prepared.update(zoomed, Some(zoomed.window), Some(zoomed.window), 0.5)
@@ -109,6 +116,116 @@ fn manual_resize_survives_release_and_zoom_without_changing_source_placement() {
         egui::vec2(300.0, 140.0)
     );
     assert_eq!(placement.size, [200.0, 100.0]);
+}
+
+#[test]
+fn delayed_and_out_of_order_host_reports_never_replace_user_geometry() {
+    let area = Rect::from_min_size(egui::pos2(-1600.0, 30.0), egui::vec2(3200.0, 1000.0));
+    let initial = pin::frame_geometry(
+        Placement {
+            position: [-500.0, 200.0],
+            size: [300.0, 200.0],
+        },
+        area,
+        1.0,
+        1.0,
+    );
+    let desired = initial.resized_to(
+        Rect::from_min_max(egui::pos2(-540.0, 180.0), egui::pos2(-200.0, 400.0)),
+        &[area],
+        1.0,
+    );
+    let mut prepared = Preparation::default();
+    let _ = prepared.update(initial, Some(initial.window), Some(initial.window), 1.0);
+    prepared.commit(desired);
+    let expected = desired.image.translate(desired.window.min.to_vec2());
+    for host in [
+        initial.window,
+        Rect::from_min_size(initial.window.min, desired.window.size()),
+        Rect::from_min_size(desired.window.min, initial.window.size()),
+        initial.window,
+        desired.window,
+    ] {
+        let Prepared::Paint { frame, .. } = prepared.update(initial, Some(host), Some(host), 1.0)
+        else {
+            panic!("one initialization");
+        };
+        assert_eq!(frame.image.translate(host.min.to_vec2()), expected);
+        assert_eq!(prepared.image(1.0), Some(expected));
+    }
+}
+
+#[test]
+fn system_drag_absorbs_native_movement_but_not_a_change_of_coordinate_units() {
+    let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3000.0, 2000.0));
+    let initial = pin::frame_geometry(
+        Placement {
+            position: [1100.0, 600.0],
+            size: [300.0, 200.0],
+        },
+        area,
+        1.0,
+        1.0,
+    );
+    let mut prepared = Preparation::default();
+    prepared.commit(initial);
+    let _ = prepared.update(initial, Some(initial.window), Some(initial.window), 1.0);
+    prepared.begin_system_drag(initial.window.min);
+    let mut zoomed = initial;
+    zoomed.grid = 2.0;
+    let half_host = Rect::from_min_max(initial.window.min / 2.0, initial.window.max / 2.0);
+    let _ = prepared.update(zoomed, Some(half_host), Some(half_host), 0.5);
+    let expected = initial.image.translate(initial.window.min.to_vec2());
+    assert_eq!(prepared.image(1.0), Some(expected));
+    let moved = half_host.translate(egui::vec2(20.0, -10.0));
+    let _ = prepared.update(zoomed, Some(moved), Some(moved), 0.5);
+    assert_eq!(
+        prepared.image(1.0),
+        Some(expected.translate(egui::vec2(40.0, -20.0)))
+    );
+    prepared.end_system_drag();
+    let _ = prepared.update(zoomed, Some(half_host), Some(half_host), 0.5);
+    assert_eq!(
+        prepared.image(1.0),
+        Some(expected.translate(egui::vec2(40.0, -20.0)))
+    );
+}
+
+#[test]
+fn narrow_images_retain_distinct_edges_and_shift_anchors() {
+    use pin::{Resize, ResizeHandle};
+    for size in [
+        egui::vec2(6.0, 200.0),
+        egui::vec2(200.0, 6.0),
+        egui::vec2(6.0, 6.0),
+    ] {
+        let image = Rect::from_min_size(egui::pos2(100.0, 100.0), size);
+        for handle in ResizeHandle::ALL {
+            let hit = handle.hit_rect(image, 12.0);
+            assert!(hit.is_positive());
+            assert!(hit.contains(handle.point(image)));
+            for other in ResizeHandle::ALL {
+                if other != handle {
+                    assert!(
+                        !other.hit_rect(image, 12.0).contains(handle.point(image)),
+                        "{other:?} must not steal {handle:?}"
+                    );
+                }
+            }
+            let press = handle.point(image);
+            let mut resize = Resize::default();
+            resize.begin(handle, image, press);
+            let next = resize
+                .update(
+                    press + (press - image.center()),
+                    true,
+                    Vec2::splat(1.0),
+                    None,
+                )
+                .expect("resize");
+            assert!((next.aspect_ratio() - image.aspect_ratio()).abs() < 0.001);
+        }
+    }
 }
 
 #[test]
@@ -231,7 +348,7 @@ fn released_drag_preserves_the_complete_image_touching_the_menu_bar() {
     let mut host = frame.moved_to(desired, &[area], 1.0);
     host.fit_host_top();
     let bounded = host.image.min + host.window.min.to_vec2();
-    preparation.drag.set_position(bounded, &units);
+    preparation.commit(host);
     preparation.drag.end();
     let Prepared::Paint { frame: painted, .. } =
         preparation.update(frame, Some(host.window), Some(host.window), 1.0)

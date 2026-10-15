@@ -16,9 +16,9 @@ if "$MIGRATE" && ! "$INSTALL"; then
     printf 'Identity migration requires --install.\n' >&2
     exit 2
 fi
-PROFILE=debug
+PROFILE=release
 OUTPUT_DIR="$PROJECT_DIR/.build/macos"
-cargo build --locked
+cargo build --locked --release
 APP_DIR="$OUTPUT_DIR/Snip2Pin.app"
 rm -rf "$APP_DIR"
 ICON_VARIANT=line

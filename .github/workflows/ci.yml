@@ -72,3 +72,16 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           arguments: --locked
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Check shared Rust UI for WebAssembly (no desktop or system services)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo clippy --locked --package snip2pin-preview --target wasm32-unknown-unknown -- -D warnings
