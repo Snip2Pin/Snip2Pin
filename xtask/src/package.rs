@@ -294,6 +294,9 @@ pub fn verify_native(directory: &Path, target: &str) -> Result {
     if !data.final_package {
         return Err("cannot publish an unsigned candidate".into());
     }
+    if data.revision != revision()? || data.version != version()? {
+        return Err("final package source differs from the selected commit".into());
+    }
     let host = output(Command::new("rustc").arg("-vV"))?;
     if !host.contains(target) {
         return Err("signature checks require a native runner".into());

@@ -167,14 +167,7 @@ pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) ->
         return Err("invalid candidate run ID".into());
     }
     let run = api(&format!("actions/runs/{run_id}"))?;
-    if run["head_sha"] != revision
-        || run["head_branch"] != "main"
-        || run["event"] != "workflow_dispatch"
-        || run["path"] != ".github/workflows/candidates.yml"
-        || run["conclusion"] != "success"
-    {
-        return Err("candidate run is not a successful manual build of this main commit".into());
-    }
+    validate_candidate_run(&run)?;
     let data = package::verify(directory)?;
     validate_set(&data, version, revision)?;
     let tag = format!("v{version}");
@@ -248,9 +241,34 @@ pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) ->
     ]))
 }
 
+fn validate_candidate_run(run: &Value) -> Result {
+    if run["head_branch"] != "main"
+        || run["event"] != "workflow_dispatch"
+        || run["path"] != ".github/workflows/candidates.yml"
+        || run["conclusion"] != "success"
+    {
+        return Err("candidate run is not a successful manual main workflow".into());
+    }
+    // head_sha identifies the workflow definition, not necessarily its selected
+    // source revision. Each original artifact's revision and digest are checked
+    // against the final manifest below; main may have advanced in the meantime.
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_run_can_build_a_main_ancestor_but_cannot_come_from_a_pr() {
+        let mut run = serde_json::json!({"head_branch": "main", "event": "workflow_dispatch", "path": ".github/workflows/candidates.yml", "conclusion": "success", "head_sha": "b".repeat(40)});
+        assert!(validate_candidate_run(&run).is_ok());
+        run["event"] = "pull_request".into();
+        assert!(validate_candidate_run(&run).is_err());
+        run["event"] = "workflow_dispatch".into();
+        run["head_branch"] = "feature".into();
+        assert!(validate_candidate_run(&run).is_err());
+    }
 
     #[test]
     fn release_inputs_reject_shell_and_ref_injection() {

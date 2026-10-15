@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       revision:
-        description: Full SHA of main at dispatch time
+        description: Full source SHA already contained in main
         required: true
         type: string
 permissions:
@@ -25,7 +25,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Select the trusted source commit
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          [[ "$REVISION" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$REVISION" origin/main
+          git checkout --detach "$REVISION"
       - uses: ./.github/actions/setup
+      - name: Fresh dependency audit for the selected source
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          arguments: --locked
       - name: Exact commit and successful CI
         env:
           VERSION: ${{ inputs.version }}

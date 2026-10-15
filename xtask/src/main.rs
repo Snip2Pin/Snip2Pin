@@ -40,7 +40,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory))
         }
-        _ => Err("usage: cargo xtask check | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES --confirm | publish VERSION SHA BUILD_RUN DIR --confirm".into()),
+        _ => Err("usage: cargo xtask check | check-msrv | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES --confirm | publish VERSION SHA BUILD_RUN DIR --confirm".into()),
     }
 }
 

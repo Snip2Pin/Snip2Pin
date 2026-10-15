@@ -184,6 +184,8 @@ src/
 assets/icons/      Line/metal SVG sources and Git LFS PNG resources
 tests/             Generated-image and state-transition tests
 packaging/         macOS bundle script and Linux desktop entry
+xtask/             Shared Rust checks, package manifests and manual release tooling
+docs/workflow.md   Development, native acceptance and release procedures
 AGENTS.md          Scope, cleanup rules, and validation requirements
 ```
 

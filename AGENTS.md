@@ -69,6 +69,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `tests/`: deterministic checks using generated images.
 - `packaging/`: platform packaging metadata and scripts.
 - `.github/workflows/ci.yml`: format, Clippy, tests, and builds on all three OSes.
+- `xtask/`: shared Rust checks, package/manifest validation, license notices and manual release commands.
+- `docs/workflow.md`: contributor flow, native acceptance, local signing and approved manual publication.
+- `.github/rulesets/`: versioned main/tag protection definitions, applied and verified through GitHub.
 
 ## Development
 

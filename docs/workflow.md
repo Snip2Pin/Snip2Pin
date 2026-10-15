@@ -70,8 +70,9 @@ macOS 最低部署目标为 13.0；最低系统仍须真实机器验收。Linux 
 ## 构建候选包
 
 在 GitHub Actions 手动运行 **Build release candidates (manual)**，选择 `main`，
-填写版本和当时 `main` 的完整 SHA。工作流检查版本、干净检出、项目许可证、来源
-及这个提交的成功 CI；四个原生 runner 运行相同的 Rust 打包工具：
+填写版本和已包含在 `main` 中的完整源提交 SHA。工作流检查版本、干净检出、项目许可证、来源
+及这个提交的成功 CI，并重新拉取公告库审计依赖；允许 `main` 已经前进，构建始终检出指定提交。四个原生 runner
+运行相同的 Rust 打包工具：
 
 ```sh
 cargo xtask package TARGET release
@@ -146,7 +147,7 @@ cargo xtask stage VERSION FULL_SHA dist/final docs/releases/VERSION.md --confirm
 正确、CI 通过且版本未使用。不存在完整产物或真实验收结果时，不运行它。
 
 手动运行 **Publish verified release (manual)**，填写版本、完整 SHA、成功候选构建
-run ID，以及 `publish VERSION` 验收确认。工作流对下载的最终包在原生平台重验签名、
+run ID，以及 `publish VERSION` 验收确认。工作流先对源提交重新审计依赖，再对下载的最终包在原生平台重验签名、
 时间戳、公证、版本、架构和依赖，再冻结通过验证的文件。`release` Environment
 等待维护者批准，发布任务重新下载 Draft 并逐文件比对，确认没有中途更换后才发布。
 本次通过后不重新构建；tag 指向同一个源提交，发布后不能重写或删除版本 tag。

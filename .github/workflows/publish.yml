@@ -45,6 +45,11 @@ jobs:
           [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
           [[ "$ACCEPTANCE" == "publish $VERSION" ]]
           git merge-base --is-ancestor "$REVISION" origin/main
+          git checkout --detach "$REVISION"
+      - name: Fresh dependency audit before publication
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          arguments: --locked
   signatures:
     needs: validate
     permissions:
