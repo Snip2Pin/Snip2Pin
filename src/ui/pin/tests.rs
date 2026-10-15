@@ -2,6 +2,149 @@ use super::*;
 use egui::Vec2;
 use std::sync::mpsc;
 
+fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<ViewportCommand>) {
+    let ctx = egui::Context::default();
+    let texture = ctx.load_texture(
+        "trace",
+        egui::ColorImage::filled([2, 2], Color32::WHITE),
+        egui::TextureOptions::NEAREST,
+    );
+    let (events, _) = mpsc::channel();
+    let area = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 800.0));
+    let initial = crate::platform::pin_host(frame_geometry(
+        Placement {
+            position: [160.0, 160.0],
+            size: [240.0, 160.0],
+        },
+        area,
+        1.0,
+        1.0,
+    ));
+    let host = initial.window;
+    let mut prepared = Preparation::default();
+    let _ = prepared.update(initial, Some(host), Some(host), 1.0);
+    let press = start(&initial.image);
+    let target = press + delta;
+    let mut last = None;
+    for (point, events_in) in [
+        (press, vec![egui::Event::PointerMoved(press)]),
+        (
+            press,
+            vec![egui::Event::PointerButton {
+                pos: press,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ),
+        (target, vec![egui::Event::PointerMoved(target)]),
+    ] {
+        let Prepared::Paint { frame, .. } = prepared.update(initial, Some(host), Some(host), 1.0)
+        else {
+            panic!("already initialized")
+        };
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, host.size())),
+            events: events_in,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root")
+            .inner_rect = Some(host);
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .expect("root")
+            .outer_rect = Some(host);
+        let mut output = ctx.run_ui(input, |ui| {
+            show(
+                ui,
+                Model {
+                    id: 1,
+                    texture: &texture,
+                    frame,
+                    events: &events,
+                    monitors: &[area],
+                    coordinate_ratio: 1.0,
+                    minimum_size: Vec2::splat(1.0),
+                },
+                &mut prepared,
+                || Some((point + host.min.to_vec2()).into()),
+            );
+        });
+        output.textures_delta.clear();
+        let painted = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                    Some(mesh.calc_bounds())
+                }
+                _ => None,
+            })
+            .expect("painted image");
+        let commands = output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .clone();
+        let mut applied_host = host;
+        for command in &commands {
+            match command {
+                ViewportCommand::OuterPosition(origin) => {
+                    applied_host = Rect::from_min_size(*origin, applied_host.size())
+                }
+                ViewportCommand::InnerSize(size) => {
+                    applied_host = Rect::from_min_size(applied_host.min, *size)
+                }
+                _ => {}
+            }
+        }
+        last = Some((painted.translate(applied_host.min.to_vec2()), commands));
+    }
+    let (painted, commands) = last.expect("trace");
+    (
+        initial.image.translate(host.min.to_vec2()),
+        painted,
+        commands,
+    )
+}
+
+#[test]
+fn resized_content_and_host_change_in_the_same_frame_without_pivot_jitter() {
+    let (original, painted, _) = resize_trace(Rect::left_top, egui::vec2(-40.0, -20.0));
+    assert_eq!(
+        painted.max, original.max,
+        "the fixed opposite corner cannot jump when the host moves"
+    );
+    assert_eq!(
+        painted.size(),
+        original.size() + egui::vec2(40.0, 20.0),
+        "paint cannot lag one resize event behind the host"
+    );
+}
+
+#[test]
+fn every_image_edge_can_resize_without_moving_the_whole_pin() {
+    for (point, delta) in [
+        (
+            Rect::left_center as fn(&Rect) -> Pos2,
+            egui::vec2(-30.0, 0.0),
+        ),
+        (Rect::right_center, egui::vec2(30.0, 0.0)),
+        (Rect::center_top, egui::vec2(0.0, -30.0)),
+        (Rect::center_bottom, egui::vec2(0.0, 30.0)),
+    ] {
+        let (_, _, commands) = resize_trace(point, delta);
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::InnerSize(_))),
+            "dragging an edge must resize instead of translating the image"
+        );
+    }
+}
+
 #[test]
 fn corner_drag_resizes_instead_of_moving_and_shift_preserves_aspect_ratio() {
     for (proportional, global_cursor, known_position) in [
@@ -138,7 +281,7 @@ fn upward_drag_respects_system_bounds_and_keeps_lower_buttons_reachable() {
         1.0,
         1.0,
     );
-    let press = frame.image.center_bottom() - egui::vec2(0.0, 1.0);
+    let press = frame.image.center();
     let cursor = egui::pos2(frame.window.min.x + press.x, 0.0);
     let local = cursor - frame.window.min.to_vec2();
     let mut drag = Preparation::default();

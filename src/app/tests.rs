@@ -33,6 +33,64 @@ fn app() -> Snip2Pin {
 }
 
 #[test]
+fn pending_capture_can_be_cancelled_before_the_backend_returns() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let id = app.gate.begin().expect("capture");
+    app.phase = Phase::Capturing;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+        },
+    );
+    output.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    assert!(
+        matches!(app.phase, Phase::Idle),
+        "a late backend result cannot restart a cancelled selection"
+    );
+}
+
+#[test]
+#[ignore = "generated 4K handoff benchmark; run explicitly in debug and release"]
+fn capture_handoff_generated_4k_benchmark() {
+    let mut timings = Vec::new();
+    for _ in 0..3 {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|input| input.max_texture_side = 8192);
+        let mut app = app();
+        let snapshots = (0..2)
+            .map(|id| Snapshot {
+                display: Display {
+                    id,
+                    origin: [id as f32 * 3840.0, 0.0],
+                    size: [3840.0, 2160.0],
+                    scale: 1.0,
+                },
+                pixels: image::RgbaImage::from_pixel(3840, 2160, image::Rgba([50, 100, 150, 255])),
+            })
+            .collect();
+        let id = app.gate.begin().expect("capture");
+        app.phase = Phase::Capturing;
+        let started = Instant::now();
+        app.accept_capture(id, Ok(snapshots), None, &ctx);
+        timings.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    eprintln!("generated 2x4K capture handoff, UI-thread milliseconds: {timings:?}");
+}
+
+#[test]
 fn missing_permission_keeps_capture_idle_and_opens_an_actionable_home() {
     let ctx = egui::Context::default();
     let mut app = app();
