@@ -99,6 +99,23 @@ fn missing(error: &windows_result::Error) -> bool {
         == windows_result::HRESULT::from_win32(windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND)
 }
 
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::missing;
+    use windows_result::{Error, HRESULT};
+    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND};
+
+    #[test]
+    fn only_a_missing_startup_entry_is_treated_as_disabled() {
+        assert!(missing(&Error::from_hresult(HRESULT::from_win32(
+            ERROR_FILE_NOT_FOUND
+        ))));
+        assert!(!missing(&Error::from_hresult(HRESULT::from_win32(
+            ERROR_ACCESS_DENIED
+        ))));
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 fn write_entry(path: &Path, data: &[u8], enabled: bool) -> Result<(), String> {
     let result = || -> Result<(), Box<dyn std::error::Error>> {
