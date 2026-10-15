@@ -64,7 +64,10 @@ pub fn digest(path: &Path) -> Result<String> {
     if fs::metadata(path)?.len() > 512 * 1024 * 1024 {
         return Err("package exceeds 512 MiB".into());
     }
-    Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    Ok(Sha256::digest(fs::read(path)?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn write_manifest(directory: &Path, data: &Manifest) -> Result {
@@ -390,6 +393,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sha256_matches_known_vectors_with_lowercase_and_leading_zeroes() {
+        let directory = tempfile::tempdir().expect("fixture");
+        let file = directory.path().join("payload");
+        for (input, expected) in [
+            (
+                "",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                "abc",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+        ] {
+            fs::write(&file, input).expect("payload");
+            assert_eq!(digest(&file).expect("SHA-256"), expected);
+        }
+    }
+
+    #[test]
     fn manifest_rejects_path_traversal_and_unknown_targets() {
         let mut data = Manifest {
             schema: 1,
@@ -416,17 +438,18 @@ mod tests {
         let final_dir = directory.path().join("final");
         fs::create_dir_all(&candidate).expect("candidate directory");
         fs::create_dir_all(&final_dir).expect("final directory");
+        let file = filename("0.2.0", TARGETS[3], false);
+        fs::write(candidate.join(&file), b"original").expect("payload");
         let data = Manifest {
             schema: 1,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[3].into(),
             final_package: false,
-            file: filename("0.2.0", TARGETS[3], false),
-            sha256: format!("{:x}", Sha256::digest(b"original")),
+            sha256: digest(&candidate.join(&file)).expect("candidate digest"),
+            file,
             candidate_sha256: None,
         };
-        fs::write(candidate.join(&data.file), b"original").expect("payload");
         write_manifest(&candidate, &data).expect("manifest");
         assert_eq!(verify(&candidate).expect("valid").len(), 1);
         let archive = final_dir.join(filename("0.2.0", TARGETS[3], true));
