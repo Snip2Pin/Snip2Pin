@@ -131,6 +131,38 @@ fn oversized_capture_shows_an_error_without_uploading_or_crashing() {
 }
 
 #[test]
+fn initial_display_fit_keeps_original_capture_pixels_for_copy() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let snapshot = capture::demo();
+    let original = snapshot.pixels.clone();
+    let rect = geometry::PixelRect {
+        x: 0,
+        y: 0,
+        width: original.size[0] as u32,
+        height: original.size[1] as u32,
+    };
+    let session = app.gate.begin().expect("capture");
+    app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.selection_action(session, 0, overlay::Action::Select(rect), ui.ctx());
+    });
+    output.textures_delta.clear();
+    let pin = &app.pins[&1];
+    let layout = ui::pin::frame_geometry(pin.placement, pin.screen, 1.0, 1.0);
+    assert!(layout.image.width() < pin.placement.size[0]);
+    assert_eq!(pin.pixels.as_ref(), original.as_ref());
+    assert!(
+        matches!(&output.platform_output.commands[0], egui::OutputCommand::CopyImage(pixels) if pixels == original.as_ref())
+    );
+    let mut copy = ctx.run_ui(egui::RawInput::default(), |ui| app.copy_pin(1, ui.ctx()));
+    copy.textures_delta.clear();
+    assert!(
+        matches!(&copy.platform_output.commands[0], egui::OutputCommand::CopyImage(pixels) if pixels == original.as_ref())
+    );
+}
+
+#[test]
 fn missing_permission_keeps_capture_idle_and_opens_an_actionable_home() {
     let ctx = egui::Context::default();
     let mut app = app();

@@ -14,6 +14,10 @@ Snip2Pin 使用短分支、PR 和三平台检查，只有用户明确要求时�
 4. 运行 `cargo xtask check`，提交有意义的 Git 历史，创建 PR。
 5. 记录自动检查和真实交互的不同覆盖范围，解决审阅讨论后 squash 合并。
 
+评审过程、意见、单次性能数据和验收记录放到对应 PR 评论；仓库只保留当前使用、
+开发、架构和维护文档。新方案与先前确认的需求冲突时，先说明原因和取舍并询问用户，
+确认前继续其他独立工作，不擅自更改或默认否决方案。
+
 `main` 禁止直接推送、强推和删除，要求四个原生目标及依赖检查通过，且分支包含
 最新主分支。单人维护不要求另一人审批；增加协作者后再启用至少一人审阅。
 规则定义保存在 `.github/rulesets/`；修改文件后仍需通过 GitHub API 应用并读回核对。
@@ -46,10 +50,24 @@ CI 对 PR、`main` 推送和手动验证运行，取消同一分支的过期检�
 CI 在四种原生 runner 上验证开发包及 unverified 最终包结构、完整性和 `--version`，
 macOS 测试可使用不带证书的 ad-hoc 完整性签名，不访问本机或生产身份，不显示 GUI。
 
-WebAssembly 检查独立编译共享 UI，避免只在网页入口使用的代码漏检。无需为评审操作
-真实桌面：按 [交互验证记录](interactions.md) 构建生成图片沙箱，各评审使用独立
-headless 浏览器。沙箱不提供真实截图、系统剪贴板、自启或全局快捷键注册。
+WebAssembly 检查独立编译共享 UI，避免只在网页入口使用的代码漏检。GUI 沙箱复用
+Rust 视图，使用生成图片，不提供真实截图、系统剪贴板、自启或全局快捷键注册。
 本地 `packaging/macos/build.sh --install` 使用优化构建；这属于开发安装，不是发版。
+
+### 本地 GUI 沙箱
+
+安装锁文件匹配的 wasm-bindgen-cli，传入本机 CJK 字体后构建，仅在回环地址访问：
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+cargo xtask preview '/System/Library/Fonts/STHeiti Light.ttc'
+python3 -m http.server 8765 --bind 127.0.0.1 --directory preview
+```
+
+Windows/Linux 使用本机 `.ttf`、`.ttc` 或 `.otf` 字体路径。生成文件与字体位于
+Git 忽略的 `preview/pkg/`，不提交或对外发布。自动化使用独立 headless 浏览器上下文，
+不连接用户的现有浏览器；网页与隐藏窗口检查不能替代原生合成器交互验收。
 
 Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lock 必须提交。
 `deny.toml` 检查 RustSec、依赖许可证及来源，重复版本作为提示；不得为通过检查

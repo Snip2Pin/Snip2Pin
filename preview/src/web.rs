@@ -231,7 +231,8 @@ impl eframe::App for Sandbox {
                 bounds,
                 1.0,
                 1.0,
-            );
+            )
+            .resized_to(image, &[bounds], 1.0);
             frame.image = frame.image.translate(frame.window.min.to_vec2());
             let window = frame.window;
             frame.window = bounds;

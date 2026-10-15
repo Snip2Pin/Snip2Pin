@@ -396,6 +396,7 @@ impl Snip2Pin {
     }
 
     fn restore(&mut self, ctx: &egui::Context) {
+        ctx.set_cursor_icon(egui::CursorIcon::Default);
         self.gate.cancel();
         if let Some(worker) = &self.capture_worker {
             worker.cancel();
@@ -407,7 +408,7 @@ impl Snip2Pin {
         }
         self.phase = Phase::Idle;
         self.active_display = None;
-        if was_selecting {
+        if was_selecting && !self.demo {
             platform::finish_capture(ctx);
         }
         ctx.request_repaint_of(ViewportId::ROOT);
@@ -809,6 +810,9 @@ impl Snip2Pin {
                         ui.ctx()
                             .send_viewport_cmd(ViewportCommand::OuterPosition(target));
                     }
+                    if !active {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                    }
                     if let (Some(selection), Some(id)) = (&selection, session)
                         && let Ok(mut selection) = selection.lock()
                         && let Some(action) = overlay::show(ui, &mut selection, pointer_display)
@@ -898,6 +902,7 @@ impl Snip2Pin {
                     if let Some(actual) = inner {
                         frame.place_controls(actual, &screen_areas, screen, ratio);
                     }
+                    let painter = ui.painter().clone();
                     ui::pin::show_with_host(
                         ui,
                         ui::pin::Model {
@@ -917,7 +922,7 @@ impl Snip2Pin {
                         },
                         &mut prepared,
                         platform::pointer_position,
-                        |frame| platform::layout_pin(id, frame),
+                        |frame| platform::layout_pin(id, frame, Some(&painter)),
                     );
                     if first_frame {
                         let _ = events.send(Event::PinReady(session, id));

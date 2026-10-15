@@ -76,27 +76,75 @@ pub struct Frame {
 }
 
 pub fn frame_geometry(placement: Placement, screen: Rect, ratio: f32, grid: f32) -> Frame {
-    let mut position = Pos2::from(placement.position) * ratio;
-    let size = Vec2::from(placement.size) * ratio;
-    let screen_top = (screen.min.y * ratio * grid).ceil() / grid;
-    let vertical_margin = METRICS.padding + METRICS.toolbar_height();
-    let top_edge = position.y - vertical_margin < screen_top;
-    position.y = position.y.max(screen_top);
-    let mut frame = image_frame(position, size, scale_rect(screen, ratio), grid);
-    frame.place_controls(frame.window, &[], frame.controls_area, 1.0);
-    let (copy, close) = frame.toolbar_rects();
-    if !frame
-        .controls_area
-        .contains_rect(copy.union(close).translate(frame.window.min.to_vec2()))
-    {
-        // Move only when no side can keep controls reachable at the source
-        // position. Tall images can use a side instead of being pushed down.
-        position.y = position.y.max(screen_top + METRICS.toolbar_height());
-        frame = image_frame(position, size, scale_rect(screen, ratio), grid);
-        frame.place_controls(frame.window, &[], frame.controls_area, 1.0);
+    let position = Pos2::from(placement.position) * ratio;
+    let original = Vec2::from(placement.size) * ratio;
+    let area = scale_rect(screen, ratio);
+    let top_edge = position.y - METRICS.padding - METRICS.toolbar_height() < area.min.y;
+    let spaces = [
+        ToolbarSide::Top,
+        ToolbarSide::Bottom,
+        ToolbarSide::Left,
+        ToolbarSide::Right,
+    ]
+    .map(|side| initial_image_space(area, side));
+    let factor = spaces
+        .iter()
+        .flatten()
+        .map(|space| (space.size() / original).min_elem().min(1.0))
+        .fold(0.0_f32, f32::max);
+    // Leave one floating-point step for exact containment at fractional DPI.
+    // Only the initial layout fits; user movement/resizing bypasses this path.
+    let factor = if factor > 0.0 && factor < 1.0 {
+        factor.next_down()
+    } else {
+        1.0
+    };
+    let size = original * factor;
+    let mut best = image_frame(position, size, area, grid);
+    let mut distance = f32::INFINITY;
+    for space in spaces.into_iter().flatten() {
+        if space.width() < size.x || space.height() < size.y {
+            continue;
+        }
+        let origin = position.clamp(space.min, (space.max - size).max(space.min));
+        let moved = origin.distance_sq(position);
+        if moved < distance {
+            let mut frame = image_frame(origin, size, area, grid);
+            frame.place_controls(frame.window, &[], area, 1.0);
+            best = frame;
+            distance = moved;
+        }
     }
-    frame.top_edge = top_edge;
-    frame
+    best.top_edge = top_edge;
+    best
+}
+
+fn initial_image_space(area: Rect, side: ToolbarSide) -> Option<Rect> {
+    let mut space = area;
+    match side {
+        ToolbarSide::Top | ToolbarSide::Bottom => {
+            if area.width() < METRICS.toolbar_width() {
+                return None;
+            }
+            if side == ToolbarSide::Top {
+                space.min.y += METRICS.toolbar_height();
+            } else {
+                space.max.y -= METRICS.toolbar_height();
+            }
+        }
+        ToolbarSide::Left | ToolbarSide::Right => {
+            if area.height() < METRICS.button {
+                return None;
+            }
+            let width = METRICS.toolbar_width() + METRICS.image_gap;
+            if side == ToolbarSide::Left {
+                space.min.x += width;
+            } else {
+                space.max.x -= width;
+            }
+        }
+    }
+    space.is_positive().then_some(space)
 }
 
 fn image_frame(position: Pos2, size: Vec2, area: Rect, grid: f32) -> Frame {
@@ -460,7 +508,7 @@ impl Resize {
         });
     }
     /// Native coordinates keep the opposite corner and grabbed pixel stable
-    /// across DPI changes. Shift locks the proportions at gesture start.
+    /// across DPI changes. Proportional mode retains the gesture-start ratio.
     pub fn update(
         &self,
         pointer: Pos2,
@@ -474,8 +522,6 @@ impl Resize {
         let mut size = (anchor.image.size() + delta).max(minimum);
         let limit = if direction.y < 0.0 {
             top.map(|top| (anchor.image.max.y - top).max(minimum.y))
-        } else if direction.y == 0.0 && proportional {
-            top.map(|top| ((anchor.image.center().y - top) * 2.0).max(minimum.y))
         } else {
             None
         };
@@ -493,14 +539,17 @@ impl Resize {
         } else if let Some(height) = limit {
             size.y = size.y.min(height);
         }
-        let pivot = anchor.corner.opposite().point(anchor.image);
+        let pivot = match anchor.corner {
+            ResizeHandle::Left => anchor.image.right_top(),
+            ResizeHandle::Right | ResizeHandle::Bottom => anchor.image.left_top(),
+            ResizeHandle::Top => anchor.image.left_bottom(),
+            corner => corner.opposite().point(anchor.image),
+        };
         let axis = |pivot: f32, size: f32, direction: f32| {
             if direction < 0.0 {
                 (pivot - size, pivot)
-            } else if direction > 0.0 {
-                (pivot, pivot + size)
             } else {
-                (pivot - size / 2.0, pivot + size / 2.0)
+                (pivot, pivot + size)
             }
         };
         let (left, right) = axis(pivot.x, size.x, direction.x);

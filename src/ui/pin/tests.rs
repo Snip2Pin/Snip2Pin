@@ -4,13 +4,14 @@ use egui::Vec2;
 use std::sync::mpsc;
 
 fn resize_trace(start: fn(&Rect) -> Pos2, delta: Vec2) -> (Rect, Rect, Vec<ViewportCommand>) {
-    resize_trace_with_host(start, delta, false)
+    resize_trace_with_host(start, delta, false, false)
 }
 
 fn resize_trace_with_host(
     start: fn(&Rect) -> Pos2,
     delta: Vec2,
     synchronous: bool,
+    shift: bool,
 ) -> (Rect, Rect, Vec<ViewportCommand>) {
     let ctx = egui::Context::default();
     let texture = ctx.load_texture(
@@ -35,7 +36,11 @@ fn resize_trace_with_host(
     let press = start(&initial.image);
     let target = press + delta;
     let mut last = None;
-    for (point, events_in) in [
+    let modifiers = egui::Modifiers {
+        shift,
+        ..egui::Modifiers::NONE
+    };
+    for (point, mut events_in) in [
         (press, vec![egui::Event::PointerMoved(press)]),
         (
             press,
@@ -43,11 +48,12 @@ fn resize_trace_with_host(
                 pos: press,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             }],
         ),
         (target, vec![egui::Event::PointerMoved(target)]),
     ] {
+        events_in.insert(0, egui::Event::ModifiersChanged(modifiers));
         let Prepared::Paint { frame, .. } = prepared.update(initial, Some(host), Some(host), 1.0)
         else {
             panic!("already initialized")
@@ -128,14 +134,14 @@ fn resize_trace_with_host(
 
 #[test]
 fn resized_content_and_host_change_in_the_same_frame_without_pivot_jitter() {
-    let (original, painted, _) = resize_trace(Rect::left_top, egui::vec2(-40.0, -20.0));
+    let (original, painted, _) = resize_trace(Rect::left_top, egui::vec2(-30.0, -20.0));
     assert_eq!(
         painted.max, original.max,
         "the fixed opposite corner cannot jump when the host moves"
     );
     assert_eq!(
         painted.size(),
-        original.size() + egui::vec2(40.0, 20.0),
+        original.size() + egui::vec2(30.0, 20.0),
         "paint cannot lag one resize event behind the host"
     );
 }
@@ -143,9 +149,9 @@ fn resized_content_and_host_change_in_the_same_frame_without_pivot_jitter() {
 #[test]
 fn synchronous_layout_precedes_paint_and_updates_the_old_clip() {
     let (original, painted, commands) =
-        resize_trace_with_host(Rect::left_top, egui::vec2(-200.0, -80.0), true);
+        resize_trace_with_host(Rect::left_top, egui::vec2(-240.0, -160.0), true, false);
     assert_eq!(painted.max, original.max);
-    assert_eq!(painted.size(), original.size() + egui::vec2(200.0, 80.0));
+    assert_eq!(painted.size(), original.size() + egui::vec2(240.0, 160.0));
     assert!(commands.iter().all(|command| !matches!(
         command,
         ViewportCommand::InnerSize(_) | ViewportCommand::OuterPosition(_)
@@ -163,7 +169,14 @@ fn every_image_edge_can_resize_without_moving_the_whole_pin() {
         (Rect::center_top, egui::vec2(0.0, -30.0)),
         (Rect::center_bottom, egui::vec2(0.0, 30.0)),
     ] {
-        let (_, _, commands) = resize_trace(point, delta);
+        let (original, proportional, commands) = resize_trace(point, delta);
+        assert!((original.aspect_ratio() - proportional.aspect_ratio()).abs() < 0.001);
+        let (_, free, _) = resize_trace_with_host(point, delta, false, true);
+        assert_eq!(free.size(), original.size() + delta.abs());
+        if point(&original) == original.right_center() {
+            assert_eq!(proportional.left_top(), original.left_top());
+            assert_eq!(free.left_top(), original.left_top());
+        }
         assert!(
             commands
                 .iter()
@@ -174,7 +187,19 @@ fn every_image_edge_can_resize_without_moving_the_whole_pin() {
 }
 
 #[test]
-fn corner_drag_resizes_instead_of_moving_and_shift_preserves_aspect_ratio() {
+fn bottom_left_and_top_right_drags_keep_the_opposite_painted_corner_fixed() {
+    for shift in [false, true] {
+        let (original, painted, _) =
+            resize_trace_with_host(Rect::left_bottom, egui::vec2(-45.0, 20.0), true, shift);
+        assert_eq!(painted.right_top(), original.right_top());
+        let (original, painted, _) =
+            resize_trace_with_host(Rect::right_top, egui::vec2(45.0, -20.0), true, shift);
+        assert_eq!(painted.left_bottom(), original.left_bottom());
+    }
+}
+
+#[test]
+fn corner_drag_defaults_to_proportional_resize_and_shift_allows_free_resize() {
     for (proportional, global_cursor, known_position) in [
         (false, true, true),
         (true, true, true),
@@ -206,7 +231,7 @@ fn corner_drag_resizes_instead_of_moving_and_shift_preserves_aspect_ratio() {
         let press = frame.image.right_bottom();
         let target = press + egui::vec2(40.0, 10.0);
         let modifiers = egui::Modifiers {
-            shift: proportional,
+            shift: !proportional,
             ..egui::Modifiers::NONE
         };
         let mut resized = false;
@@ -543,7 +568,7 @@ fn toolbar_fits_tiny_images_without_changing_their_desktop_bounds() {
 }
 
 #[test]
-fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
+fn top_edge_layout_keeps_full_image_and_controls_visible() {
     for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
         for ratio in [1.0, 0.8] {
             for size in [[12.0, 8.0], [193.0, 121.0], [680.0, 420.0]] {
@@ -565,12 +590,17 @@ fn top_edge_layout_preserves_original_dimensions_and_keeps_controls_visible() {
                 assert!(visible.contains_rect(copy.translate(frame.window.min.to_vec2())));
                 assert!(visible.contains_rect(close.translate(frame.window.min.to_vec2())));
                 assert!(!copy.intersects(frame.image) && !close.intersects(frame.image));
-                assert_eq!((frame.toolbar_side == ToolbarSide::Bottom), size[1] < 200.0);
+                assert_eq!(frame.toolbar_side, ToolbarSide::Bottom);
                 assert!((frame.image.aspect_ratio() - size[0] / size[1]).abs() < 0.001);
-                assert!(
-                    (frame.image.size() - egui::vec2(size[0], size[1]) * ratio).length() < 0.001,
-                    "even tall captures must keep their original dimensions"
-                );
+                assert!(visible.contains_rect(frame.image.translate(frame.window.min.to_vec2())));
+                if size[1] < screen.height() {
+                    assert!(
+                        (frame.image.size() - egui::vec2(size[0], size[1]) * ratio).length()
+                            < 0.001
+                    );
+                } else {
+                    assert!(frame.image.width() < size[0] * ratio);
+                }
             }
         }
     }
@@ -611,7 +641,7 @@ fn clicking_toolbar_buttons_dispatches_actions_without_window_drag() {
             1.0,
             1.0,
         );
-        frame.place_controls(frame.window, &[screen], screen, 1.0);
+        frame = frame.moved_to(position, &[screen], 1.0);
         assert_eq!(frame.toolbar_side, side);
         let (copy_rect, close_rect) = frame.toolbar_rects();
         let point = if copy {

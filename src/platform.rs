@@ -70,7 +70,11 @@ pub fn pin_host(frame: snip2pin::pin::Frame) -> snip2pin::pin::Frame {
 }
 
 /// Apply one user gesture before rendering. No retry or runtime class changes.
-pub fn layout_pin(id: u64, frame: snip2pin::pin::Frame) -> Option<egui::Rect> {
+pub fn layout_pin(
+    id: u64,
+    frame: snip2pin::pin::Frame,
+    painter: Option<&egui::Painter>,
+) -> Option<egui::Rect> {
     #[cfg(target_os = "macos")]
     {
         let thread = objc2::MainThreadMarker::new()?;
@@ -80,11 +84,18 @@ pub fn layout_pin(id: u64, frame: snip2pin::pin::Frame) -> Option<egui::Rect> {
             .windows()
             .into_iter()
             .find(|window| window.title().to_string() == title)?;
-        macos::layout_pin(&window, frame)
+        let (actual, changed) = macos::layout_pin(&window, frame)?;
+        if changed && let Some(painter) = painter {
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size());
+            painter
+                .with_clip_rect(bounds)
+                .add(macos::drawable_callback(id, bounds));
+        }
+        Some(actual)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (id, frame);
+        let _ = (id, frame, painter);
         None
     }
 }
@@ -222,6 +233,7 @@ pub fn finish_capture(ctx: &egui::Context) {
     {
         let _ = ctx;
         if let Some(main_thread) = objc2::MainThreadMarker::new() {
+            objc2_app_kit::NSCursor::arrowCursor().set();
             let application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
             for window in application.windows() {
                 if window.title().to_string() == "Snip2Pin · 框选" && window.isKeyWindow() {
