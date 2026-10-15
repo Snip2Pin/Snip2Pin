@@ -95,24 +95,22 @@ const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 #[cfg(target_os = "windows")]
 fn missing(error: &windows_result::Error) -> bool {
-    error.code()
-        == windows_result::HRESULT::from_win32(windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND)
+    windows_result::WIN32_ERROR::from_error(error)
+        == Some(windows_result::WIN32_ERROR(
+            windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND,
+        ))
 }
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {
     use super::missing;
-    use windows_result::{Error, HRESULT};
+    use windows_result::WIN32_ERROR;
     use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND};
 
     #[test]
     fn only_a_missing_startup_entry_is_treated_as_disabled() {
-        assert!(missing(&Error::from_hresult(HRESULT::from_win32(
-            ERROR_FILE_NOT_FOUND
-        ))));
-        assert!(!missing(&Error::from_hresult(HRESULT::from_win32(
-            ERROR_ACCESS_DENIED
-        ))));
+        assert!(missing(&WIN32_ERROR(ERROR_FILE_NOT_FOUND).into()));
+        assert!(!missing(&WIN32_ERROR(ERROR_ACCESS_DENIED).into()));
     }
 }
 
