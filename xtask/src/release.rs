@@ -1,10 +1,11 @@
-use crate::package::{self, Manifest, TARGETS};
+use crate::package::{self, Distribution, Manifest, TARGETS};
 use crate::{Result, execute, manifest, output, revision};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
 const REPOSITORY: &str = "Snip2Pin/Snip2Pin";
+const UNVERIFIED_NOTICE: &str = "## 未验证发布者 / Unverified publisher\n\n这些安装包没有受系统信任的发布者签名；macOS 包仅有 ad-hoc 完整性签名，未经 Apple 公证，Windows 包未签名。首次打开可能需要用户通过系统提供的选项手动允许；系统或组织策略可能禁止运行。macOS 更新可能需要重新授予截屏权限。\n\nThese packages have no trusted publisher signature. macOS bundles use an ad-hoc integrity seal and are not notarized by Apple; Windows executables are unsigned. Opening may require explicit approval using OS-provided controls and may be blocked by device policy. macOS updates may require screen capture permission again.";
 
 pub fn validate_inputs(version: &str, revision: &str) -> Result {
     let parts: Vec<_> = version.split('.').collect();
@@ -65,24 +66,33 @@ pub fn preflight(version: &str, expected_revision: &str) -> Result {
         return Err("missing LICENSE".into());
     }
     let runs = api(&format!(
-        "actions/workflows/ci.yml/runs?head_sha={expected_revision}&event=push&per_page=100"
+        "actions/workflows/ci.yml/runs?head_sha={expected_revision}&per_page=100"
     ))?;
     if !runs["workflow_runs"]
         .as_array()
         .ok_or("missing CI runs")?
         .iter()
-        .any(|r| {
-            r["head_branch"] == "main"
-                && r["head_sha"] == expected_revision
-                && r["conclusion"] == "success"
-        })
+        .any(|r| valid_main_ci(r, expected_revision))
     {
         return Err("no successful main CI run for this exact commit".into());
     }
     Ok(())
 }
 
-pub fn validate_set(data: &[Manifest], version: &str, revision: &str) -> Result {
+fn valid_main_ci(run: &Value, revision: &str) -> bool {
+    run["head_branch"] == "main"
+        && run["head_sha"] == revision
+        && run["path"] == ".github/workflows/ci.yml"
+        && (run["event"] == "push" || run["event"] == "workflow_dispatch")
+        && run["conclusion"] == "success"
+}
+
+pub fn validate_set(
+    data: &[Manifest],
+    version: &str,
+    revision: &str,
+    distribution: Distribution,
+) -> Result {
     if data.len() != TARGETS.len() {
         return Err("all four native packages are required".into());
     }
@@ -94,6 +104,7 @@ pub fn validate_set(data: &[Manifest], version: &str, revision: &str) -> Result 
                     && d.version == version
                     && d.revision == revision
                     && d.final_package
+                    && d.distribution == Some(distribution)
             })
             .count()
             != 1
@@ -104,13 +115,30 @@ pub fn validate_set(data: &[Manifest], version: &str, revision: &str) -> Result 
     Ok(())
 }
 
-pub fn stage(version: &str, revision: &str, directory: &Path, notes: &Path) -> Result {
+pub fn stage(
+    version: &str,
+    revision: &str,
+    directory: &Path,
+    notes: &Path,
+    distribution: Distribution,
+) -> Result {
     preflight(version, revision)?;
     let data = package::verify(directory)?;
-    validate_set(&data, version, revision)?;
+    validate_set(&data, version, revision, distribution)?;
     if !notes.is_file() || std::fs::read_to_string(notes)?.trim().is_empty() {
         return Err("release notes are required".into());
     }
+    let generated_notes = Path::new(".build/release-notes.md");
+    let notes_path = if distribution == Distribution::Unverified {
+        std::fs::create_dir_all(".build")?;
+        std::fs::write(
+            generated_notes,
+            format!("{UNVERIFIED_NOTICE}\n\n{}", std::fs::read_to_string(notes)?),
+        )?;
+        generated_notes
+    } else {
+        notes
+    };
     let tag = format!("v{version}");
     // Refuse replacement, including an existing unpublished draft/tag.
     if !output(Command::new("git").args([
@@ -147,7 +175,7 @@ pub fn stage(version: &str, revision: &str, directory: &Path, notes: &Path) -> R
             &format!("Snip2Pin {version}"),
             "--notes-file",
         ])
-        .arg(notes);
+        .arg(notes_path);
     for data in data {
         command.arg(directory.join(&data.file));
         command.arg(directory.join(format!("{}.json", data.target)));
@@ -155,17 +183,25 @@ pub fn stage(version: &str, revision: &str, directory: &Path, notes: &Path) -> R
     execute(&mut command)
 }
 
-pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) -> Result {
+pub fn publish(
+    version: &str,
+    revision: &str,
+    run_id: &str,
+    directory: &Path,
+    distribution: Distribution,
+) -> Result {
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
-        || std::env::var("GITHUB_WORKFLOW").as_deref() != Ok("Publish verified release (manual)")
+        || std::env::var("GITHUB_WORKFLOW").as_deref() != Ok("Manage release packages (manual)")
         || std::env::var("GITHUB_REF").as_deref() != Ok("refs/heads/main")
+        || std::env::var("GITHUB_JOB").as_deref() != Ok("publish")
+        || std::env::var("GITHUB_EVENT_NAME").as_deref() != Ok("workflow_dispatch")
     {
         return Err("publication is restricted to the manually approved GitHub workflow".into());
     }
     preflight(version, revision)?;
     check_run(run_id)?;
     let data = package::verify(directory)?;
-    validate_set(&data, version, revision)?;
+    validate_set(&data, version, revision, distribution)?;
     let tag = format!("v{version}");
     let candidates = Path::new(".build/candidate-provenance").join(run_id);
     if candidates.exists() {
@@ -213,6 +249,13 @@ pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) ->
     if draft["draft"] != true || draft["target_commitish"] != revision {
         return Err("draft target/draft state mismatch".into());
     }
+    if distribution == Distribution::Unverified
+        && !draft["body"]
+            .as_str()
+            .is_some_and(|body| body.contains(UNVERIFIED_NOTICE))
+    {
+        return Err("unverified release must retain its bilingual trust/permission notice".into());
+    }
     let assets = draft["assets"].as_array().ok_or("draft assets")?;
     if assets.len() != TARGETS.len() * 2 {
         return Err("unexpected draft assets".into());
@@ -254,6 +297,7 @@ fn validate_unsigned(data: &[Manifest], target: &str, version: &str, revision: &
         || data.len() != 1
         || data[0].target != target
         || data[0].final_package
+        || data[0].distribution.is_some()
         || data[0].version != version
         || data[0].revision != revision
         || data[0].candidate_sha256.is_some()
@@ -310,15 +354,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exact_main_ci_can_be_automatic_or_manual_but_never_a_pr() {
+        let sha = "a".repeat(40);
+        let mut run = serde_json::json!({"head_branch":"main", "head_sha":sha,
+            "path":".github/workflows/ci.yml", "event":"push", "conclusion":"success"});
+        assert!(valid_main_ci(&run, &sha));
+        run["event"] = "workflow_dispatch".into();
+        assert!(valid_main_ci(&run, &sha));
+        assert!(!valid_main_ci(&run, &"b".repeat(40)));
+        run["event"] = "pull_request".into();
+        assert!(!valid_main_ci(&run, &sha));
+        run["event"] = "workflow_dispatch".into();
+        run["head_branch"] = "feature".into();
+        assert!(!valid_main_ci(&run, &sha));
+    }
+
+    #[test]
+    fn unverified_publication_requires_a_complete_unmixed_explicit_set() {
+        let sha = "a".repeat(40);
+        let mut data: Vec<_> = TARGETS
+            .iter()
+            .map(|target| Manifest {
+                schema: 2,
+                version: "0.2.0".into(),
+                revision: sha.clone(),
+                target: (*target).into(),
+                final_package: true,
+                distribution: Some(Distribution::Unverified),
+                file: String::new(),
+                sha256: "b".repeat(64),
+                candidate_sha256: Some("c".repeat(64)),
+            })
+            .collect();
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Unverified).is_ok());
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Signed).is_err());
+        data[0].distribution = Some(Distribution::Signed);
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Unverified).is_err());
+    }
+
+    #[test]
     fn signing_rejects_wrong_source_target_version_or_already_signed_candidates() {
         let sha = "a".repeat(40);
         let target = TARGETS[0];
         let mut data = vec![Manifest {
-            schema: 1,
+            schema: 2,
             version: "0.2.0".into(),
             revision: sha.clone(),
             target: target.into(),
             final_package: false,
+            distribution: None,
             file: package::filename("0.2.0", target, false),
             sha256: "b".repeat(64),
             candidate_sha256: None,
@@ -366,22 +450,24 @@ mod tests {
         let mut data: Vec<_> = TARGETS
             .iter()
             .map(|target| Manifest {
-                schema: 1,
+                schema: 2,
                 version: "0.2.0".into(),
                 revision: sha.clone(),
                 target: (*target).into(),
                 final_package: true,
+                distribution: Some(Distribution::Signed),
                 file: package::filename("0.2.0", target, true),
                 sha256: "b".repeat(64),
                 candidate_sha256: Some("c".repeat(64)),
             })
             .collect();
-        assert!(validate_set(&data, "0.2.0", &sha).is_ok());
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Signed).is_ok());
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Unverified).is_err());
         data[0].revision = "b".repeat(40);
-        assert!(validate_set(&data, "0.2.0", &sha).is_err());
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Signed).is_err());
         data[0].revision = sha.clone();
         data[0].final_package = false;
-        assert!(validate_set(&data, "0.2.0", &sha).is_err());
-        assert!(validate_set(&data[1..], "0.2.0", &sha).is_err());
+        assert!(validate_set(&data, "0.2.0", &sha, Distribution::Signed).is_err());
+        assert!(validate_set(&data[1..], "0.2.0", &sha, Distribution::Signed).is_err());
     }
 }

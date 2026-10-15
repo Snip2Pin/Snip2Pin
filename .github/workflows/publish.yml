@@ -1,7 +1,13 @@
-name: Publish verified release (manual)
+name: Manage release packages (manual)
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Prepare packages and a draft, or publish an accepted draft
+        required: true
+        default: prepare
+        type: choice
+        options: [prepare, publish]
       version:
         description: Stable MAJOR.MINOR.PATCH of the existing draft
         required: true
@@ -16,10 +22,17 @@ on:
         type: string
       acceptance:
         description: 'Confirm native install/upgrade/interaction checks: publish VERSION'
-        required: true
+        required: false
         type: string
+      distribution:
+        description: Must match every package and the draft
+        required: true
+        default: unverified
+        type: choice
+        options: [unverified, signed]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-${{ inputs.version }}
   cancel-in-progress: false
@@ -39,18 +52,138 @@ jobs:
           REVISION: ${{ inputs.revision }}
           ACCEPTANCE: ${{ inputs.acceptance }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          OPERATION: ${{ inputs.operation }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$REVISION" =~ ^[a-f0-9]{40}$ ]]
           [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
-          [[ "$ACCEPTANCE" == "publish $VERSION" ]]
+          if [[ "$OPERATION" == publish ]]; then
+            [[ "$ACCEPTANCE" == "publish $VERSION" ]]
+          else
+            [[ "$OPERATION" == prepare ]]
+          fi
           git merge-base --is-ancestor "$REVISION" origin/main
           git checkout --detach "$REVISION"
       - name: Fresh dependency audit before publication
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           arguments: --locked
+      - uses: ./.github/actions/setup
+        if: inputs.operation == 'prepare'
+      - name: Verify committed notes, source, CI and original candidates before approval
+        if: inputs.operation == 'prepare'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          test -s "docs/releases/$VERSION.md"
+          cargo xtask candidate-check "$VERSION" "$REVISION" "$CANDIDATE_RUN"
+  prepare:
+    if: inputs.operation == 'prepare'
+    needs: validate
+    environment: release
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-${{ matrix.target }}
+          run-id: ${{ inputs.candidate_run }}
+          github-token: ${{ github.token }}
+          path: dist/candidate
+      - name: Check candidate source, target and checksum before credentials
+        run: cargo xtask verify-candidate dist/candidate ${{ matrix.target }}
+      - name: Prepare packages without a trusted publisher or notarization
+        if: inputs.distribution == 'unverified'
+        run: cargo xtask prepare-unverified dist/candidate dist/final ${{ matrix.target }}
+      - name: macOS Developer ID signing and notarization
+        if: inputs.distribution == 'signed' && runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_P8: ${{ secrets.MACOS_NOTARY_KEY_P8 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_CERTIFICATE_SHA1: ${{ vars.MACOS_CERTIFICATE_SHA1 }}
+        run: bash packaging/macos/ci-sign.sh dist/candidate dist/final
+      - name: Windows Authenticode signing
+        if: inputs.distribution == 'signed' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_SHA1: ${{ vars.WINDOWS_CERTIFICATE_SHA1 }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: ./packaging/windows/ci-sign.ps1 -Candidate dist/candidate -OutputDirectory dist/final
+      - name: Finalize Linux archive in signed distribution
+        if: inputs.distribution == 'signed' && runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p dist/final
+          cp "dist/candidate/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu-unsigned.tar.gz" "dist/final/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          cargo xtask finalize dist/candidate "dist/final/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Verify final files on the native platform
+        env:
+          DISTRIBUTION: ${{ inputs.distribution }}
+        shell: bash
+        run: cargo xtask verify-native dist/final ${{ matrix.target }} "$DISTRIBUTION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: final-${{ matrix.target }}
+          path: dist/final/*
+          if-no-files-found: error
+          retention-days: 14
+  draft:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: final-*
+          merge-multiple: true
+          path: dist/final
+      - name: Create a draft with verified files, without publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+          DISTRIBUTION: ${{ inputs.distribution }}
+        run: cargo xtask stage "$VERSION" "$REVISION" dist/final "docs/releases/$VERSION.md" "$DISTRIBUTION" --confirm
   signatures:
+    if: inputs.operation == 'publish'
     needs: validate
     permissions:
       contents: write # GitHub requires write access to read unpublished release drafts.
@@ -81,9 +214,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
-        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/final --pattern "*$TARGET.*"
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/final --pattern "*$TARGET*"
       - name: Verify checksum, signature, timestamp, identity and executable
-        run: cargo xtask verify-native dist/final ${{ matrix.target }}
+        env:
+          DISTRIBUTION: ${{ inputs.distribution }}
+        shell: bash
+        run: cargo xtask verify-native dist/final ${{ matrix.target }} "$DISTRIBUTION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-${{ matrix.target }}
@@ -91,6 +227,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   publish:
+    if: inputs.operation == 'publish'
     needs: signatures
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -117,7 +254,8 @@ jobs:
           VERSION: ${{ inputs.version }}
           REVISION: ${{ inputs.revision }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          DISTRIBUTION: ${{ inputs.distribution }}
         run: |
           gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/current
           diff -r dist/verified dist/current
-          cargo xtask publish "$VERSION" "$REVISION" "$CANDIDATE_RUN" dist/current --confirm
+          cargo xtask publish "$VERSION" "$REVISION" "$CANDIDATE_RUN" dist/current "$DISTRIBUTION" --confirm

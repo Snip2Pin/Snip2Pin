@@ -12,6 +12,23 @@ pub const TARGETS: [&str; 4] = [
     "x86_64-unknown-linux-gnu",
 ];
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Distribution {
+    Signed,
+    Unverified,
+}
+
+impl Distribution {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "signed" => Ok(Self::Signed),
+            "unverified" => Ok(Self::Unverified),
+            _ => Err("distribution must be signed or unverified".into()),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -20,6 +37,7 @@ pub struct Manifest {
     pub revision: String,
     pub target: String,
     pub final_package: bool,
+    pub distribution: Option<Distribution>,
     pub file: String,
     pub sha256: String,
     pub candidate_sha256: Option<String>,
@@ -27,11 +45,14 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn validate(&self) -> Result {
-        if self.schema != 1 || !TARGETS.contains(&self.target.as_str()) {
+        if self.schema != 2 || !TARGETS.contains(&self.target.as_str()) {
             return Err("unsupported package manifest".into());
         }
         crate::release::validate_inputs(&self.version, &self.revision)?;
-        let expected = filename(&self.version, &self.target, self.final_package);
+        let expected = distribution_filename(&self.version, &self.target, self.distribution);
+        if self.final_package != self.distribution.is_some() {
+            return Err("candidate/final distribution state mismatch".into());
+        }
         if self.final_package != self.candidate_sha256.is_some()
             || self.candidate_sha256.as_ref().is_some_and(|hash| {
                 hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())
@@ -50,7 +71,23 @@ impl Manifest {
 }
 
 pub fn filename(version: &str, target: &str, final_package: bool) -> String {
-    let suffix = if final_package { "" } else { "-unsigned" };
+    distribution_filename(
+        version,
+        target,
+        final_package.then_some(Distribution::Signed),
+    )
+}
+
+fn distribution_filename(
+    version: &str,
+    target: &str,
+    distribution: Option<Distribution>,
+) -> String {
+    let suffix = match distribution {
+        None => "-unsigned",
+        Some(Distribution::Signed) => "",
+        Some(Distribution::Unverified) => "-unverified",
+    };
     let extension = if target.contains("linux") {
         "tar.gz"
     } else {
@@ -200,11 +237,12 @@ pub fn build(target: &str, profile: &str) -> Result {
     write_manifest(
         &base,
         &Manifest {
-            schema: 1,
+            schema: 2,
             version,
             revision: revision()?,
             target: target.into(),
             final_package: false,
+            distribution: None,
             file: archive
                 .file_name()
                 .ok_or("archive name")?
@@ -230,6 +268,7 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     let plist = destination.join("Contents/Info.plist");
     fs::copy("packaging/macos/Info.plist", &plist)?;
     fs::copy("LICENSE", resources.join("LICENSE"))?;
+    fs::copy("packaging/README.txt", resources.join("README.txt"))?;
     let icon = if variant == "line" {
         "AppIcon-Line"
     } else {
@@ -273,37 +312,99 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
 }
 
 pub fn finalize(candidate: &Path, archive: &Path) -> Result {
+    finalize_as(candidate, archive, Distribution::Signed)
+}
+
+fn finalize_as(candidate: &Path, archive: &Path, distribution: Distribution) -> Result {
     let data = verify(candidate)?;
     if data.len() != 1 || data[0].final_package {
         return Err("expected one unsigned candidate".into());
     }
     let mut data = data.into_iter().next().ok_or("missing candidate")?;
-    let expected = filename(&data.version, &data.target, true);
+    let expected = distribution_filename(&data.version, &data.target, Some(distribution));
     if archive.file_name().and_then(|p| p.to_str()) != Some(&expected) {
         return Err("final archive name mismatch".into());
     }
     data.final_package = true;
+    data.distribution = Some(distribution);
     data.file = expected;
     data.candidate_sha256 = Some(data.sha256.clone());
     data.sha256 = digest(archive)?;
     write_manifest(archive.parent().ok_or("archive directory")?, &data)
 }
 
-pub fn verify_native(directory: &Path, target: &str) -> Result {
+pub fn prepare_unverified(candidate: &Path, destination: &Path, target: &str) -> Result {
+    crate::release::verify_candidate(candidate, target)?;
+    native_host(target)?;
+    let data = verify(candidate)?.remove(0);
+    fs::create_dir_all(destination)?;
+    let archive = destination.join(distribution_filename(
+        &data.version,
+        target,
+        Some(Distribution::Unverified),
+    ));
+    if archive.exists() {
+        return Err("refusing to replace an existing package".into());
+    }
+    if target.contains("apple") {
+        let unpacked = PathBuf::from(".build/unverified").join(target);
+        if unpacked.exists() {
+            fs::remove_dir_all(&unpacked)?;
+        }
+        fs::create_dir_all(&unpacked)?;
+        execute(
+            Command::new("ditto")
+                .args(["-x", "-k"])
+                .arg(candidate.join(&data.file))
+                .arg(&unpacked),
+        )?;
+        let app = unpacked.join("Snip2Pin.app");
+        // A bundle seal lets macOS verify integrity, without asserting publisher trust.
+        execute(
+            Command::new("codesign")
+                .args([
+                    "--force",
+                    "--sign",
+                    "-",
+                    "--timestamp=none",
+                    "--identifier",
+                    "io.github.Snip2Pin.Snip2Pin",
+                ])
+                .arg(&app),
+        )?;
+        execute(
+            Command::new("ditto")
+                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
+                .arg(&app)
+                .arg(&archive),
+        )?;
+        fs::remove_dir_all(unpacked)?;
+    } else {
+        fs::copy(candidate.join(&data.file), &archive)?;
+    }
+    finalize_as(candidate, &archive, Distribution::Unverified)
+}
+
+fn native_host(target: &str) -> Result {
+    let host = output(Command::new("rustc").arg("-vV"))?;
+    if !TARGETS.contains(&target) || !host.contains(target) {
+        return Err("package checks require a supported native runner".into());
+    }
+    Ok(())
+}
+
+pub fn verify_native(directory: &Path, target: &str, distribution: Distribution) -> Result {
     let data = verify(directory)?
         .into_iter()
         .find(|d| d.target == target)
         .ok_or("missing native package")?;
-    if !data.final_package {
-        return Err("cannot publish an unsigned candidate".into());
+    if !data.final_package || data.distribution != Some(distribution) {
+        return Err("candidate or unexpected distribution mode".into());
     }
     if data.revision != revision()? || data.version != version()? {
         return Err("final package source differs from the selected commit".into());
     }
-    let host = output(Command::new("rustc").arg("-vV"))?;
-    if !host.contains(target) {
-        return Err("signature checks require a native runner".into());
-    }
+    native_host(target)?;
     let unpacked = PathBuf::from(".build/verification").join(target);
     if unpacked.exists() {
         fs::remove_dir_all(&unpacked)?;
@@ -318,17 +419,36 @@ pub fn verify_native(directory: &Path, target: &str) -> Result {
                 .arg(&unpacked),
         )?;
         let app = unpacked.join("Snip2Pin.app");
-        execute(Command::new("codesign").args(["--verify", "--strict", "-R", "=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"]).arg(&app))?;
         execute(
-            Command::new("xcrun")
-                .args(["stapler", "validate"])
+            Command::new("codesign")
+                .args(["--verify", "--strict"])
                 .arg(&app),
         )?;
-        execute(
-            Command::new("spctl")
-                .args(["--assess", "--type", "execute"])
-                .arg(&app),
-        )?;
+        if distribution == Distribution::Signed {
+            execute(Command::new("codesign").args(["--verify", "--strict", "-R", "=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"]).arg(&app))?;
+            execute(
+                Command::new("xcrun")
+                    .args(["stapler", "validate"])
+                    .arg(&app),
+            )?;
+            execute(
+                Command::new("spctl")
+                    .args(["--assess", "--type", "execute"])
+                    .arg(&app),
+            )?;
+        } else {
+            let signature = Command::new("codesign")
+                .args(["--display", "--verbose=2"])
+                .arg(&app)
+                .output()?;
+            if !signature.status.success()
+                || !String::from_utf8_lossy(&signature.stderr)
+                    .lines()
+                    .any(|line| line == "Signature=adhoc")
+            {
+                return Err("unverified macOS package requires an ad-hoc bundle seal".into());
+            }
+        }
         let plist = app.join("Contents/Info.plist");
         let id = output(
             Command::new("plutil")
@@ -360,7 +480,12 @@ pub fn verify_native(directory: &Path, target: &str) -> Result {
             Command::new("pwsh")
                 .args(["-NoProfile", "-File", "packaging/windows/verify.ps1"])
                 .arg(&archive)
-                .arg(&unpacked),
+                .arg(&unpacked)
+                .arg(if distribution == Distribution::Signed {
+                    "signed"
+                } else {
+                    "unverified"
+                }),
         )?;
         verify_version(&unpacked.join("snip2pin.exe"), &data.version)?;
     } else {
@@ -414,11 +539,12 @@ mod tests {
     #[test]
     fn manifest_rejects_path_traversal_and_unknown_targets() {
         let mut data = Manifest {
-            schema: 1,
+            schema: 2,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[0].into(),
             final_package: true,
+            distribution: Some(Distribution::Signed),
             file: filename("0.2.0", TARGETS[0], true),
             sha256: "b".repeat(64),
             candidate_sha256: Some("c".repeat(64)),
@@ -432,6 +558,30 @@ mod tests {
     }
 
     #[test]
+    fn distribution_state_and_filename_cannot_be_silently_relabelled() {
+        let mut data = Manifest {
+            schema: 2,
+            version: "0.2.0".into(),
+            revision: "a".repeat(40),
+            target: TARGETS[0].into(),
+            final_package: true,
+            distribution: Some(Distribution::Unverified),
+            file: distribution_filename("0.2.0", TARGETS[0], Some(Distribution::Unverified)),
+            sha256: "b".repeat(64),
+            candidate_sha256: Some("c".repeat(64)),
+        };
+        assert!(data.validate().is_ok());
+        data.distribution = Some(Distribution::Signed);
+        assert!(data.validate().is_err());
+        data.distribution = None;
+        assert!(data.validate().is_err());
+        assert!(Distribution::parse("automatic-fallback").is_err());
+        data.distribution = Some(Distribution::Unverified);
+        data.schema = 1;
+        assert!(data.validate().is_err());
+    }
+
+    #[test]
     fn verify_detects_mutated_payload_and_finalize_preserves_original_digest() {
         let directory = tempfile::tempdir().expect("fixture");
         let candidate = directory.path().join("candidate");
@@ -441,11 +591,12 @@ mod tests {
         let file = filename("0.2.0", TARGETS[3], false);
         fs::write(candidate.join(&file), b"original").expect("payload");
         let data = Manifest {
-            schema: 1,
+            schema: 2,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[3].into(),
             final_package: false,
+            distribution: None,
             sha256: digest(&candidate.join(&file)).expect("candidate digest"),
             file,
             candidate_sha256: None,

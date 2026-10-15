@@ -1,8 +1,9 @@
 # 开发与发版流程
 
 Snip2Pin 使用短分支、PR 和三平台检查，只有用户明确要求时才进入发版流程。
-开发构建、未签名候选包和正式发行包分开管理。正式签名由受审批保护的 Actions
-完成，本地开发自签身份仍只保留在本机。
+开发构建、未签名候选包和最终安装包分开管理。目前只计划通过 GitHub 分发安装包，
+不上 App Store，暂不开通付费签名服务。默认 `unverified`，不需要生产凭据；未来取得
+证书后可显式选择 `signed`，由受审批保护的 Actions 签名。本地开发身份只留在本机。
 项目采用 MIT 许可证。产品范围和实现约束见 [AGENTS.md](../AGENTS.md)。
 
 ## 日常开发
@@ -40,9 +41,10 @@ cargo deny check
 最低 Rust 版本并检查所有目标；开发工具链只在 rust-toolchain.toml 固定。
 
 CI 对 PR、`main` 推送和手动验证运行，取消同一分支的过期检查。所有 Actions 固定
-完整提交 SHA，普通任务只读仓库，不运行真实截图、不申请权限、不安装应用、不签名、
+完整提交 SHA，普通任务只读仓库，不运行真实截图、不申请权限、不安装应用、不使用证书签名、
 不上传安装包。缓存按平台、架构、工具链和锁文件隔离，不能依赖缓存正确性。
-CI 在四种原生 runner 上验证开发包结构和 `--version`，不会显示 GUI。
+CI 在四种原生 runner 上验证开发包及 unverified 最终包结构、完整性和 `--version`，
+macOS 测试可使用不带证书的 ad-hoc 完整性签名，不访问本机或生产身份，不显示 GUI。
 
 Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lock 必须提交。
 `deny.toml` 检查 RustSec、依赖许可证及来源，重复版本作为提示；不得为通过检查
@@ -51,17 +53,25 @@ Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lo
 
 ## 支持的发行包
 
-| 原生目标 | 包格式 | 正式发布前的校验 |
+| 原生目标 | 包格式 | 共有校验；signed 模式额外校验 |
 | --- | --- | --- |
-| aarch64-apple-darwin | `.app.zip` | Developer ID、时间戳、Hardened Runtime、公证票据、架构与版本 |
+| aarch64-apple-darwin | 含 `.app` 的 ZIP | 完整性、架构、应用标识与版本；Developer ID、时间戳、Hardened Runtime、公证票据 |
 | x86_64-apple-darwin | `.app.zip` | 同上 |
-| x86_64-pc-windows-msvc | 便携 ZIP | Authenticode、时间戳、版本 |
+| x86_64-pc-windows-msvc | 便携 ZIP | 结构、版本及所选签名状态；Authenticode、时间戳 |
 | x86_64-unknown-linux-gnu | tar.gz | 动态库依赖、版本、X11/Wayland 声明 |
 
 macOS 最低部署目标为 13.0；最低系统仍须真实机器验收。Linux 构建基线为 Ubuntu
 24.04（glibc 2.39），不承诺可在更旧系统直接运行；Wayland 的置顶、快捷键和定位
 能力取决于合成器。Windows 包先提供便携版，移动程序路径后需重新设置自启。
 暂不增加 MSI、AppImage、自动更新或多个 Linux 包管理器入口。
+
+`unverified` 是明确选择的分发方式，文件名保留 `-unverified`，清单记录相同模式。
+macOS 只有 ad-hoc bundle seal，能够校验完整性但没有受信任的发布者身份，且未经
+Apple 公证；Windows 必须确认为未签名。发布说明自动加入中英文信任及权限说明，
+发布前检查该说明未被移除。不清除 quarantine、不禁用系统保护或自动信任自签证书。
+macOS 首次打开被阻止时由用户按[Apple 官方指引](https://support.apple.com/102445)
+在系统设置里确认，设备管理策略可能禁止放行。未公证包更新可能需要重新授权截屏；
+本地固定证书的开发更新不受此流程影响。`signed` 失败必须停止，不自动降级。
 
 版本唯一来源为 Cargo.toml，macOS 模板版本在打包时生成，构建号为完整 Git 历史中
 该提交的计数。首期发版入口只接受稳定版 `MAJOR.MINOR.PATCH`，不带 `v`；Git tag
@@ -72,12 +82,15 @@ macOS 最低部署目标为 13.0；最低系统仍须真实机器验收。Linux 
 仅在用户明确要求发版后执行本节及后续步骤。以下命令是操作手册，不是授权。
 
 1. 建立版本 PR，更新 Cargo.toml、Cargo.lock 及简短中英文发布说明，记录破坏性变化。
-2. 合并 PR，等待该 main 提交的全部 CI 通过，记下完整 SHA。发布说明放在已提交的
+2. 合并 PR，等待该 main 提交的全部 CI 通过（自动 push 或 main 上手动触发的 CI 均可，
+   PR 检查不能代替），记下完整 SHA。发布说明放在已提交的
    文件中，例如本次发版专用 `docs/releases/VERSION.md`；不保留空白模板或虚构版本。
 3. 按许可证核查依赖和字体/图标的第三方声明，确保发行物包含所需许可文本。
-4. 按下一节一次性配置正式发行凭据；缺少凭据就停止，不退回开发自签或 ad-hoc 签名。
+4. 默认选择 `unverified`，无需签名 Secrets；只有选择 `signed` 时，才按下一节配置
+   正式凭据，缺少或无效则停止。GitHub 站外分发的 Developer ID/公证同样需要 Apple
+   Developer Program 会员，不上 App Store 并不免除这项要求。
 
-## 一次性配置发行凭据
+## 可选：配置 signed 模式的发行凭据
 
 在仓库 Settings → Environments → `release` 配置下列 Secrets 和 Variables。
 该环境只允许 main，要求维护者批准且管理员也不能跳过；单人维护允许本人审批。
@@ -104,7 +117,7 @@ Secrets 加密存储但获准运行的代码能够读取明文，因此审批时
 本机现有自签证书不能用于 Apple 正式公证，也不应上传；Developer ID 需另行取得。
 Windows 此入口仅支持合法可导出的代码签名证书。硬件/HSM 或云端不可导出证书不能
 转换成 PFX；使用这类服务时需接入对应签名 API（优先 OIDC），当前入口不会冒充支持。
-未配置齐两端凭据前只能运行日常 CI/未签名候选构建，不能完成正式签名发布。
+未配置齐两端凭据前不能使用 `signed`；不影响显式选择 `unverified` 分发。
 
 参考：[GitHub 证书导入](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)、
 [环境审批和秘密保护](https://docs.github.com/en/actions/reference/security/secure-use)、
@@ -125,27 +138,33 @@ cargo xtask package TARGET release
 `-unsigned`，旁边的目标 JSON 记录版本、提交、目标和 SHA-256。过期后重新手动构建，
 不要改用不同提交的包。日常 CI 用 `debug` 检验同一条打包路径，并且不上传这些包。
 
-## Actions 自动签名与草稿
+## Actions 准备安装包与草稿
 
-手动运行 **Sign release candidates (manual)**，选择 `main`，填写版本、完整源 SHA
-及上一节成功的候选构建 run ID。所选源提交必须已包含本流程及对应的
+手动运行已有的 **Manage release packages (manual)**（`publish.yml`），选择 `main`，
+`operation` 选择 `prepare`（默认），填写版本、完整源 SHA、
+上一节成功的候选构建 run ID 和 `distribution`（默认 `unverified`）。所选源提交必须已包含本流程及对应的
 `docs/releases/VERSION.md` 发布说明。校验任务不读取签名秘密，先检查来源、确切提交
 的成功 CI、四个原始候选包的版本和哈希，并重新审计依赖。
 
-维护者在 `release` 环境批准四个平台任务后，macOS 将 P12 导入临时钥匙串，用
+维护者在 `release` 环境批准四个平台任务后，`unverified` 模式不读取任何 Secrets，
+macOS 对候选应用加 ad-hoc 完整性签名并重新封装，Windows/Linux 保留原始有效载荷，
+生成明确标识为 unverified 的最终包、SHA-256 及来源清单。
+
+只有 `signed` 模式中，macOS 将 P12 导入临时钥匙串，用
 临时 API Key 文件配置公证凭据，完成 Developer ID 签名、时间戳、公证和票据附加；
 Windows 临时导入 PFX，按指定指纹用 SDK SignTool 签名并验证时间戳；Linux 只生成
 最终包和清单。不会重新编译应用。秘密仅传给各自的签名步骤，不传给下载/上传步骤。
 无论成功或失败都清理临时钥匙串、导入的证书私钥和凭据文件；任务取消/强制结束时
 依赖 GitHub 托管临时虚拟机销毁兜底，不在日常电脑部署自托管 runner。
 
-四个平台的最终原生校验全部通过后，上传仅含安装包和 JSON 的 `signed-*` artifacts
+四个平台按所选模式完成原生校验后，上传仅含安装包和 JSON 的 `final-*` artifacts
 （保留 14 天），随后自动创建 Draft Release。任一平台失败均不创建草稿，也不发布。
 包清单保留原候选哈希，正式发布时再次和原候选 run 比对。现有草稿/标签不会被覆盖。
 签名任务可读取秘密，因此批准前应检查所选源码和工作流，不能批准不可信改动。
-此入口只创建草稿，不能代替后续实际安装验收和手动发布确认。
+此入口只创建草稿，不能代替后续实际安装验收和手动发布确认。JSON 使用 schema 2，
+候选清单的 distribution 为 null，最终清单为 signed 或 unverified；旧清单需重新构建。
 
-## 本机签名备用入口
+## 可选：本机 signed 签名备用入口
 
 将四个 artifact 分别解压到不同目录。使用同一提交的干净源码运行下面的工具。
 本机使用的凭据保存在仓库之外的钥匙串、证书存储或硬件中，不传入命令行密码，
@@ -199,20 +218,21 @@ CI 的隐藏窗口和包检查不能替代这些交互。测试记录不包含�
 
 ## 草稿与正式发布
 
-自动签名已创建草稿时直接进行实际安装验收，然后运行下述发布工作流。
+准备工作流已创建草稿时直接进行实际安装验收，然后运行下述发布工作流。
 仅使用本机备用签名入口时，将四个最终包及四份 JSON 收集到 `dist/final`，运行：
 
 ```sh
 cargo xtask verify dist/final
-cargo xtask stage VERSION FULL_SHA dist/final docs/releases/VERSION.md --confirm
+cargo xtask stage VERSION FULL_SHA dist/final docs/releases/VERSION.md signed --confirm
 ```
 
 只有这个显式命令才创建 Draft Release；它要求四个目标齐全、版本和提交一致、哈希
 正确、CI 通过且版本未使用。不存在完整产物或真实验收结果时，不运行它。
 
-手动运行 **Publish verified release (manual)**，填写版本、完整 SHA、成功候选构建
-run ID，以及 `publish VERSION` 验收确认。工作流先对源提交重新审计依赖，再对下载的最终包在原生平台重验签名、
-时间戳、公证、版本、架构和依赖，再冻结通过验证的文件。`release` Environment
+再次手动运行 **Manage release packages (manual)**，`operation` 选择 `publish`，填写版本、完整 SHA、成功候选构建
+run ID、与草稿一致的 `distribution`，以及 `publish VERSION` 验收确认。工作流先对源提交重新审计依赖，
+再按明确选择的模式重验原生完整性、版本、架构、依赖及签名状态；signed 还须验证
+时间戳和公证，模式不一致或混用即失败。随后冻结通过验证的文件。`release` Environment
 等待维护者批准，发布任务重新下载 Draft 并逐文件比对，确认没有中途更换后才发布。
 本次通过后不重新构建；tag 指向同一个源提交，发布后不能重写或删除版本 tag。
 
@@ -224,7 +244,7 @@ GitHub 的草稿访问要求使用写 token，仅在下载步骤传入，其他�
 ## 失败与恢复
 
 任何平台失败则不发布，已成功的平台包仍是候选产物。验收未通过时删除本机临时产物
-并修复，不能通过忽略签名、降低检查或替换已发布文件继续。
+并修复，不能把 signed 任务临时改成 unverified 来忽略失败，也不能替换已发布文件。
 版本已发布后发现问题，保留原 tag/安装包与问题说明，另发修复版本；必要时把旧的
 可用版本重新标为 latest。旧版本运行前先核对配置兼容性，不清理用户配置或权限。
 
@@ -233,8 +253,8 @@ GitHub 的草稿访问要求使用写 token，仅在下载步骤传入，其他�
 - `ci.yml`：日常开发检查和开发包结构测试，无分发上传。
 - `messages.yml`：PR 标题和分支提交格式，标题编辑也会重查，无秘密和写权限。
 - `candidates.yml`：仅手动生成指定提交的未签名候选包，无发布权限。
-- `sign.yml`：仅手动校验候选来源、审批后签名并创建草稿，不发布。
-- `publish.yml`：仅手动验收并发布已有草稿，经过 Environment 批准。
+- `publish.yml`：已有的手动发行入口，prepare 操作校验来源并在审批后准备安装包和草稿；
+  publish 操作另行验收并发布已有草稿，再经过 Environment 批准。两项操作不能在一次运行中连发。
 - `xtask/`：共用检查、版本元数据、包结构、校验清单和发行输入验证。
 - `packaging/`：各平台必须原生执行的签名/公证接口；不得复制业务逻辑。
 
