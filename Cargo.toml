@@ -31,7 +31,7 @@ tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] 
 winit = { version = "0.30.13", default-features = false }
 objc2-core-graphics = "0.3.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSScreen", "NSAppearance", "NSWorkspace", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSScreen", "NSAppearance", "NSWorkspace", "NSRunningApplication", "NSCursor", "NSOpenGL", "NSView"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSUserDefaults", "NSData", "NSBundle", "NSURL"] }
 plist = "1.8"
 
@@ -50,6 +50,10 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+glutin = { version = "0.32.3", default-features = false }
+glow = "0.17.0"
+
 [[test]]
 name = "macos_overlay"
 harness = false
@@ -60,6 +64,10 @@ harness = false
 
 [[test]]
 name = "macos_icons"
+harness = false
+
+[[test]]
+name = "macos_drawable"
 harness = false
 
 [lints.rust]

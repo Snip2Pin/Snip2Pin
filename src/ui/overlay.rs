@@ -52,6 +52,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
     {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         return Some(Action::Cancel);
     }
     if response.drag_started() {
@@ -67,6 +68,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
             StrokeKind::Inside,
         );
         if response.drag_stopped() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
             selection.start = None;
             let result = geometry::selection(
                 [
@@ -108,6 +110,79 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completing_or_cancelling_selection_restores_the_cursor() {
+        for cancel in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "cursor",
+                egui::ColorImage::filled([2, 2], Color32::WHITE),
+                egui::TextureOptions::NEAREST,
+            );
+            let mut selection = Selection {
+                texture,
+                pixels: [640, 480],
+                start: None,
+                focus_requested: false,
+            };
+            let start = egui::pos2(40.0, 60.0);
+            let end = egui::pos2(220.0, 180.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let last_event = if cancel {
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }
+            } else {
+                button(end, false)
+            };
+            let frames = [
+                vec![egui::Event::PointerMoved(start)],
+                vec![button(start, true)],
+                vec![egui::Event::PointerMoved(end)],
+                vec![last_event],
+            ];
+            for (index, events) in frames.into_iter().enumerate() {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(640.0, 480.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let action = show(ui, &mut selection, true);
+                        if index == 3 {
+                            assert!(matches!(
+                                (&action, cancel),
+                                (Some(Action::Cancel), true) | (Some(Action::Select(_)), false)
+                            ));
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(
+                    output.platform_output.cursor_icon,
+                    if index == 3 {
+                        egui::CursorIcon::Default
+                    } else {
+                        egui::CursorIcon::Crosshair
+                    }
+                );
+            }
+        }
+    }
 
     #[test]
     fn active_screen_is_outlined_and_other_screens_are_dimmed() {

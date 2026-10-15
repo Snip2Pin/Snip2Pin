@@ -141,7 +141,7 @@ fn main() {
                     &[usable],
                     1.0,
                 );
-                let actual = platform::layout_pin(42, resized).expect("synchronous layout");
+                let actual = platform::layout_pin(42, resized, None).expect("synchronous layout");
                 assert_eq!(actual, resized.window);
                 let inner = window.inner_size().to_logical::<f64>(window.scale_factor());
                 assert_eq!(inner.width, f64::from(actual.width()));

@@ -74,7 +74,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                     })
                     .inner
                     .on_hover_text(
-                        "拖动框选，Esc 取消。贴图可拖动、边框或边角缩放，按 Shift 等比缩放，双击关闭。",
+                        "拖动框选，Esc 取消。贴图可拖动、边框或边角等比缩放，按 Shift 自由缩放，双击关闭。",
                     )
                     .clicked()
                 {

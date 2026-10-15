@@ -103,7 +103,7 @@ pub fn show_with_host(
                     Sense::click_and_drag(),
                 )
                 .on_hover_cursor(corner.cursor())
-                .on_hover_text("拖动缩放 · Shift 等比");
+                .on_hover_text("拖动等比缩放 · Shift 自由缩放");
             (corner, response)
         })
         .collect::<Vec<_>>();
@@ -153,7 +153,7 @@ pub fn show_with_host(
         })
         && let Some(resized) = prepared.resize.update(
             pointer,
-            ui.input(|input| input.modifiers.shift),
+            ui.input(|input| !input.modifiers.shift),
             minimum_size * coordinates.grid,
             cfg!(target_os = "macos").then_some(frame.controls_area.min.y * coordinates.grid),
         )

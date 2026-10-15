@@ -5,7 +5,37 @@ use snip2pin::{
 };
 
 #[test]
-fn every_resize_corner_keeps_its_opposite_pivot_and_shift_locks_proportions() {
+fn corner_and_edge_resize_keep_the_fixed_corner_throughout_the_gesture() {
+    use pin::{Resize, ResizeHandle as Handle};
+    let image = Rect::from_min_size(egui::pos2(-600.0, 200.0), egui::vec2(300.0, 200.0));
+    for (handle, fixed) in [
+        (Handle::BottomLeft, Handle::TopRight),
+        (Handle::TopRight, Handle::BottomLeft),
+        (Handle::Right, Handle::TopLeft),
+        (Handle::Left, Handle::TopRight),
+        (Handle::Top, Handle::BottomLeft),
+        (Handle::Bottom, Handle::TopLeft),
+    ] {
+        let pointer = handle.point(image);
+        let mut resize = Resize::default();
+        resize.begin(handle, image, pointer);
+        for delta in [egui::vec2(-35.0, 18.0), egui::vec2(60.0, -25.0), Vec2::ZERO] {
+            for proportional in [true, false] {
+                let next = resize
+                    .update(pointer + delta, proportional, Vec2::splat(1.0), None)
+                    .expect("active gesture");
+                assert_eq!(
+                    fixed.point(next),
+                    fixed.point(image),
+                    "{handle:?}, {delta:?}, proportional={proportional}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_resize_corner_keeps_its_opposite_pivot_in_proportional_and_free_modes() {
     use pin::{Resize, ResizeHandle};
     let image = Rect::from_min_size(egui::pos2(-300.0, 100.0), egui::vec2(200.0, 100.0));
     for corner in ResizeHandle::CORNERS {
@@ -192,7 +222,7 @@ fn system_drag_absorbs_native_movement_but_not_a_change_of_coordinate_units() {
 }
 
 #[test]
-fn narrow_images_retain_distinct_edges_and_shift_anchors() {
+fn narrow_images_retain_distinct_edges_and_proportional_anchors() {
     use pin::{Resize, ResizeHandle};
     for size in [
         egui::vec2(6.0, 200.0),
@@ -229,7 +259,7 @@ fn narrow_images_retain_distinct_edges_and_shift_anchors() {
 }
 
 #[test]
-fn screen_sized_image_keeps_controls_reachable_without_cropping_or_scaling() {
+fn screen_sized_image_initial_fit_keeps_controls_reachable_without_cropping() {
     let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
     let mut frame = pin::frame_geometry(
         Placement {
@@ -242,7 +272,8 @@ fn screen_sized_image_keeps_controls_reachable_without_cropping_or_scaling() {
     );
     frame = frame.moved_to(area.min, &[area], 1.0);
     frame.fit_host_top();
-    assert_eq!(frame.image.size(), area.size());
+    assert!(frame.image.width() < area.width());
+    assert!((frame.image.aspect_ratio() - area.aspect_ratio()).abs() < 0.001);
     assert!(Rect::from_min_size(egui::Pos2::ZERO, frame.window.size()).contains_rect(frame.image));
     for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
         assert!(area.contains_rect(button.translate(frame.window.min.to_vec2())));
@@ -460,7 +491,11 @@ fn right_edge_overflow_places_controls_to_the_left_of_the_image() {
                 ratio,
                 ratio.recip(),
             );
-            frame.place_controls(frame.window, &[screen], screen, ratio);
+            frame = frame.moved_to(
+                egui::pos2(screen.max.x - 50.0, screen.min.y + 100.0) * ratio,
+                &[screen],
+                ratio,
+            );
             let image = frame.image.translate(frame.window.min.to_vec2());
             for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
                 let button = button.translate(frame.window.min.to_vec2());
