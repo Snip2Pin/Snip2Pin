@@ -2,6 +2,7 @@
 
 标题使用 `type(scope): description`，如 `fix(pin): 修复顶部按钮位置`。
 说明用户遇到的问题、修改后的行为和范围。关联 Issue（如有）。
+commit、PR、Issue、CI 运行和代码位置等引用使用可点击链接。
 
 ## 验证
 
