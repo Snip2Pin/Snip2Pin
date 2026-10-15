@@ -103,10 +103,22 @@ pub fn toolbar_geometry(image: Rect, screens: &[Rect], fallback: Rect, ratio: f3
         .chain(screens.is_empty().then(|| scale_rect(fallback, ratio)))
         .filter_map(|area| {
             let visible = image.intersect(area).shrink(METRICS.inset);
-            if visible.width() < size.x || visible.height() < size.y {
+            // Subtracting fractional desktop coordinates can lose precision
+            // at the minimum size. Allow one representable step on each axis.
+            let magnitude = visible
+                .min
+                .to_vec2()
+                .abs()
+                .max(visible.max.to_vec2().abs())
+                .max(size);
+            let roundoff = egui::vec2(
+                magnitude.x.next_up() - magnitude.x,
+                magnitude.y.next_up() - magnitude.y,
+            );
+            if visible.width() + roundoff.x < size.x || visible.height() + roundoff.y < size.y {
                 return None;
             }
-            let position = preferred.clamp(visible.min, visible.max - size);
+            let position = preferred.clamp(visible.min, (visible.max - size).max(visible.min));
             Some(Rect::from_min_size(position, size))
         })
         .min_by(|left, right| {

@@ -82,6 +82,29 @@ fn tiny_images_enlarge_proportionally_to_the_native_minimum() {
 }
 
 #[test]
+fn minimum_controls_remain_reachable_at_fractional_desktop_positions() {
+    let area = Rect::from_min_size(egui::pos2(80.0, 100.0), egui::vec2(680.0, 420.0));
+    for scale in [1.0, 1.5, 2.0] {
+        for zoom in [1.0, 1.25, 2.0] {
+            let layout = frame_geometry(
+                Placement {
+                    position: [148.0 / scale, 142.0 / scale],
+                    size: [8.0 * 680.0 / 960.0 / scale, 5.0 * 420.0 / 600.0 / scale],
+                },
+                Rect::from_min_max(area.min / scale, area.max / scale),
+                1.0 / zoom,
+                scale * zoom,
+            );
+            assert!(
+                layout.controls.is_some(),
+                "scale={scale}, zoom={zoom}, image={:?}",
+                layout.image
+            );
+        }
+    }
+}
+
+#[test]
 fn extreme_aspect_ratios_never_request_a_surface_larger_than_the_screen() {
     let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
     for original in [[2.0, 1200.0], [1920.0, 1.0]] {

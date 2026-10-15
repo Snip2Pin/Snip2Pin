@@ -1364,9 +1364,12 @@ fn pin_builder_cancels_backend_zoom_for_geometry_and_keeps_tiny_images_operable(
                     [rect.width as usize, rect.height as usize]
                 );
                 if tiny {
-                    assert!(size.x >= 80.0 && size.y >= 50.0);
+                    assert!(size.x + 0.001 >= 80.0 && size.y + 0.001 >= 50.0);
                     let native_size = size * zoom;
-                    assert!(native_size.x >= 80.0 * zoom && native_size.y >= 50.0 * zoom);
+                    assert!(
+                        native_size.x + 0.001 >= 80.0 * zoom
+                            && native_size.y + 0.001 >= 50.0 * zoom
+                    );
                     let image = egui::Rect::from_min_size(position, size);
                     assert!(
                         pin::toolbar_geometry(

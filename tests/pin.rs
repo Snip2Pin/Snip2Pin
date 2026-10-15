@@ -55,6 +55,47 @@ fn minimum_window_size_fits_both_buttons_and_resize_insets() {
 }
 
 #[test]
+fn fractional_minimum_controls_reject_real_size_or_visible_area_shortfalls() {
+    for origin in [
+        egui::pos2(148.0, 142.0),
+        egui::pos2(-148.0, -142.0),
+        egui::pos2(-16384.0, 8192.0),
+        egui::pos2(32768.0, -16384.0),
+        egui::pos2(1_000_000.0, 100.0),
+    ] {
+        for scale in [1.0, 1.5, 2.0] {
+            for zoom in [1.0, 1.25, 2.0] {
+                let position = origin / (scale * zoom);
+                for axis in [egui::Vec2::X, egui::Vec2::Y] {
+                    for margin in [-1.0, -0.25, -0.1, 0.0, 0.1, 0.25, 1.0] {
+                        let image =
+                            Rect::from_min_size(position, minimum_image_size() + axis * margin);
+                        let area = image.expand(100.0);
+                        let row = toolbar_geometry(image, &[area], area, 1.0);
+                        assert_eq!(
+                            row.is_some(),
+                            margin >= 0.0,
+                            "image size: origin={origin:?}, scale={scale}, zoom={zoom}, axis={axis:?}, margin={margin}"
+                        );
+                        if let Some(row) = row {
+                            assert!(image.contains_rect(row));
+                        }
+                    }
+                    let image = Rect::from_min_size(position, minimum_image_size());
+                    for deficit in [0.1, 0.25, 1.0] {
+                        let area = Rect::from_min_max(image.min, image.max - axis * deficit);
+                        assert!(
+                            toolbar_geometry(image, &[area], area, 1.0).is_none(),
+                            "visible area: origin={origin:?}, scale={scale}, zoom={zoom}, axis={axis:?}, deficit={deficit}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn insufficient_visible_space_returns_none_without_relocating_the_image() {
     let area = area();
     for image in [
