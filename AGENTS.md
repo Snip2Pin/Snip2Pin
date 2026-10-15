@@ -41,6 +41,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - Linux 有 X11 显示服务时优先使用 X11/XWayland 窗口后端，保留置顶能力。
 - 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
 - 只有用户主动操作时才截图，不在启动或后台自动截图。
+- macOS 截屏授权由主线程在用户截图时检查和申请，截图工作线程只读取权限，不能弹授权框。未授权时保留空闲状态，在主页提供打开授权设置、授权后继续和重新打开应用；不后台轮询权限，不反复弹请求，不要求用户猜应用路径或手动修复数据库。
+- 重新打开应用必须由用户明确点击，先关闭窗口并释放快捷键，再启动新实例；演示模式不得申请权限、打开系统设置或重启真实应用。
+- 应用标识迁移前须检查应用及系统设置已完全退出，避免同一路径的新旧身份被长驻进程缓存。安装后验证实际应用元数据与系统登记路径一致；验证失败恢复原包。备份不使用可登记的 `.app` 后缀，成功后清理，日常更新不得清除权限或重启其他应用。
 - 截图和复制用的图片保存在本机内存中，关闭贴图后释放；系统剪贴板的内容由系统管理。不上传、不写入日志。
 - 系统截图后端若生成临时文件，应在读取后立即清理，不保留截图历史。
 - 尊重系统权限和桌面限制，不绕过屏幕录制、Portal 或安全设置。
@@ -65,6 +68,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: pin stacking adapter, preserving the backend's window class and observation lifecycle.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
+- `src/permission.rs`: user-driven authorization state without native calls or polling.
+- `src/platform/macos_access.rs`: main-thread permission requests, settings navigation, and installation/identity migration checks.
 - `src/tray.rs`: event-driven native menu bar/tray commands and status artwork.
 - `src/startup.rs`: explicit current-user login registration with atomic, escaped file entries or Windows Run registry values.
 - `assets/icons/`, `src/icon.rs`: vector sources, LFS PNG assets, and icon selection.

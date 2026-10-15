@@ -27,7 +27,56 @@ fn app() -> Snip2Pin {
         exiting: false,
         home_visible: true,
         booting: false,
+        permission: ScreenPermission::default(),
+        relaunch: Arc::new(Mutex::new(None)),
     }
+}
+
+#[test]
+fn missing_permission_keeps_capture_idle_and_opens_an_actionable_home() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.demo = false;
+    app.home_visible = false;
+    let mut prompts = 0;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        assert!(!app.check_capture_permission(
+            ctx,
+            || false,
+            || {
+                prompts += 1;
+                false
+            }
+        ));
+        assert!(!app.check_capture_permission(ctx, || false, || panic!("no repeated prompt")));
+    });
+    assert_eq!(prompts, 1);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert_eq!(app.permission, ScreenPermission::Required);
+    assert!(app.home_visible);
+    assert!(app.layers.is_empty());
+    assert!(app.pins.is_empty());
+    assert!(
+        app.gate.begin().is_some(),
+        "permission failure cannot occupy the capture gate"
+    );
+    assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(true)));
+    assert!(app.check_capture_permission(&ctx, || true, || panic!("already granted")));
+    assert_eq!(app.permission, ScreenPermission::Granted);
+}
+
+#[test]
+fn demo_never_requests_permission_or_relaunches_the_real_application() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    assert!(app.check_capture_permission(
+        &ctx,
+        || panic!("demo must not preflight"),
+        || panic!("demo must not request")
+    ));
+    app.restart(&ctx);
+    assert!(!app.exiting);
+    assert!(app.relaunch.lock().expect("relaunch handle").is_none());
 }
 
 #[test]

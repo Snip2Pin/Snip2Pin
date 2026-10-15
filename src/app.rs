@@ -14,6 +14,7 @@ use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry::{self, Placement},
     icon::{self, Variant},
+    permission::ScreenPermission,
     pin::{Coordinates, Preparation as PinPreparation, Prepared},
     session::CaptureGate,
     settings::{self, Binding, Preferences},
@@ -89,10 +90,15 @@ pub struct Snip2Pin {
     exiting: bool,
     home_visible: bool,
     booting: bool,
+    permission: ScreenPermission,
+    relaunch: Arc<Mutex<Option<std::process::Command>>>,
 }
 
 impl Snip2Pin {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        relaunch: Arc<Mutex<Option<std::process::Command>>>,
+    ) -> Self {
         platform::install_fonts(&cc.egui_ctx);
         let demo = std::env::args().any(|argument| argument == "--demo");
         let (sender, events) = mpsc::channel();
@@ -209,11 +215,20 @@ impl Snip2Pin {
             exiting: false,
             home_visible,
             booting: true,
+            permission: ScreenPermission::default(),
+            relaunch,
         }
     }
 
     fn begin_capture(&mut self, ctx: &egui::Context) {
         if !matches!(self.phase, Phase::Idle) || self.recording {
+            return;
+        }
+        if !self.check_capture_permission(
+            ctx,
+            platform::capture_permission,
+            platform::request_capture_permission,
+        ) {
             return;
         }
         let Some(id) = self.gate.begin() else {
@@ -250,6 +265,38 @@ impl Snip2Pin {
             let _ = sender.send(Event::Ready(id, result, pointer));
             ctx.request_repaint_of(ViewportId::ROOT);
         });
+    }
+
+    fn check_capture_permission(
+        &mut self,
+        ctx: &egui::Context,
+        preflight: impl FnMut() -> bool,
+        request: impl FnOnce() -> bool,
+    ) -> bool {
+        if self.demo || self.permission.authorize(preflight, request) {
+            return true;
+        }
+        self.message = None;
+        self.tray_action(crate::tray::Action::Home, ctx);
+        false
+    }
+
+    fn restart(&mut self, ctx: &egui::Context) {
+        if self.demo {
+            return;
+        }
+        match platform::relaunch_command() {
+            Ok(command) => {
+                if let Ok(mut relaunch) = self.relaunch.lock() {
+                    *relaunch = Some(command);
+                } else {
+                    self.message = Some("无法准备重新打开应用。".into());
+                    return;
+                }
+                self.tray_action(crate::tray::Action::Quit, ctx);
+            }
+            Err(error) => self.message = Some(error),
+        }
     }
 
     fn tray_action(&mut self, action: crate::tray::Action, ctx: &egui::Context) {
@@ -385,6 +432,10 @@ impl Snip2Pin {
             }
             result => {
                 self.message = Some(result.err().unwrap_or_else(|| "没有可用屏幕。".into()));
+                if !self.demo && !platform::capture_permission() {
+                    self.permission = ScreenPermission::Required;
+                    self.tray_action(crate::tray::Action::Home, ctx);
+                }
                 self.restore(ctx);
             }
         }
@@ -894,6 +945,7 @@ impl eframe::App for Snip2Pin {
                 idle,
                 demo: self.demo,
                 startup: self.startup.as_ref().map(|_| self.startup_enabled),
+                permission_required: self.permission == ScreenPermission::Required,
             },
         );
         match action {
@@ -907,6 +959,12 @@ impl eframe::App for Snip2Pin {
                 self.change_appearance(theme, icon, &ctx)
             }
             Some(launcher::Action::Startup(enabled)) => self.set_startup(enabled),
+            Some(launcher::Action::OpenCaptureSettings) => {
+                if let Err(error) = platform::open_capture_settings() {
+                    self.message = Some(error);
+                }
+            }
+            Some(launcher::Action::Restart) => self.restart(&ctx),
             None => {}
         }
         if self.recording {

@@ -27,6 +27,7 @@ fn frame(
                     idle: !busy,
                     demo: false,
                     startup: Some(false),
+                    permission_required: false,
                 },
             );
         },

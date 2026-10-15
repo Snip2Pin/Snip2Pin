@@ -16,6 +16,47 @@ mod macos;
 pub mod macos_icon;
 
 #[cfg(target_os = "macos")]
+#[path = "platform/macos_access.rs"]
+pub mod macos_access;
+
+pub fn capture_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    return objc2_core_graphics::CGPreflightScreenCaptureAccess();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+pub fn request_capture_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos_access::request();
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+pub fn open_capture_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return macos_access::open_settings();
+    #[cfg(not(target_os = "macos"))]
+    Err("当前平台没有统一的屏幕录制授权设置入口。".into())
+}
+
+/// Prepare a user-requested relaunch; the caller runs it after the app has
+/// dropped all native windows and global shortcuts. No waiting or polling.
+pub fn relaunch_command() -> Result<std::process::Command, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+    {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command.arg("-n").arg(bundle);
+        return Ok(command);
+    }
+    Ok(std::process::Command::new(executable))
+}
+
+#[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
 /// Respect AppKit's top boundary using image-aware margins: the complete image

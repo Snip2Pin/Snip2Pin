@@ -72,10 +72,10 @@ pub fn displays() -> Result<Vec<Display>, String> {
 
 pub fn desktop() -> Result<Vec<Snapshot>, String> {
     #[cfg(target_os = "macos")]
-    if !objc2_core_graphics::CGPreflightScreenCaptureAccess()
-        && !objc2_core_graphics::CGRequestScreenCaptureAccess()
-    {
-        return Err("需要屏幕录制权限。请在系统设置的「隐私与安全性 → 屏幕与系统音频录制」中允许 Snip2Pin，再重新打开应用。".into());
+    if !objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+        // The UI owns authorization. A worker must never present a permission
+        // dialog or capture while access is absent/revoked.
+        return Err("尚未获得屏幕录制权限，请在应用中打开授权设置。".into());
     }
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     if monitors.is_empty() {
