@@ -14,11 +14,17 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/snip2pin-distribution.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 ditto -x -k "$CANDIDATE/$FILENAME" "$WORK"
 APP="$WORK/Snip2Pin.app"
-codesign --force --options runtime --timestamp --sign "$SNIP2PIN_SIGN_IDENTITY" "$APP"
+SIGN_COMMAND=(codesign --force --options runtime --timestamp)
+NOTARY_COMMAND=(xcrun notarytool submit "$WORK/notarize.zip" --keychain-profile "$SNIP2PIN_NOTARY_PROFILE" --wait --timeout 20m)
+if [[ -n "${SNIP2PIN_SIGN_KEYCHAIN:-}" ]]; then
+  SIGN_COMMAND+=(--keychain "$SNIP2PIN_SIGN_KEYCHAIN")
+  NOTARY_COMMAND+=(--keychain "$SNIP2PIN_SIGN_KEYCHAIN")
+fi
+"${SIGN_COMMAND[@]}" --sign "$SNIP2PIN_SIGN_IDENTITY" "$APP"
 codesign --verify --strict \
   -R '=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/notarize.zip"
-xcrun notarytool submit "$WORK/notarize.zip" --keychain-profile "$SNIP2PIN_NOTARY_PROFILE" --wait
+"${NOTARY_COMMAND[@]}"
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl --assess --type execute "$APP"

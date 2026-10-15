@@ -18,3 +18,9 @@ validation, packaging and manual releases.
 提交、合并和标签推送都不会自动发版；只有用户明确要求时才运行发版流程。
 
 Contributions are licensed under the project's MIT license. No CLA is required.
+
+Use Conventional Commits for PR titles and every commit subject:
+`type(scope)!: description` (scope and `!` optional, maximum 100 characters).
+For example, `fix(pin): keep controls visible` or `docs: 精简使用说明`.
+Allowed types and body guidance are in AGENTS.md; the required `messages` workflow
+enforces the format. Squash merges use the PR title/body.

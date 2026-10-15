@@ -78,7 +78,7 @@ removes after reading. The app itself does not retain files or a capture history
 
 See [Contributing](CONTRIBUTING.md) and [开发与发版流程 / Workflow](docs/workflow.md).
 Development uses short branches, PRs and native CI. Releases require an explicit
-request, a manual build, local signing and an approved manual publication.
+request, a manual build, approved Actions signing and a separate manual publication.
 
 Install [Rust](https://rustup.rs/). The toolchain is pinned to 1.99.0.
 Install [Git LFS](https://git-lfs.com/), then fetch the binary icon resources

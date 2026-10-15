@@ -163,11 +163,7 @@ pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) ->
         return Err("publication is restricted to the manually approved GitHub workflow".into());
     }
     preflight(version, revision)?;
-    if run_id.is_empty() || !run_id.bytes().all(|b| b.is_ascii_digit()) {
-        return Err("invalid candidate run ID".into());
-    }
-    let run = api(&format!("actions/runs/{run_id}"))?;
-    validate_candidate_run(&run)?;
+    check_run(run_id)?;
     let data = package::verify(directory)?;
     validate_set(&data, version, revision)?;
     let tag = format!("v{version}");
@@ -241,6 +237,60 @@ pub fn publish(version: &str, revision: &str, run_id: &str, directory: &Path) ->
     ]))
 }
 
+fn check_run(run_id: &str) -> Result {
+    if run_id.is_empty() || !run_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("invalid candidate run ID".into());
+    }
+    validate_candidate_run(&api(&format!("actions/runs/{run_id}"))?)
+}
+
+pub fn verify_candidate(directory: &Path, target: &str) -> Result {
+    let data = package::verify(directory)?;
+    validate_unsigned(&data, target, &crate::version()?, &crate::revision()?)
+}
+
+fn validate_unsigned(data: &[Manifest], target: &str, version: &str, revision: &str) -> Result {
+    if !TARGETS.contains(&target)
+        || data.len() != 1
+        || data[0].target != target
+        || data[0].final_package
+        || data[0].version != version
+        || data[0].revision != revision
+        || data[0].candidate_sha256.is_some()
+    {
+        return Err("candidate target/source/version or unsigned state mismatch".into());
+    }
+    Ok(())
+}
+
+pub fn check_candidates(version: &str, revision: &str, run_id: &str) -> Result {
+    preflight(version, revision)?;
+    check_run(run_id)?;
+    let directory = Path::new(".build/signing-candidates");
+    if directory.exists() {
+        return Err("candidate validation directory already exists".into());
+    }
+    execute(
+        Command::new("gh")
+            .args([
+                "run",
+                "download",
+                run_id,
+                "--repo",
+                REPOSITORY,
+                "--pattern",
+                "candidate-*",
+                "--dir",
+            ])
+            .arg(directory),
+    )?;
+    for target in TARGETS {
+        let data = package::verify(&directory.join(format!("candidate-{target}")))?;
+        validate_unsigned(&data, target, version, revision)?;
+    }
+    Ok(())
+}
+
 fn validate_candidate_run(run: &Value) -> Result {
     if run["head_branch"] != "main"
         || run["event"] != "workflow_dispatch"
@@ -258,6 +308,29 @@ fn validate_candidate_run(run: &Value) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signing_rejects_wrong_source_target_version_or_already_signed_candidates() {
+        let sha = "a".repeat(40);
+        let target = TARGETS[0];
+        let mut data = vec![Manifest {
+            schema: 1,
+            version: "0.2.0".into(),
+            revision: sha.clone(),
+            target: target.into(),
+            final_package: false,
+            file: package::filename("0.2.0", target, false),
+            sha256: "b".repeat(64),
+            candidate_sha256: None,
+        }];
+        assert!(validate_unsigned(&data, target, "0.2.0", &sha).is_ok());
+        assert!(validate_unsigned(&data, TARGETS[1], "0.2.0", &sha).is_err());
+        assert!(validate_unsigned(&data, target, "0.2.1", &sha).is_err());
+        assert!(validate_unsigned(&data, target, "0.2.0", &"c".repeat(40)).is_err());
+        data[0].final_package = true;
+        assert!(validate_unsigned(&data, target, "0.2.0", &sha).is_err());
+        assert!(validate_unsigned(&[], target, "0.2.0", &sha).is_err());
+    }
 
     #[test]
     fn candidate_run_can_build_a_main_ancestor_but_cannot_come_from_a_pr() {
