@@ -1,0 +1,23 @@
+minimum_pre_commit_version: '4.7.0'
+default_stages: [pre-commit]
+fail_fast: true
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+  - repo: local
+    hooks:
+      - id: rust-lint
+        name: Rust format, Clippy and repository checks
+        entry: cargo xtask lint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: cargo-deny
+        name: Dependency advisories, licenses and sources
+        entry: cargo deny --locked check
+        language: system
+        pass_filenames: false
+        always_run: true
