@@ -98,7 +98,9 @@ fn check() -> Result {
             "warnings",
         ],
         vec!["test", "--locked", "--workspace"],
-        vec!["build", "--locked", "--workspace"],
+        // Windows cannot replace the running xtask executable. The outer
+        // `cargo xtask` already built it; tests/Clippy still cover the workspace.
+        vec!["build", "--locked", "--workspace", "--exclude", "xtask"],
     ] {
         execute(Command::new("cargo").args(args))?;
     }

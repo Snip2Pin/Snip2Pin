@@ -156,7 +156,7 @@ pub fn build(target: &str, profile: &str) -> Result {
     } else {
         crate::notices::write(&payload.join("THIRD_PARTY_NOTICES.txt"))?;
         fs::copy(&binary, payload.join(executable))?;
-        fs::copy("README.md", payload.join("README.md"))?;
+        fs::copy("packaging/README.txt", payload.join("README.txt"))?;
         if let Some(license) = manifest()?["package"]
             .get("license-file")
             .and_then(|v| v.as_str())
