@@ -9,7 +9,11 @@ use super::{icons::paint_copy_icon, style::PIN};
 pub enum Action {
     CopyPin(u64),
     ClosePin(u64),
+    MenuPin(u64),
 }
+
+const MENU_PADDING: f32 = 8.0;
+pub const MENU_SIZE: egui::Vec2 = egui::vec2(120.0, 72.0);
 
 pub fn image(
     ui: &mut egui::Ui,
@@ -42,6 +46,19 @@ pub fn image_with_host(
         ui.id().with(("pin-image", id)),
         Sense::click_and_drag(),
     );
+    if ui.ctx().current_pass_index() == 0
+        && ui.input(|input| input.pointer.secondary_clicked())
+        && ui
+            .input(|input| input.pointer.interact_pos())
+            .is_some_and(|point| {
+                bounds.contains(point)
+                    && ui.clip_rect().contains(point)
+                    && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
+            })
+    {
+        events(Action::MenuPin(id));
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
     let edge = (!native_edges)
         .then(|| ui.input(|input| input.pointer.interact_pos()))
         .flatten()
@@ -102,9 +119,14 @@ pub fn image_with_host(
 
 pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
     let bounds = ui.max_rect();
-    let row = Rect::from_center_size(bounds.center(), METRICS.toolbar_size());
-    let copy_rect = Rect::from_min_size(row.min, egui::Vec2::splat(METRICS.button));
-    let close_rect = copy_rect.translate(egui::vec2(METRICS.button + METRICS.button_gap, 0.0));
+    let copy_rect = Rect::from_min_size(bounds.min, egui::Vec2::splat(METRICS.button));
+    let step = METRICS.button + METRICS.button_gap;
+    let offset = if bounds.height() > bounds.width() {
+        egui::vec2(0.0, step)
+    } else {
+        egui::vec2(step, 0.0)
+    };
+    let close_rect = copy_rect.translate(offset);
     let copy = ui.put(copy_rect, egui::Button::new("").fill(PIN.button_fill));
     copy.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "复制")
@@ -124,6 +146,27 @@ pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
     if close.clicked() {
         events(Action::ClosePin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
+}
+
+pub fn menu(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+    let bounds = ui.max_rect().shrink(MENU_PADDING);
+    let height = (bounds.height() - METRICS.button_gap) / 2.0;
+    for (index, (label, action)) in [
+        ("复制", Action::CopyPin(id)),
+        ("关闭", Action::ClosePin(id)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let rect = Rect::from_min_size(
+            bounds.min + egui::vec2(0.0, index as f32 * (height + METRICS.button_gap)),
+            egui::vec2(bounds.width(), height),
+        );
+        if ui.put(rect, egui::Button::new(label)).clicked() {
+            events(action);
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
 }
 

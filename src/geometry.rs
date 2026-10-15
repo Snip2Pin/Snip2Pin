@@ -17,6 +17,19 @@ pub fn selection(
     viewport: [f64; 2],
     pixels: [u32; 2],
 ) -> Option<PixelRect> {
+    selection_with_step(start, end, viewport, pixels, [1, 1])
+}
+
+/// Expand selection edges to the source-pixel grid representable by the native
+/// window. Both preview and crop use this rectangle; source bounds take priority
+/// when the image extent is not a whole number of grid steps.
+pub fn selection_with_step(
+    start: [f64; 2],
+    end: [f64; 2],
+    viewport: [f64; 2],
+    pixels: [u32; 2],
+    pixel_step: [u32; 2],
+) -> Option<PixelRect> {
     if !start
         .into_iter()
         .chain(end)
@@ -24,17 +37,22 @@ pub fn selection(
         .all(f64::is_finite)
         || viewport.into_iter().any(|v| v <= 0.0)
         || pixels.into_iter().any(|v| v == 0)
+        || pixel_step.into_iter().any(|v| v == 0)
     {
         return None;
     }
     let mut low = [0; 2];
     let mut high = [0; 2];
     for axis in 0..2 {
+        let first = start[axis].min(end[axis]).clamp(0.0, viewport[axis]);
+        let last = start[axis].max(end[axis]).clamp(0.0, viewport[axis]);
+        if first >= last {
+            return None;
+        }
         let ratio = f64::from(pixels[axis]) / viewport[axis];
-        low[axis] = (start[axis].min(end[axis]).clamp(0.0, viewport[axis]) * ratio).floor() as u32;
-        high[axis] = ((start[axis].max(end[axis]).clamp(0.0, viewport[axis]) * ratio).ceil()
-            as u32)
-            .min(pixels[axis]);
+        let step = f64::from(pixel_step[axis]);
+        low[axis] = ((first * ratio / step).floor() * step).min(f64::from(pixels[axis])) as u32;
+        high[axis] = ((last * ratio / step).ceil() * step).min(f64::from(pixels[axis])) as u32;
     }
     let width = high[0].saturating_sub(low[0]);
     let height = high[1].saturating_sub(low[1]);

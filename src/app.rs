@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -15,7 +15,7 @@ use snip2pin::{
     geometry,
     icon::{self, Variant},
     permission::ScreenPermission,
-    pin::{self, Coordinates},
+    pin,
     session::CaptureGate,
     settings::{self, Binding, Preferences},
 };
@@ -32,10 +32,20 @@ fn pin_id(id: u64) -> ViewportId {
     ViewportId::from_hash_of(("pin", id))
 }
 
-fn dispatch_pin(action: ui::pin::Action, events: &Sender<Event>, ctx: &egui::Context) {
+fn pin_menu_id() -> ViewportId {
+    ViewportId::from_hash_of("pin-menu")
+}
+
+fn dispatch_pin(
+    action: ui::pin::Action,
+    events: &Sender<Event>,
+    ctx: &egui::Context,
+    menu_position: Option<egui::Pos2>,
+) {
     let event = match action {
         ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
         ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
+        ui::pin::Action::MenuPin(id) => Event::MenuPin(id, menu_position),
     };
     let _ = events.send(event);
     ctx.request_repaint_of(ViewportId::ROOT);
@@ -48,6 +58,8 @@ pub enum Event {
     PinReady(u64, u64),
     CopyPin(u64),
     ClosePin(u64),
+    MenuPin(u64, Option<egui::Pos2>),
+    ClosePinMenu,
     Tray(crate::tray::Action),
 }
 
@@ -76,7 +88,12 @@ struct Pin {
     screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
     ready: Arc<AtomicBool>,
-    minimum_scale: Arc<AtomicU32>,
+}
+
+struct PinMenu {
+    pin_id: u64,
+    position: Option<egui::Pos2>,
+    focused: Arc<AtomicBool>,
 }
 
 pub struct Snip2Pin {
@@ -88,6 +105,7 @@ pub struct Snip2Pin {
     layers: BTreeMap<u32, Layer>,
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
+    pin_menu: Option<PinMenu>,
     next_pin: u64,
     message: Option<String>,
     shortcut: Option<Shortcut>,
@@ -214,6 +232,7 @@ impl Snip2Pin {
             layers,
             active_display: None,
             pins: BTreeMap::new(),
+            pin_menu: None,
             next_pin: 0,
             message,
             shortcut,
@@ -258,6 +277,7 @@ impl Snip2Pin {
         let Some(id) = self.gate.begin() else {
             return;
         };
+        self.close_pin_menu(ctx);
         self.message = None;
         self.phase = Phase::Capturing;
         // Preserve the visible desktop while capturing. No hiding, animation,
@@ -479,6 +499,7 @@ impl Snip2Pin {
                         let selection = overlay::Selection {
                             texture,
                             pixels: snapshot.pixel_size(),
+                            pixel_step: platform::selection_pixel_step(snapshot),
                             start: None,
                             focus_requested: false,
                         };
@@ -603,19 +624,18 @@ impl Snip2Pin {
                     pixels,
                     initial: {
                         let zoom = ctx.zoom_factor();
-                        let units = Coordinates::new(
+                        let ratio = pin::coordinate_ratio(
                             snapshot.display.scale,
                             zoom,
                             snapshot.display.scale * zoom,
                         );
-                        pin::frame_geometry(placement, screen, units.ratio, units.grid).image
+                        pin::frame_geometry(placement, screen, ratio).image
                     },
                     display_scale: snapshot.display.scale,
                     screen,
                     screen_areas,
                     session: id,
                     ready: Arc::new(AtomicBool::new(false)),
-                    minimum_scale: Arc::new(AtomicU32::new(0)),
                 },
             );
             // Keep the selection image until the pin has painted its first frame.
@@ -632,7 +652,28 @@ impl Snip2Pin {
         }
     }
 
+    fn open_pin_menu(&mut self, id: u64, position: Option<egui::Pos2>, ctx: &egui::Context) {
+        if !self.pins.contains_key(&id) {
+            return;
+        }
+        self.pin_menu = Some(PinMenu {
+            pin_id: id,
+            position,
+            focused: Arc::new(AtomicBool::new(false)),
+        });
+        ctx.request_repaint_of(pin_menu_id());
+    }
+
+    fn close_pin_menu(&mut self, ctx: &egui::Context) {
+        if self.pin_menu.take().is_some() {
+            ctx.send_viewport_cmd_to(pin_menu_id(), ViewportCommand::Close);
+        }
+    }
+
     fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
+        if self.pin_menu.as_ref().is_some_and(|menu| menu.pin_id == id) {
+            self.close_pin_menu(ctx);
+        }
         if let Some(pin) = self.pins.remove(&id)
             && pin.ready.load(Ordering::Acquire)
         {
@@ -645,6 +686,7 @@ impl Snip2Pin {
     }
 
     fn close_pins(&mut self, ctx: &egui::Context) {
+        self.close_pin_menu(ctx);
         for id in self.pins.keys().copied().collect::<Vec<_>>() {
             self.close_pin(id, ctx);
         }
@@ -869,7 +911,6 @@ impl Snip2Pin {
             let texture = pin.texture.clone();
             let events = self.sender.clone();
             let ready = pin.ready.clone();
-            let minimum_scale = pin.minimum_scale.clone();
             let session = pin.session;
             let display_scale = pin.display_scale;
             let screen = pin.screen;
@@ -884,7 +925,6 @@ impl Snip2Pin {
                     .with_has_shadow(true)
                     .with_position(initial.min)
                     .with_inner_size(initial.size())
-                    .with_min_inner_size(pin::minimum_image_size())
                     .with_resizable(true)
                     .with_always_on_top()
                     .with_active(false)
@@ -893,26 +933,18 @@ impl Snip2Pin {
                     if ui.input(|input| {
                         input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
                     }) {
-                        dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx());
+                        dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx(), None);
                         return;
                     }
-                    let units = Coordinates::new(
+                    let ratio = pin::coordinate_ratio(
                         display_scale,
                         ui.ctx().zoom_factor(),
                         ui.ctx().pixels_per_point(),
                     );
-                    // Some backends cache minimum sizes in physical pixels.
-                    // Refresh the constraint only when the actual DPI changes.
-                    let scale = ui.ctx().pixels_per_point().to_bits();
-                    if minimum_scale.swap(scale, Ordering::AcqRel) != scale {
-                        ui.ctx().send_viewport_cmd(ViewportCommand::MinInnerSize(
-                            pin::minimum_image_size(),
-                        ));
-                    }
                     // Native geometry is authoritative; painting never changes it.
                     let controls =
                         if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
-                            pin::toolbar_geometry(image, &areas, screen, units.ratio)
+                            pin::toolbar_geometry(image, &areas, screen, ratio)
                                 .map(|rect| rect.translate(-image.min.to_vec2()))
                         } else {
                             // Wayland may not expose global positions. Keep controls
@@ -924,7 +956,22 @@ impl Snip2Pin {
                         .input(|input| input.pointer.hover_pos())
                         .is_some_and(|point| ui.max_rect().contains(point));
                     let ctx = ui.ctx().clone();
-                    let dispatch = |action| dispatch_pin(action, &events, &ctx);
+                    let menu_position = ctx.input(|input| {
+                        input
+                            .viewport()
+                            .inner_rect
+                            .zip(input.pointer.interact_pos())
+                            .map(|(window, point)| {
+                                pin::menu_position(
+                                    window.min + point.to_vec2(),
+                                    ui::pin::MENU_SIZE,
+                                    &areas,
+                                    screen,
+                                    ratio,
+                                )
+                            })
+                    });
+                    let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
                     ui::pin::image(
                         ui,
                         id,
@@ -945,6 +992,48 @@ impl Snip2Pin {
                 },
             );
         }
+    }
+
+    fn show_pin_menu(&self, ctx: &egui::Context) {
+        let Some(menu) = &self.pin_menu else {
+            return;
+        };
+        let id = menu.pin_id;
+        let focused = menu.focused.clone();
+        let events = self.sender.clone();
+        let mut builder = self
+            .window_icon(egui::ViewportBuilder::default())
+            .with_title("Snip2Pin · 操作")
+            .with_decorations(false)
+            .with_transparent(false)
+            .with_inner_size(ui::pin::MENU_SIZE)
+            .with_resizable(false)
+            .with_has_shadow(true)
+            .with_always_on_top()
+            .with_taskbar(false)
+            .with_active(true);
+        if let Some(position) = menu.position {
+            builder = builder.with_position(position);
+        }
+        ctx.show_viewport_deferred(pin_menu_id(), builder, move |ui, _| {
+            let has_focus = ui.input(|input| input.focused);
+            if has_focus {
+                focused.store(true, Ordering::Release);
+            }
+            if ui.input(|input| {
+                input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
+            }) || (!has_focus && focused.load(Ordering::Acquire))
+            {
+                let _ = events.send(Event::ClosePinMenu);
+                ui.ctx().request_repaint_of(ViewportId::ROOT);
+                return;
+            }
+            let ctx = ui.ctx().clone();
+            ui::pin::menu(ui, id, &|action| {
+                dispatch_pin(action, &events, &ctx, None);
+                let _ = events.send(Event::ClosePinMenu);
+            });
+        });
     }
 }
 
@@ -980,8 +1069,13 @@ impl eframe::App for Snip2Pin {
                         self.restore(ctx);
                     }
                 }
-                Event::CopyPin(id) => self.copy_pin(id, ctx),
+                Event::CopyPin(id) => {
+                    self.copy_pin(id, ctx);
+                    self.close_pin_menu(ctx);
+                }
                 Event::ClosePin(id) => self.close_pin(id, ctx),
+                Event::MenuPin(id, anchor) => self.open_pin_menu(id, anchor, ctx),
+                Event::ClosePinMenu => self.close_pin_menu(ctx),
                 Event::Tray(action) => self.tray_action(action, ctx),
             }
         }
@@ -998,6 +1092,7 @@ impl eframe::App for Snip2Pin {
             }
         }
         self.show_pins(ctx);
+        self.show_pin_menu(ctx);
         self.show_layers(ctx);
     }
 

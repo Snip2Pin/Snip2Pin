@@ -555,3 +555,247 @@ fn body_press_batched_with_motion_uses_its_actual_origin() {
         assert_eq!(commands(&output), &[ViewportCommand::StartDrag]);
     }
 }
+
+#[test]
+fn vertical_controls_keep_copy_above_close_without_native_gestures() {
+    for (offset, expected) in [
+        (0.0, Action::CopyPin(7)),
+        (METRICS.button + METRICS.button_gap, Action::ClosePin(7)),
+    ] {
+        for native_edges in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 72.0));
+            let column = Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 56.0));
+            let point =
+                column.min + egui::vec2(METRICS.button / 2.0, offset + METRICS.button / 2.0);
+            let mut actions = Vec::new();
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+            ] {
+                let (output, emitted, visible) =
+                    paint_composite(&ctx, &texture, bounds, column, events, native_edges);
+                assert!(visible);
+                assert_eq!(image_mesh(&output, &texture), bounds);
+                assert!(commands(&output).iter().all(|command| !matches!(
+                    command,
+                    ViewportCommand::StartDrag | ViewportCommand::BeginResize(_)
+                )));
+                actions.extend(emitted);
+            }
+            assert_eq!(actions, [expected]);
+        }
+    }
+}
+
+fn secondary(point: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: point,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn menu_item(output: &FullOutput, label: &str) -> Pos2 {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                Some(Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        })
+        .expect("menu item")
+}
+
+#[test]
+fn independent_menu_dispatches_copy_and_close_inside_its_own_bounds() {
+    for (label, expected) in [("复制", Action::CopyPin(7)), ("关闭", Action::ClosePin(7))] {
+        let ctx = egui::Context::default();
+        let bounds = Rect::from_min_size(Pos2::ZERO, MENU_SIZE);
+        let actions = RefCell::new(Vec::new());
+        let paint = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(bounds),
+                    events,
+                    ..Default::default()
+                },
+                |ui| menu(ui, 7, &|action| actions.borrow_mut().push(action)),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let output = paint(vec![]);
+        let point = menu_item(&output, label);
+        assert!(bounds.contains(point));
+        for events in [
+            vec![Event::PointerMoved(point)],
+            vec![pointer(point, true)],
+            vec![pointer(point, false)],
+        ] {
+            let output = paint(events);
+            assert!(commands(&output).iter().all(|command| !matches!(
+                command,
+                ViewportCommand::StartDrag
+                    | ViewportCommand::BeginResize(_)
+                    | ViewportCommand::InnerSize(_)
+                    | ViewportCommand::OuterPosition(_)
+            )));
+        }
+        assert_eq!(actions.into_inner(), [expected]);
+    }
+}
+
+#[test]
+fn right_click_dispatches_one_menu_request_on_image_and_hover_buttons() {
+    for native_edges in [false, true] {
+        for (size, controls_rect, point) in [
+            (egui::vec2(3.0, 3.0), None, egui::pos2(1.0, 1.0)),
+            (
+                egui::vec2(240.0, 160.0),
+                Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(56.0, 26.0))),
+                egui::pos2(13.0, 13.0),
+            ),
+            (
+                egui::vec2(26.0, 72.0),
+                Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 56.0))),
+                egui::pos2(13.0, 43.0),
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, size);
+            let actions = RefCell::new(Vec::new());
+            for (index, events) in [
+                vec![Event::PointerMoved(point)],
+                vec![secondary(point, true)],
+                vec![secondary(point, false)],
+                vec![],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut painted = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        time: Some(index as f64 * 0.1),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        image(ui, 7, &texture, native_edges, controls_rect, &|action| {
+                            actions.borrow_mut().push(action)
+                        });
+                        if let Some(row) = controls_rect {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                                controls(ui, 7, &|action| actions.borrow_mut().push(action))
+                            });
+                        }
+                        if index == 2 && ui.ctx().current_pass_index() == 0 {
+                            ui.ctx()
+                                .request_discard("menu request is dispatched only once");
+                        }
+                    },
+                );
+                painted.textures_delta.clear();
+                assert_eq!(image_mesh(&painted, &texture), bounds);
+                assert!(commands(&painted).iter().all(|command| !matches!(
+                    command,
+                    ViewportCommand::StartDrag | ViewportCommand::BeginResize(_)
+                )));
+            }
+            assert_eq!(actions.into_inner(), [Action::MenuPin(7)]);
+        }
+    }
+}
+
+#[test]
+fn narrow_text_image_keeps_its_displayed_dimensions_with_vertical_controls() {
+    let ctx = egui::Context::default();
+    let mut text_image = egui::ColorImage::filled([32, 72], Color32::WHITE);
+    // Generated 3×5 glyphs spell TEXT, so this fixture catches enlargement of
+    // narrow text captures rather than approving a larger window for buttons.
+    for (index, rows) in [
+        [0b111, 0b010, 0b010, 0b010, 0b010],
+        [0b111, 0b100, 0b110, 0b100, 0b111],
+        [0b101, 0b101, 0b010, 0b101, 0b101],
+        [0b111, 0b010, 0b010, 0b010, 0b010],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (y, row) in rows.into_iter().enumerate() {
+            for x in 0..3 {
+                if row & (1 << (2 - x)) != 0 {
+                    text_image[(2 + index * 4 + x, 2 + y)] = Color32::BLACK;
+                }
+            }
+        }
+    }
+    let texture = ctx.load_texture(
+        "narrow-generated-text",
+        text_image,
+        egui::TextureOptions::NEAREST,
+    );
+    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(32.0, 72.0));
+    let column =
+        snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("vertical controls");
+    assert_eq!(column.size(), egui::vec2(26.0, 56.0));
+    let (output, actions, visible) = paint_composite(
+        &ctx,
+        &texture,
+        bounds,
+        column,
+        vec![Event::PointerMoved(bounds.center())],
+        true,
+    );
+    assert!(visible);
+    assert!(actions.is_empty());
+    assert_eq!(image_mesh(&output, &texture).size(), egui::vec2(32.0, 72.0));
+    assert_eq!(texture.size(), [32, 72]);
+}
+
+#[test]
+fn tiny_image_right_click_does_not_enlarge_the_image_or_start_a_native_gesture() {
+    for size in [egui::vec2(3.0, 3.0), egui::vec2(14.0, 120.0)] {
+        let ctx = egui::Context::default();
+        let texture = texture(&ctx);
+        let bounds = Rect::from_min_size(Pos2::ZERO, size);
+        for (index, events) in [
+            vec![Event::PointerMoved(bounds.center())],
+            vec![secondary(bounds.center(), true)],
+            vec![secondary(bounds.center(), false)],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (output, actions) = paint_image(
+                &ctx,
+                &texture,
+                bounds,
+                events,
+                true,
+                index as f64 * 0.1,
+                false,
+            );
+            assert_eq!(
+                actions,
+                if index == 2 {
+                    vec![Action::MenuPin(7)]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(image_mesh(&output, &texture), bounds);
+            assert!(commands(&output).iter().all(|command| !matches!(
+                command,
+                ViewportCommand::StartDrag | ViewportCommand::BeginResize(_)
+            )));
+        }
+    }
+}

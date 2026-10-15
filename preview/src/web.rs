@@ -28,13 +28,13 @@ struct Gesture {
 }
 
 impl Gesture {
-    fn image_at(&self, pointer: Pos2, maximum: Vec2) -> Rect {
+    fn image_at(&self, pointer: Pos2, maximum: Vec2, pixels_per_point: f32) -> Rect {
         let delta = pointer - self.origin;
         let Some(direction) = self.direction else {
             return self.image.translate(delta);
         };
         use ResizeDirection::*;
-        let minimum = pin::minimum_image_size();
+        let minimum = Vec2::splat(pixels_per_point.recip());
         let maximum = maximum.max(minimum);
         let mut image = self.image;
         if matches!(direction, West | NorthWest | SouthWest) {
@@ -67,6 +67,7 @@ struct Sandbox {
     icon: TextureHandle,
     selection: Option<overlay::Selection>,
     pins: Vec<Pin>,
+    menu: Option<(u64, Pos2)>,
     next_id: u64,
 }
 
@@ -104,15 +105,18 @@ impl Sandbox {
             source,
             selection: None,
             pins: Vec::new(),
+            menu: None,
             next_id: 0,
         }
     }
 
     fn capture(&mut self) {
         self.message = None;
+        self.menu = None;
         self.selection = Some(overlay::Selection {
             texture: self.texture.clone(),
             pixels: self.source.size.map(|n| n as u32),
+            pixel_step: [1, 1],
             start: None,
             focus_requested: false,
         });
@@ -180,7 +184,6 @@ impl eframe::App for Sandbox {
                                 size: image.size().into(),
                             },
                             bounds,
-                            1.0,
                             1.0,
                         );
                         self.pins.push(Pin {
@@ -255,13 +258,18 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::Startup(enabled)) => self.startup = enabled,
             _ => {}
         }
+        if self.menu.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.menu = None;
+        }
         let events = RefCell::new(Vec::new());
         for pin in &mut self.pins {
             let pointer = ui.ctx().pointer_latest_pos();
             if let Some(gesture) = &pin.gesture
                 && let Some(pointer) = pointer
             {
-                pin.image = gesture.image_at(pointer, bounds.size());
+                pin.image = gesture.image_at(pointer, bounds.size(), ui.ctx().pixels_per_point());
             }
             if !ui.input(|input| input.pointer.primary_down()) {
                 pin.gesture = None;
@@ -313,9 +321,59 @@ impl eframe::App for Sandbox {
         }
         for event in events.into_inner() {
             match event {
-                pin_view::Action::ClosePin(id) => self.pins.retain(|pin| pin.id != id),
+                pin_view::Action::ClosePin(id) => {
+                    self.pins.retain(|pin| pin.id != id);
+                    self.menu = None;
+                }
                 pin_view::Action::CopyPin(_) => {
-                    self.message = Some("已复制（沙箱仅模拟，不写系统剪贴板）。".into())
+                    self.message = Some("已复制（沙箱仅模拟，不写系统剪贴板）。".into());
+                    self.menu = None;
+                }
+                pin_view::Action::MenuPin(id) => {
+                    let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
+                        bounds.min,
+                        (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
+                    );
+                    self.menu = Some((id, position));
+                }
+            }
+        }
+        if let Some((id, position)) = self.menu {
+            let menu_rect = Rect::from_min_size(position, pin_view::MENU_SIZE);
+            if !self.pins.iter().any(|pin| pin.id == id)
+                || ui.input(|input| {
+                    input.key_pressed(egui::Key::Escape)
+                        || (input.pointer.any_pressed()
+                            && input
+                                .pointer
+                                .interact_pos()
+                                .is_some_and(|point| !menu_rect.contains(point)))
+                })
+            {
+                self.menu = None;
+            } else {
+                let action = RefCell::new(None);
+                egui::Area::new(egui::Id::new("pin-menu"))
+                    .order(egui::Order::Foreground)
+                    .movable(false)
+                    .constrain(false)
+                    .fixed_pos(position)
+                    .show(ui.ctx(), |ui| {
+                        ui.set_min_size(pin_view::MENU_SIZE);
+                        ui.set_max_size(pin_view::MENU_SIZE);
+                        ui.painter()
+                            .rect_filled(ui.max_rect(), 4, ui.visuals().window_fill);
+                        pin_view::menu(ui, id, &|event| *action.borrow_mut() = Some(event));
+                    });
+                if let Some(action) = action.into_inner() {
+                    self.menu = None;
+                    match action {
+                        pin_view::Action::CopyPin(_) => {
+                            self.message = Some("已复制（沙箱仅模拟，不写系统剪贴板）。".into());
+                        }
+                        pin_view::Action::ClosePin(id) => self.pins.retain(|pin| pin.id != id),
+                        pin_view::Action::MenuPin(_) => {}
+                    }
                 }
             }
         }

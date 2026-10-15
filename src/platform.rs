@@ -23,6 +23,38 @@ pub mod macos_icon;
 #[path = "platform/macos_access.rs"]
 pub mod macos_access;
 
+/// macOS window content uses whole native points. Snap selection in source
+/// pixels when a point contains an integral number of pixels. Synthetic or
+/// non-integral capture densities retain the source-pixel grid instead.
+pub fn selection_pixel_step(snapshot: &snip2pin::capture::Snapshot) -> [u32; 2] {
+    #[cfg(target_os = "macos")]
+    {
+        let pixels = snapshot.pixel_size();
+        let size = snapshot.display.logical_size();
+        std::array::from_fn(|axis| {
+            let density = f64::from(pixels[axis]) / f64::from(size[axis]);
+            let rounded = density.round();
+            // Display dimensions enter as f32; allow their representation error,
+            // without treating a genuinely fractional density as an integer.
+            let tolerance = f64::from(f32::EPSILON) * density.abs();
+            if density.is_finite()
+                && rounded >= 1.0
+                && rounded <= f64::from(u32::MAX)
+                && (density - rounded).abs() <= tolerance
+            {
+                rounded as u32
+            } else {
+                1
+            }
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = snapshot;
+        [1, 1]
+    }
+}
+
 pub fn capture_permission() -> bool {
     #[cfg(target_os = "macos")]
     return objc2_core_graphics::CGPreflightScreenCaptureAccess();
@@ -153,7 +185,8 @@ pub fn prepare_floating_windows() -> Result<(), String> {
         let application = NSApplication::sharedApplication(main_thread);
         for window in application.windows() {
             let title = window.title().to_string();
-            if title == "Snip2Pin · 框选" || title.starts_with("Snip2Pin · 贴图") {
+            let pin_or_menu = title.starts_with("Snip2Pin · 贴图") || title == "Snip2Pin · 操作";
+            if title == "Snip2Pin · 框选" || pin_or_menu {
                 let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
@@ -161,7 +194,7 @@ pub fn prepare_floating_windows() -> Result<(), String> {
                 if window.collectionBehavior() != behavior {
                     window.setCollectionBehavior(behavior);
                 }
-                if title.starts_with("Snip2Pin · 贴图") {
+                if pin_or_menu {
                     macos::prepare_pin(&window)?;
                 }
                 if title == "Snip2Pin · 框选" {
@@ -314,6 +347,28 @@ pub fn install_fonts(ctx: &egui::Context) {
             }
             ctx.set_fonts(fonts);
             break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod selection_grid_tests {
+    #[test]
+    fn source_density_selects_native_steps_without_native_services() {
+        let mut snapshot = snip2pin::capture::demo();
+        for (size, mac_step) in [
+            ([480.0, 300.0], [2, 2]),
+            ([480.0, 200.0], [2, 3]),
+            ([680.0, 420.0], [1, 1]),
+            ([0.0, f32::NAN], [1, 1]),
+        ] {
+            snapshot.display.size = size;
+            let expected = if cfg!(target_os = "macos") {
+                mac_step
+            } else {
+                [1, 1]
+            };
+            assert_eq!(super::selection_pixel_step(&snapshot), expected);
         }
     }
 }

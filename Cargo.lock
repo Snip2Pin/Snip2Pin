@@ -3597,6 +3597,7 @@ version = "0.2.0"
 dependencies = [
  "directories",
  "eframe",
+ "egui-winit",
  "global-hotkey",
  "image",
  "objc2 0.6.5",

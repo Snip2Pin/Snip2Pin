@@ -1,5 +1,5 @@
 use eframe::egui::{self, Rect};
-use snip2pin::pin::{Coordinates, METRICS, minimum_image_size, toolbar_geometry};
+use snip2pin::pin::{METRICS, coordinate_ratio, toolbar_geometry};
 
 fn area() -> Rect {
     Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0))
@@ -47,15 +47,20 @@ fn controls_stay_inside_images_clipped_at_the_left_or_bottom() {
 }
 
 #[test]
-fn minimum_window_size_fits_both_buttons_and_resize_insets() {
+fn controls_fit_without_requiring_resize_insets_or_enlarging_the_image() {
     let area = area();
-    let image = Rect::from_min_size(egui::pos2(100.0, 120.0), minimum_image_size());
+    for size in [egui::vec2(56.0, 26.0), egui::vec2(26.0, 56.0)] {
+        let image = Rect::from_min_size(egui::pos2(100.0, 120.0), size);
+        assert_eq!(toolbar_geometry(image, &[area], area, 1.0), Some(image));
+        assert_eq!(image.size(), size);
+    }
+    let image = Rect::from_min_size(egui::pos2(100.0, 120.0), egui::vec2(56.0, 56.0));
     let row = controls(image, area);
-    assert_eq!(row, image.shrink(METRICS.inset));
+    assert_eq!(row.size(), egui::vec2(56.0, 26.0));
 }
 
 #[test]
-fn fractional_minimum_controls_reject_real_size_or_visible_area_shortfalls() {
+fn fractional_controls_fit_exact_boundaries_and_reject_real_shortfalls() {
     for origin in [
         egui::pos2(148.0, 142.0),
         egui::pos2(-148.0, -142.0),
@@ -66,28 +71,36 @@ fn fractional_minimum_controls_reject_real_size_or_visible_area_shortfalls() {
         for scale in [1.0, 1.5, 2.0] {
             for zoom in [1.0, 1.25, 2.0] {
                 let position = origin / (scale * zoom);
-                for axis in [egui::Vec2::X, egui::Vec2::Y] {
-                    for margin in [-1.0, -0.25, -0.1, 0.0, 0.1, 0.25, 1.0] {
-                        let image =
-                            Rect::from_min_size(position, minimum_image_size() + axis * margin);
-                        let area = image.expand(100.0);
-                        let row = toolbar_geometry(image, &[area], area, 1.0);
-                        assert_eq!(
-                            row.is_some(),
-                            margin >= 0.0,
-                            "image size: origin={origin:?}, scale={scale}, zoom={zoom}, axis={axis:?}, margin={margin}"
-                        );
-                        if let Some(row) = row {
-                            assert!(image.contains_rect(row));
+                for size in [egui::vec2(56.0, 26.0), egui::vec2(26.0, 56.0)] {
+                    for axis in [egui::Vec2::X, egui::Vec2::Y] {
+                        for margin in [-1.0, -0.25, 0.0, 0.25, 1.0] {
+                            let image = Rect::from_min_size(position, size + axis * margin);
+                            let area = image.expand(100.0);
+                            let row = toolbar_geometry(image, &[area], area, 1.0);
+                            assert_eq!(
+                                row.is_some(),
+                                margin >= 0.0,
+                                "image size: origin={origin:?}, scale={scale}, zoom={zoom}, size={size:?}, axis={axis:?}, margin={margin}"
+                            );
+                            if let Some(row) = row {
+                                let magnitude = image
+                                    .min
+                                    .to_vec2()
+                                    .abs()
+                                    .max(image.max.to_vec2().abs())
+                                    .max_elem();
+                                let precision = magnitude.next_up() - magnitude;
+                                assert!(image.expand(precision).contains_rect(row));
+                            }
                         }
-                    }
-                    let image = Rect::from_min_size(position, minimum_image_size());
-                    for deficit in [0.1, 0.25, 1.0] {
-                        let area = Rect::from_min_max(image.min, image.max - axis * deficit);
-                        assert!(
-                            toolbar_geometry(image, &[area], area, 1.0).is_none(),
-                            "visible area: origin={origin:?}, scale={scale}, zoom={zoom}, axis={axis:?}, deficit={deficit}"
-                        );
+                        let image = Rect::from_min_size(position, size);
+                        for deficit in [0.25, 1.0] {
+                            let area = Rect::from_min_max(image.min, image.max - axis * deficit);
+                            assert!(
+                                toolbar_geometry(image, &[area], area, 1.0).is_none(),
+                                "visible area: origin={origin:?}, scale={scale}, zoom={zoom}, size={size:?}, axis={axis:?}, deficit={deficit}"
+                            );
+                        }
                     }
                 }
             }
@@ -99,11 +112,29 @@ fn fractional_minimum_controls_reject_real_size_or_visible_area_shortfalls() {
 fn insufficient_visible_space_returns_none_without_relocating_the_image() {
     let area = area();
     for image in [
-        Rect::from_min_size(egui::pos2(630.0, 150.0), egui::vec2(200.0, 100.0)),
+        Rect::from_min_size(egui::pos2(660.0, 150.0), egui::vec2(200.0, 100.0)),
         Rect::from_min_size(egui::pos2(100.0, 430.0), egui::vec2(200.0, 100.0)),
         Rect::from_min_size(egui::pos2(800.0, 500.0), egui::vec2(200.0, 100.0)),
     ] {
         assert!(toolbar_geometry(image, &[area], area, 1.0).is_none());
+    }
+}
+
+#[test]
+fn a_narrow_visible_strip_uses_vertical_controls_before_falling_back_to_a_menu() {
+    let area = area();
+    let image = Rect::from_min_size(egui::pos2(630.0, 150.0), egui::vec2(200.0, 100.0));
+    let column = toolbar_geometry(image, &[area], area, 1.0).expect("vertical controls");
+    assert_eq!(column.size(), egui::vec2(26.0, 56.0));
+    assert!(image.intersect(area).contains_rect(column));
+    for size in [
+        egui::vec2(1.0, 1.0),
+        egui::vec2(12.0, 120.0),
+        egui::vec2(40.0, 50.0),
+    ] {
+        let image = Rect::from_min_size(egui::pos2(100.0, 120.0), size);
+        assert!(toolbar_geometry(image, &[area], area, 1.0).is_none());
+        assert_eq!(image.size(), size);
     }
 }
 
@@ -151,10 +182,13 @@ fn controls_choose_the_nearest_valid_position_to_the_image_top_right() {
 
 #[test]
 fn viewport_coordinate_conversion_keeps_native_and_capture_units_distinct() {
-    let coordinates = Coordinates::new(2.0, 1.25, 2.5);
-    assert_eq!(coordinates.ratio, 0.8);
-    assert_eq!(
-        coordinates.grid,
-        if cfg!(target_os = "macos") { 1.25 } else { 2.5 }
-    );
+    assert_eq!(coordinate_ratio(2.0, 1.25, 2.5), 0.8);
+    assert_eq!(coordinate_ratio(1.5, 2.0, 3.0), 0.5);
+    let ratio = coordinate_ratio(2.0, 1.25, 3.0);
+    let expected = if cfg!(target_os = "macos") {
+        0.8
+    } else {
+        2.0 / 3.0
+    };
+    assert_eq!(ratio, expected);
 }
