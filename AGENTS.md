@@ -6,6 +6,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
+- 主页采用紧凑直达布局：一个截图主按钮，快捷键与主题、图标、开机自启直接可见；版本与 GitHub Releases 入口固定在底部。长快捷键可换行，小窗口内容可滚动，不把设置拆成多页，不增加常驻操作说明。
 - 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
 - 项目网站后续使用 GitHub Pages；建立并验证页面之前，不添加尚不存在的主页链接。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
@@ -60,7 +61,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/pin.rs`: pin layout metrics, coordinate conversion, one-time preparation, and drag anchoring.
 - `src/app.rs`: capture state machine, events, and window lifecycle.
 - `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
-- `src/app/tests.rs`, `src/ui/pin/tests.rs`: lifecycle and view regressions, separate from production logic.
+- `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: pin stacking adapter, preserving the backend's window class and observation lifecycle.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
