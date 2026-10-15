@@ -3,6 +3,10 @@ mod messages;
 mod notices;
 mod package;
 mod release;
+// Keep xtask's tests inside the test binary. Integration-test targets make Cargo
+// rebuild the normal executable, which Windows locks while `xtask check` runs.
+#[cfg(test)]
+mod ci_signing_tests;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};

@@ -100,6 +100,8 @@ Use `cargo xtask check` locally and in CI. Shared development/packaging logic
 belongs in the Rust `xtask` workspace member; native scripts only adapt platform
 tools. Read the development toolchain from rust-toolchain.toml and verify the
 minimum Rust version declared in Cargo.toml with `cargo xtask check-msrv`.
+Keep xtask's own tests in `#[cfg(test)]` modules: Cargo builds the normal binary
+for integration-test targets, which cannot replace a running `xtask.exe` on Windows.
 Dependency updates go through PRs and `cargo deny check`; do not auto-merge or
 globally suppress advisories/licenses to obtain a green check. Any scoped
 exception needs an advisory ID, impact analysis and a dated follow-up.
