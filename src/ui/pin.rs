@@ -119,14 +119,13 @@ pub fn image_with_host(
 
 pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
     let bounds = ui.max_rect();
-    let copy_rect = Rect::from_min_size(bounds.min, egui::Vec2::splat(METRICS.button));
+    let first = Rect::from_min_size(bounds.min, egui::Vec2::splat(METRICS.button));
     let step = METRICS.button + METRICS.button_gap;
-    let offset = if bounds.height() > bounds.width() {
-        egui::vec2(0.0, step)
+    let (copy_rect, close_rect) = if bounds.height() > bounds.width() {
+        (first.translate(egui::vec2(0.0, step)), first)
     } else {
-        egui::vec2(step, 0.0)
+        (first, first.translate(egui::vec2(step, 0.0)))
     };
-    let close_rect = copy_rect.translate(offset);
     let copy = ui.put(copy_rect, egui::Button::new("").fill(PIN.button_fill));
     copy.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "复制")

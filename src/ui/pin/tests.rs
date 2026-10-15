@@ -557,10 +557,10 @@ fn body_press_batched_with_motion_uses_its_actual_origin() {
 }
 
 #[test]
-fn vertical_controls_keep_copy_above_close_without_native_gestures() {
+fn vertical_controls_keep_close_above_copy_without_native_gestures() {
     for (offset, expected) in [
-        (0.0, Action::CopyPin(7)),
-        (METRICS.button + METRICS.button_gap, Action::ClosePin(7)),
+        (0.0, Action::ClosePin(7)),
+        (METRICS.button + METRICS.button_gap, Action::CopyPin(7)),
     ] {
         for native_edges in [false, true] {
             let ctx = egui::Context::default();
