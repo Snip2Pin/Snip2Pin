@@ -8,6 +8,8 @@ pub enum Action {
     Home,
     Capture,
     ClosePins,
+    CopyPin(u64),
+    ClosePin(u64),
     Quit,
 }
 
@@ -20,6 +22,12 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(callback: impl Fn(Action) + Send + Sync + 'static) -> Result<Self, String> {
+        // Pin menus share this route even when the desktop has no tray host.
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            if let Some(action) = action(event.id.as_ref()) {
+                callback(action);
+            }
+        }));
         #[cfg(target_os = "linux")]
         {
             // KSNI can register without a host. Check once before hiding Home,
@@ -72,11 +80,6 @@ impl Tray {
         #[cfg(not(target_os = "macos"))]
         let builder = builder.with_icon(icon);
         let icon = builder.build().map_err(|error| error.to_string())?;
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if let Some(action) = action(event.id.as_ref()) {
-                callback(action);
-            }
-        }));
         Ok(Self {
             _icon: icon,
             capture,
@@ -112,8 +115,25 @@ fn action(id: &str) -> Option<Action> {
         "capture" => Some(Action::Capture),
         "close-pins" => Some(Action::ClosePins),
         "quit" => Some(Action::Quit),
-        _ => None,
+        _ => pin_action(id),
     }
+}
+
+fn pin_action(id: &str) -> Option<Action> {
+    let (value, close) = if let Some(value) = id.strip_prefix("pin-copy:") {
+        (value, false)
+    } else {
+        (id.strip_prefix("pin-close:")?, true)
+    };
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let id = value.parse().ok()?;
+    Some(if close {
+        Action::ClosePin(id)
+    } else {
+        Action::CopyPin(id)
+    })
 }
 
 #[cfg(test)]
@@ -133,5 +153,29 @@ mod tests {
         let icon = snip2pin::icon::status().expect("symbolic tray artwork");
         assert!(icon.pixels().any(|pixel| pixel.0[3] == 0));
         assert!(icon.pixels().any(|pixel| pixel.0[3] > 0));
+    }
+
+    #[test]
+    fn native_pin_menu_ids_route_only_complete_unsigned_pin_ids() {
+        for (id, expected) in [
+            ("pin-copy:42", Action::CopyPin(42)),
+            ("pin-close:42", Action::ClosePin(42)),
+            ("pin-copy:18446744073709551615", Action::CopyPin(u64::MAX)),
+        ] {
+            assert_eq!(action(id), Some(expected));
+        }
+        for id in [
+            "pin-copy:",
+            "pin-close:",
+            "pin-copy:-1",
+            "pin-copy:+1",
+            "pin-copy:1:2",
+            "pin-close:18446744073709551616",
+            "pin-copy: 42",
+            "other:42",
+            "pin-copy:４２",
+        ] {
+            assert_eq!(action(id), None, "ignore malformed menu ID {id}");
+        }
     }
 }

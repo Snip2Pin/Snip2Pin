@@ -375,6 +375,8 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),
+            Action::CopyPin(id) => self.copy_pin(id, ctx),
+            Action::ClosePin(id) => self.close_pin(id, ctx),
             Action::ClosePins => {
                 self.close_pins(ctx);
                 if matches!(
@@ -656,6 +658,17 @@ impl Snip2Pin {
         if !self.pins.contains_key(&id) {
             return;
         }
+        if !self.demo {
+            match platform::pin_menu::show(id) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => {
+                    self.message = Some(error);
+                    self.tray_action(crate::tray::Action::Home, ctx);
+                    return;
+                }
+            }
+        }
         self.pin_menu = Some(PinMenu {
             pin_id: id,
             position,
@@ -907,6 +920,7 @@ impl Snip2Pin {
     }
 
     fn show_pins(&self, ctx: &egui::Context) {
+        let fallback_menu = self.demo || cfg!(target_os = "linux");
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
             let events = self.sender.clone();
@@ -956,21 +970,25 @@ impl Snip2Pin {
                         .input(|input| input.pointer.hover_pos())
                         .is_some_and(|point| ui.max_rect().contains(point));
                     let ctx = ui.ctx().clone();
-                    let menu_position = ctx.input(|input| {
-                        input
-                            .viewport()
-                            .inner_rect
-                            .zip(input.pointer.interact_pos())
-                            .map(|(window, point)| {
-                                pin::menu_position(
-                                    window.min + point.to_vec2(),
-                                    ui::pin::MENU_SIZE,
-                                    &areas,
-                                    screen,
-                                    ratio,
-                                )
+                    let menu_position = fallback_menu
+                        .then(|| {
+                            ctx.input(|input| {
+                                input
+                                    .viewport()
+                                    .inner_rect
+                                    .zip(input.pointer.interact_pos())
+                                    .map(|(window, point)| {
+                                        pin::menu_position(
+                                            window.min + point.to_vec2(),
+                                            ui::pin::MENU_SIZE,
+                                            &areas,
+                                            screen,
+                                            ratio,
+                                        )
+                                    })
                             })
-                    });
+                        })
+                        .flatten();
                     let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
                     ui::pin::image(
                         ui,

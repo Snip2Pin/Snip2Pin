@@ -7,6 +7,9 @@ use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use snip2pin::settings::Binding;
 
+#[path = "platform/pin_menu.rs"]
+pub mod pin_menu;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[path = "platform/work_area.rs"]
 mod work_area;
