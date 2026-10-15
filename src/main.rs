@@ -16,6 +16,10 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
     let action = arguments.next();
+    if action.as_deref() == Some("--version") {
+        println!("Snip2Pin {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
     if action.as_deref() == Some("--selected-icon") {
         println!(

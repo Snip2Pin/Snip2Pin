@@ -11,6 +11,8 @@ for variant in first second; do
     rustc packaging/macos/tests/signing.rs --cfg "${variant}_build" \
         -o "$APP/Contents/MacOS/snip2pin"
     cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
+    plutil -replace CFBundleShortVersionString -string '1.0.0' "$APP/Contents/Info.plist"
+    plutil -replace CFBundleVersion -string '1' "$APP/Contents/Info.plist"
     bash packaging/macos/signing.sh --sign "$APP"
 done
 [[ "$(security list-keychains -d user)" == "$ORIGINAL_SEARCH_LIST" ]]

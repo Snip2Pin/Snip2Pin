@@ -8,8 +8,8 @@
     <key>CFBundleExecutable</key><string>snip2pin</string>
     <key>CFBundleIconFile</key><string>AppIcon-Line</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+    <key>CFBundleVersion</key><string>@BUILD@</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSScreenCaptureUsageDescription</key><string>在你框选后截图，并把图片置顶显示在屏幕上。</string>

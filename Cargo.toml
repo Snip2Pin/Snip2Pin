@@ -5,7 +5,13 @@ edition = "2024"
 rust-version = "1.95"
 description = "A tiny cross-platform screenshot pinning app"
 repository = "https://github.com/Snip2Pin/Snip2Pin"
+license = "MIT"
 publish = false
+
+[workspace]
+members = ["xtask"]
+default-members = ["."]
+resolver = "3"
 
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }

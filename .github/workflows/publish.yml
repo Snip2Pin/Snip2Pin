@@ -1,0 +1,123 @@
+name: Publish verified release (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable MAJOR.MINOR.PATCH of the existing draft
+        required: true
+        type: string
+      revision:
+        description: Full source SHA, matching the candidate build and draft
+        required: true
+        type: string
+      candidate_run:
+        description: Successful manual candidates workflow run ID
+        required: true
+        type: string
+      acceptance:
+        description: 'Confirm native install/upgrade/interaction checks: publish VERSION'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate input before checkout/download
+        env:
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+          ACCEPTANCE: ${{ inputs.acceptance }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$REVISION" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$ACCEPTANCE" == "publish $VERSION" ]]
+          git merge-base --is-ancestor "$REVISION" origin/main
+          git checkout --detach "$REVISION"
+      - name: Fresh dependency audit before publication
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          arguments: --locked
+  signatures:
+    needs: validate
+    permissions:
+      contents: write # GitHub requires write access to read unpublished release drafts.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Download only this platform's final package and manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/final --pattern "*$TARGET.*"
+      - name: Verify checksum, signature, timestamp, identity and executable
+        run: cargo xtask verify-native dist/final ${{ matrix.target }}
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-${{ matrix.target }}
+          path: dist/final/*
+          retention-days: 1
+          if-no-files-found: error
+  publish:
+    needs: signatures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: verified-*
+          merge-multiple: true
+          path: dist/verified
+      - name: Recheck the draft against the frozen validated files, then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/current
+          diff -r dist/verified dist/current
+          cargo xtask publish "$VERSION" "$REVISION" "$CANDIDATE_RUN" dist/current --confirm

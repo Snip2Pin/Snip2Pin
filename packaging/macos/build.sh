@@ -3,66 +3,30 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR"
-RELEASE=false
 INSTALL=false
 MIGRATE=false
 for argument in "$@"; do
     case "$argument" in
-        --release) RELEASE=true ;;
         --install) INSTALL=true ;;
         --migrate-identity) MIGRATE=true ;;
-        *) printf 'Usage: build.sh [--install] [--release] [--migrate-identity]\n' >&2; exit 2 ;;
+        *) printf 'Usage: build.sh [--install] [--migrate-identity]\nDistribution: see docs/workflow.md\n' >&2; exit 2 ;;
     esac
 done
 if "$MIGRATE" && ! "$INSTALL"; then
     printf 'Identity migration requires --install.\n' >&2
     exit 2
 fi
-BUILD_ARGS=(--locked)
 PROFILE=debug
 OUTPUT_DIR="$PROJECT_DIR/.build/macos"
-if "$RELEASE"; then
-    [[ -n "${SNIP2PIN_SIGN_IDENTITY:-}" ]] || {
-        printf 'Distribution requires an explicit Developer ID signing identity.\n' >&2
-        exit 1
-    }
-    BUILD_ARGS+=(--release)
-    PROFILE=release
-    OUTPUT_DIR="$PROJECT_DIR/dist"
-fi
-cargo build "${BUILD_ARGS[@]}"
+cargo build --locked
 APP_DIR="$OUTPUT_DIR/Snip2Pin.app"
-ICONSET="$PROJECT_DIR/target/iconset/AppIcon.iconset"
-rm -rf "$APP_DIR" "$ICONSET"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$ICONSET"
-cp "target/$PROFILE/snip2pin" "$APP_DIR/Contents/MacOS/snip2pin"
-cp packaging/macos/Info.plist "$APP_DIR/Contents/Info.plist"
+rm -rf "$APP_DIR"
 ICON_VARIANT=line
 if "$INSTALL"; then
     ICON_VARIANT="$("target/$PROFILE/snip2pin" --selected-icon)"
 fi
-case "$ICON_VARIANT" in
-    line) ICON_NAME=AppIcon-Line ;;
-    metal) ICON_NAME=AppIcon-Metal ;;
-    *) printf 'Invalid icon variant.\n' >&2; exit 1 ;;
-esac
-plutil -replace CFBundleIconFile -string "$ICON_NAME" "$APP_DIR/Contents/Info.plist"
-for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "assets/icons/$ICON_VARIANT.png" \
-        --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    doubled=$((size * 2))
-    sips -z "$doubled" "$doubled" "assets/icons/$ICON_VARIANT.png" \
-        --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/$ICON_NAME.icns"
-plutil -lint "$APP_DIR/Contents/Info.plist"
+cargo xtask bundle-macos "target/$PROFILE/snip2pin" "$APP_DIR" "$ICON_VARIANT"
 bash packaging/macos/signing.sh --sign "$APP_DIR"
-if "$RELEASE"; then
-    codesign --verify --strict \
-        -R '=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
-        "$APP_DIR"
-    ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$OUTPUT_DIR/Snip2Pin-macOS.zip"
-fi
 if "$INSTALL"; then
     DESTINATION=/Applications/Snip2Pin.app
     if [[ -d "$DESTINATION" ]]; then
