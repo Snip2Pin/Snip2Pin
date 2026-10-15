@@ -76,6 +76,10 @@ removes after reading. The app itself does not retain files or a capture history
 
 ## Development
 
+See [Contributing](CONTRIBUTING.md) and [开发与发版流程 / Workflow](docs/workflow.md).
+Development uses short branches, PRs and native CI. Releases require an explicit
+request, a manual build, local signing and an approved manual publication.
+
 Install [Rust](https://rustup.rs/). The toolchain is pinned to 1.99.0.
 Install [Git LFS](https://git-lfs.com/), then fetch the binary icon resources
 before building:
@@ -98,12 +102,10 @@ sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1
 ```
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo xtask check
+cargo xtask check-msrv
+cargo deny check
 cargo run --locked
-cargo build --locked
-git lfs fsck
 ```
 
 Development builds use `target/debug/snip2pin` (`snip2pin.exe` on Windows).
@@ -140,8 +142,9 @@ on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
 Explicit identifier migrations use `--install --migrate-identity`, preserving the
 same signing certificate; macOS may require screen permission again after that
 one-time identity change. Subsequent updates use ordinary `--install`.
-The default build is a development bundle; only `--release` creates a distribution
-archive, and it requires a Developer ID signing identity.
+This script builds and optionally installs a local development bundle. Formal
+distribution uses the separate manual workflows and signing steps in
+[the release guide](docs/workflow.md), including Developer ID notarization on macOS.
 
 SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
 Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
@@ -193,7 +196,10 @@ Pins are independent borderless windows. Removing a pin releases its texture and
 in-memory copy buffer; the system manages the image already on the clipboard.
 Platform permission errors appear in the launcher.
 
-CI runs LFS validation, format, Clippy, tests, and development builds on Windows,
-macOS, and Linux. Image tests use generated pixels; macOS also checks selection
+CI runs LFS validation, format, Clippy, workspace tests, dependency/MSRV checks,
+development builds and package smoke checks on Windows x64, macOS ARM64/Intel,
+and Linux x64. Image tests use generated pixels; macOS also checks selection
 window geometry using invisible windows with application activation prohibited.
 CI does not verify real desktop permission prompts or compositor rules.
+
+Licensed under [MIT](LICENSE).

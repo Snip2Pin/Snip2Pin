@@ -1,0 +1,20 @@
+# Contributing to Snip2Pin
+
+Keep the product focused on screenshot + pin. Read [AGENTS.md](AGENTS.md) for
+implementation constraints and [the workflow](docs/workflow.md) for development,
+validation, packaging and manual releases.
+
+1. Describe the problem and acceptance criteria; use an Issue for larger changes.
+2. Start a short `feat/…`, `fix/…` or `chore/…` branch from current `main`.
+3. Keep one concern per PR. Add behavior regressions for bugs, update documentation
+   when behavior changes, and remove unused code.
+4. Run `cargo xtask check`. Run `cargo deny check` when changing dependencies.
+5. Open a PR with automatic results and explicit native interaction coverage.
+   Tests use generated images, never private desktop or clipboard content.
+6. Merge by squash after all required checks pass. Do not push directly to `main`.
+
+日常开发使用短分支和 PR，一个 PR 解决一个问题。先写清验收标准，再实现和验证；
+涉及窗口、权限或安装时，单独记录真实交互结果。CI 通过不能代替人工验收。
+提交、合并和标签推送都不会自动发版；只有用户明确要求时才运行发版流程。
+
+Contributions are licensed under the project's MIT license. No CLA is required.

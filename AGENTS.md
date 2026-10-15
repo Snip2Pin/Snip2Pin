@@ -72,6 +72,41 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 ## Development
 
+Follow [docs/workflow.md](docs/workflow.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+Use short branches and focused PRs; `main` requires all native CI checks and
+dependency checks, resolved discussions, an up-to-date base, and squash merge.
+Do not bypass protections or push directly to `main`. Single-maintainer PRs do
+not require a second reviewer. Describe user-visible acceptance criteria before
+implementation; separate automatic coverage from actual native interaction.
+Keep repository rules in `.github/rulesets/` consistent with GitHub settings.
+
+Use `cargo xtask check` locally and in CI. Shared development/packaging logic
+belongs in the Rust `xtask` workspace member; native scripts only adapt platform
+tools. Read the development toolchain from rust-toolchain.toml and verify the
+minimum Rust version declared in Cargo.toml with `cargo xtask check-msrv`.
+Dependency updates go through PRs and `cargo deny check`; do not auto-merge or
+globally suppress advisories/licenses to obtain a green check. Any scoped
+exception needs an advisory ID, impact analysis and a dated follow-up.
+The project and contributions use MIT; include LICENSE in application packages
+and preserve required third-party license notices.
+
+CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
+platform-specific caches. PRs cannot access signing credentials. Daily checks
+may build unsigned debug packages to validate layout without GUI activation,
+installing, uploading distribution files, signing, tagging or creating Releases.
+Only explicit manual candidate builds upload unsigned release-profile artifacts.
+Formal publication requires a complete set of four native targets, matching
+version/source SHA, checksums, native signature/notarization checks, recorded
+installation/upgrade acceptance and approval of the `release` Environment.
+Do not run candidate, signing, stage or publish commands without an explicit
+release request. Implementing/testing these workflows is not such a request.
+Never upload signing keys/passwords to GitHub, including Actions Secrets.
+Sign/notarize on a trusted local machine; do not attach a public-PR self-hosted
+runner to the user's everyday computer. No automatic version bump or release.
+Use Cargo.toml as the single version source; generate package metadata and bind
+manifests to a full commit SHA. Publish the verified files without rebuilding;
+never overwrite published tags/assets. Fix a release with a new patch version.
+
 Use the pinned Rust toolchain and commit `Cargo.lock`. Keep dependencies small.
 Use published crates instead of unpinned Git branches. Avoid unsafe code,
 production unwrap, hidden background work, and blocking the UI.
@@ -112,12 +147,9 @@ show the resulting diff. Keep code, comments, README, and this file consistent.
 ## Validation
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked
-git lfs fsck
-git diff --check
+cargo xtask check
+cargo xtask check-msrv
+cargo deny check
 ```
 
 Cover reverse drag, DPI conversion, empty and out-of-bounds selections, image
@@ -134,8 +166,9 @@ material uses `~/Library/Application Support/Snip2Pin/signing`, outside the repo
 Reuse the existing certificate; do not regenerate credentials during a rename.
 An explicitly requested identifier change uses `--install --migrate-identity`,
 which preserves the certificate requirement; later updates use ordinary `--install`.
-`build.sh --install` performs a local development update. Distribution packaging
-requires `--release` and a Developer ID identity, only on an explicit release request.
+`build.sh --install` performs a local development update. Formal distribution
+uses the manual workflows documented in docs/workflow.md, local Developer ID
+signing and notarization; never use the local development certificate to release.
 
 The initial task authorizes creation and pushing of this GitHub repository.
 Do not infer permission to publish releases or change repository visibility.

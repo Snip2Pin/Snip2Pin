@@ -1,0 +1,71 @@
+name: Build release candidates (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable MAJOR.MINOR.PATCH, already merged into main
+        required: true
+        type: string
+      revision:
+        description: Full SHA of main at dispatch time
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: candidates-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Exact commit and successful CI
+        env:
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release-check "$VERSION" "$REVISION"
+  build:
+    needs: validate
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Build unsigned candidate
+        run: cargo xtask package ${{ matrix.target }} release
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: candidate-${{ matrix.target }}
+          path: |
+            .build/packages/release/${{ matrix.target }}/*.zip
+            .build/packages/release/${{ matrix.target }}/*.tar.gz
+            .build/packages/release/${{ matrix.target }}/*.json
+          if-no-files-found: error
+          retention-days: 14
