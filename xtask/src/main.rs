@@ -1,7 +1,12 @@
 //! Repository checks and packaging; no GUI, desktop capture, or credentials.
+mod messages;
 mod notices;
 mod package;
 mod release;
+// Keep xtask's tests inside the test binary. Integration-test targets make Cargo
+// rebuild the normal executable, which Windows locks while `xtask check` runs.
+#[cfg(test)]
+mod ci_signing_tests;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -21,6 +26,9 @@ fn run() -> Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["check"] => check(),
+        ["check-messages", base, head, title] => messages::check(base, head, title),
+        ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
+        ["verify-candidate", directory, target] => release::verify_candidate(Path::new(directory), target),
         ["check-msrv"] => {
             let minimum = manifest()?["package"]["rust-version"].as_str().ok_or("missing rust-version")?.to_owned();
             execute(Command::new("rustup").args(["toolchain", "install", &minimum, "--profile", "minimal"]))?;
@@ -40,7 +48,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory))
         }
-        _ => Err("usage: cargo xtask check | check-msrv | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES --confirm | publish VERSION SHA BUILD_RUN DIR --confirm".into()),
+        _ => Err("usage: cargo xtask check | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES --confirm | publish VERSION SHA BUILD_RUN DIR --confirm".into()),
     }
 }
 
@@ -112,6 +120,7 @@ fn check() -> Result {
             "packaging/macos/build.sh",
             "packaging/macos/signing.sh",
             "packaging/macos/distribute.sh",
+            "packaging/macos/ci-sign.sh",
         ]))?;
         execute(Command::new("plutil").args(["-lint", "packaging/macos/Info.plist"]))?;
         execute(Command::new("rustfmt").args(["--check", "packaging/macos/tests/signing.rs"]))?;

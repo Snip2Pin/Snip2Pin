@@ -33,8 +33,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
 - macOS 本地安装必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名。
 - 更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。只有用户明确要求更换应用标识时，才使用显式迁移选项，仅替换签名要求中的 identifier，完整保留原证书和信任约束。
-- 签名私钥放在独立的本地钥匙串，不进入仓库；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
-- 签名证书及其私钥、钥匙串、密码、令牌等本机凭据必须保存在仓库之外，不提交到 Git、不上传到 GitHub，也不写入日志或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。
+- 本地开发签名私钥保留在独立的本地钥匙串，不导出到 CI；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
+- 正式发行凭据可保存在受审批保护的 GitHub `release` Environment Secrets；只允许手动、main 来源的签名任务读取。私钥、钥匙串、密码和令牌不得进入 Git、日志、缓存或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。Secrets 并非不可导出的硬件密钥，授权任务可以读取明文，需审阅工作流和依赖并及时轮换泄露凭据。
 - 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
 - Linux 有 X11 显示服务时优先使用 X11/XWayland 窗口后端，保留置顶能力。
 - 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
@@ -70,7 +70,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `packaging/`: platform packaging metadata and scripts.
 - `.github/workflows/ci.yml`: format, Clippy, tests, and builds on all three OSes.
 - `xtask/`: shared Rust checks, package/manifest validation, license notices and manual release commands.
-- `docs/workflow.md`: contributor flow, native acceptance, local signing and approved manual publication.
+- `docs/workflow.md`: contributor flow, native acceptance, approved CI signing and manual publication.
 - `.github/rulesets/`: versioned main/tag protection definitions, applied and verified through GitHub.
 
 ## Development
@@ -83,10 +83,25 @@ not require a second reviewer. Describe user-visible acceptance criteria before
 implementation; separate automatic coverage from actual native interaction.
 Keep repository rules in `.github/rulesets/` consistent with GitHub settings.
 
+PR titles and every branch commit subject must use `type(scope)!: description`;
+scope and `!` are optional. Types: feat, fix, docs, refactor, perf, test, build,
+ci, chore, revert. Use lowercase ASCII types/scopes (scope may contain digits
+and hyphens), a nonempty Chinese or English description, and at most 100 characters.
+Examples: `fix(pin): 修复顶部按钮位置`, `ci: automate release signing`.
+Use `!` and a `BREAKING CHANGE:` body/footer when changing incompatible behavior.
+Explain why in the body when useful; avoid vague subjects such as `update` or `fix`.
+PR descriptions state the problem/result, scope, validation and unverified native
+coverage; link issues when applicable. `messages.yml` checks titles on edits and
+all branch commits on updates; fix/reword invalid commits before merging.
+Squash commits use the validated PR title and PR body. Do not bypass the required
+`messages` check. Conventional formatting never authorizes a version bump/release.
+
 Use `cargo xtask check` locally and in CI. Shared development/packaging logic
 belongs in the Rust `xtask` workspace member; native scripts only adapt platform
 tools. Read the development toolchain from rust-toolchain.toml and verify the
 minimum Rust version declared in Cargo.toml with `cargo xtask check-msrv`.
+Keep xtask's own tests in `#[cfg(test)]` modules: Cargo builds the normal binary
+for integration-test targets, which cannot replace a running `xtask.exe` on Windows.
 Dependency updates go through PRs and `cargo deny check`; do not auto-merge or
 globally suppress advisories/licenses to obtain a green check. Any scoped
 exception needs an advisory ID, impact analysis and a dated follow-up.
@@ -103,9 +118,20 @@ version/source SHA, checksums, native signature/notarization checks, recorded
 installation/upgrade acceptance and approval of the `release` Environment.
 Do not run candidate, signing, stage or publish commands without an explicit
 release request. Implementing/testing these workflows is not such a request.
-Never upload signing keys/passwords to GitHub, including Actions Secrets.
-Sign/notarize on a trusted local machine; do not attach a public-PR self-hosted
-runner to the user's everyday computer. No automatic version bump or release.
+Production signing credentials may be provisioned once through the protected
+`release` Environment Secrets, using the names documented in docs/workflow.md.
+Do not export/upload the local development identity. Use GitHub-hosted ephemeral
+runners, single-step secret exposure, temporary keychains/certificate imports and
+cleanup on failure. No credentials in caches/artifacts; no signing on PRs or
+automatic push/merge events. Do not attach a public-PR self-hosted runner to the
+user's everyday computer. Missing/invalid production credentials must fail closed;
+never fall back to ad-hoc/development signatures. No automatic version bump/release.
+The manual signing workflow validates the original candidate run/source/digests,
+signs without rebuilding, verifies native packages and creates only a draft.
+Actual publication remains a separate manual request with native acceptance and
+Environment approval. Windows PFX support requires a provider-approved exportable
+code-signing certificate; nonexportable/hardware identities need a cloud signing
+adapter instead of attempts to export them.
 Use Cargo.toml as the single version source; generate package metadata and bind
 manifests to a full commit SHA. Publish the verified files without rebuilding;
 never overwrite published tags/assets. Fix a release with a new patch version.
@@ -170,8 +196,8 @@ Reuse the existing certificate; do not regenerate credentials during a rename.
 An explicitly requested identifier change uses `--install --migrate-identity`,
 which preserves the certificate requirement; later updates use ordinary `--install`.
 `build.sh --install` performs a local development update. Formal distribution
-uses the manual workflows documented in docs/workflow.md, local Developer ID
-signing and notarization; never use the local development certificate to release.
+uses the manual workflows documented in docs/workflow.md, production signing
+and notarization; never use the local development certificate to release.
 
 The initial task authorizes creation and pushing of this GitHub repository.
 Do not infer permission to publish releases or change repository visibility.

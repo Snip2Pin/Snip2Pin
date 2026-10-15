@@ -25,7 +25,8 @@
         {"context": "check (macos-15)", "integration_id": 15368},
         {"context": "check (macos-15-intel)", "integration_id": 15368},
         {"context": "dependencies", "integration_id": 15368},
-        {"context": "workflows", "integration_id": 15368}
+        {"context": "workflows", "integration_id": 15368},
+        {"context": "messages", "integration_id": 15368}
       ]
     }}
   ]

@@ -1,7 +1,8 @@
 # 开发与发版流程
 
 Snip2Pin 使用短分支、PR 和三平台检查，只有用户明确要求时才进入发版流程。
-开发构建、未签名候选包和正式发行包分开管理，签名私钥及密码始终保留在本机。
+开发构建、未签名候选包和正式发行包分开管理。正式签名由受审批保护的 Actions
+完成，本地开发自签身份仍只保留在本机。
 项目采用 MIT 许可证。产品范围和实现约束见 [AGENTS.md](../AGENTS.md)。
 
 ## 日常开发
@@ -16,6 +17,15 @@ Snip2Pin 使用短分支、PR 和三平台检查，只有用户明确要求时�
 最新主分支。单人维护不要求另一人审批；增加协作者后再启用至少一人审阅。
 规则定义保存在 `.github/rulesets/`；修改文件后仍需通过 GitHub API 应用并读回核对。
 仓库只允许 squash 合并，合并后删除远端功能分支。
+
+PR 标题及分支内每个 commit 的标题使用 Conventional Commits：
+`type(scope)!: description`，scope 和 `!` 可省略。type 只允许 `feat`、`fix`、
+`docs`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`；scope
+使用小写字母、数字和连字符。描述可用中文或英文，整行不超过 100 字符且不能空白。
+例如 `fix(pin): 修复顶部按钮位置`、`ci: automate signing`。正文按需解释原因；
+不兼容变更使用 `!` 并在正文注明 `BREAKING CHANGE:`。PR 正文说明问题、结果、范围、
+关联 Issue 和验证缺口。独立 `messages.yml` 在 PR 更新和标题修改时检查，失败阻止合并；
+修改不合规提交后使用安全的分支更新，不强推 main。squash commit 沿用 PR 标题和正文。
 
 ## 统一验证
 
@@ -65,7 +75,40 @@ macOS 最低部署目标为 13.0；最低系统仍须真实机器验收。Linux 
 2. 合并 PR，等待该 main 提交的全部 CI 通过，记下完整 SHA。发布说明放在已提交的
    文件中，例如本次发版专用 `docs/releases/VERSION.md`；不保留空白模板或虚构版本。
 3. 按许可证核查依赖和字体/图标的第三方声明，确保发行物包含所需许可文本。
-4. 确认本机可用正式发行签名身份；缺少凭据就停止，不退回开发自签或 ad-hoc 签名。
+4. 按下一节一次性配置正式发行凭据；缺少凭据就停止，不退回开发自签或 ad-hoc 签名。
+
+## 一次性配置发行凭据
+
+在仓库 Settings → Environments → `release` 配置下列 Secrets 和 Variables。
+该环境只允许 main，要求维护者批准且管理员也不能跳过；单人维护允许本人审批。
+Secrets 加密存储但获准运行的代码能够读取明文，因此审批时应核对工作流及所选源码。
+不使用仓库级或组织级共享签名 Secrets，不将秘密写入 Issue、PR、聊天、日志或文件附件。
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Secret | `MACOS_CERTIFICATE_P12_BASE64` | 含私钥和证书链的正式 Developer ID Application `.p12` 的 Base64 |
+| Secret | `MACOS_CERTIFICATE_PASSWORD` | 上述加密 P12 的密码 |
+| Secret | `MACOS_NOTARY_KEY_P8` | App Store Connect 团队 API Key 的 P8 原文 |
+| Secret | `MACOS_NOTARY_KEY_ID` | API Key ID |
+| Secret | `MACOS_NOTARY_ISSUER_ID` | 团队 Issuer ID |
+| Variable | `MACOS_CERTIFICATE_SHA1` | 所选正式证书的 40 位 SHA-1 指纹 |
+| Secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | 证书提供方允许导出的正式代码签名 PFX 的 Base64 |
+| Secret | `WINDOWS_CERTIFICATE_PASSWORD` | PFX 密码 |
+| Variable | `WINDOWS_CERTIFICATE_SHA1` | 所选正式代码签名证书的 40 位 SHA-1 指纹 |
+| Variable | `WINDOWS_TIMESTAMP_URL` | 提供方的 RFC 3161 时间戳服务 URL |
+
+使用 GitHub 环境设置或 `gh secret set NAME --env release` 从安全输入配置，禁止把
+秘密作为命令行字面值。Base64 只是编码，不能代替 Secrets 加密。API Key 权限仅满足
+公证；证书轮换时同步更新密码和指纹，验证成功后撤销旧凭据。不得在仓库内暂存导出文件。
+
+本机现有自签证书不能用于 Apple 正式公证，也不应上传；Developer ID 需另行取得。
+Windows 此入口仅支持合法可导出的代码签名证书。硬件/HSM 或云端不可导出证书不能
+转换成 PFX；使用这类服务时需接入对应签名 API（优先 OIDC），当前入口不会冒充支持。
+未配置齐两端凭据前只能运行日常 CI/未签名候选构建，不能完成正式签名发布。
+
+参考：[GitHub 证书导入](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)、
+[环境审批和秘密保护](https://docs.github.com/en/actions/reference/security/secure-use)、
+[Apple Developer ID](https://developer.apple.com/developer-id/)。
 
 ## 构建候选包
 
@@ -82,10 +125,30 @@ cargo xtask package TARGET release
 `-unsigned`，旁边的目标 JSON 记录版本、提交、目标和 SHA-256。过期后重新手动构建，
 不要改用不同提交的包。日常 CI 用 `debug` 检验同一条打包路径，并且不上传这些包。
 
-## 本机签名
+## Actions 自动签名与草稿
+
+手动运行 **Sign release candidates (manual)**，选择 `main`，填写版本、完整源 SHA
+及上一节成功的候选构建 run ID。所选源提交必须已包含本流程及对应的
+`docs/releases/VERSION.md` 发布说明。校验任务不读取签名秘密，先检查来源、确切提交
+的成功 CI、四个原始候选包的版本和哈希，并重新审计依赖。
+
+维护者在 `release` 环境批准四个平台任务后，macOS 将 P12 导入临时钥匙串，用
+临时 API Key 文件配置公证凭据，完成 Developer ID 签名、时间戳、公证和票据附加；
+Windows 临时导入 PFX，按指定指纹用 SDK SignTool 签名并验证时间戳；Linux 只生成
+最终包和清单。不会重新编译应用。秘密仅传给各自的签名步骤，不传给下载/上传步骤。
+无论成功或失败都清理临时钥匙串、导入的证书私钥和凭据文件；任务取消/强制结束时
+依赖 GitHub 托管临时虚拟机销毁兜底，不在日常电脑部署自托管 runner。
+
+四个平台的最终原生校验全部通过后，上传仅含安装包和 JSON 的 `signed-*` artifacts
+（保留 14 天），随后自动创建 Draft Release。任一平台失败均不创建草稿，也不发布。
+包清单保留原候选哈希，正式发布时再次和原候选 run 比对。现有草稿/标签不会被覆盖。
+签名任务可读取秘密，因此批准前应检查所选源码和工作流，不能批准不可信改动。
+此入口只创建草稿，不能代替后续实际安装验收和手动发布确认。
+
+## 本机签名备用入口
 
 将四个 artifact 分别解压到不同目录。使用同一提交的干净源码运行下面的工具。
-凭据保存在仓库之外的钥匙串、证书存储或硬件中，不传入命令行密码，不上传 Secrets，
+本机使用的凭据保存在仓库之外的钥匙串、证书存储或硬件中，不传入命令行密码，
 不在公共 PR runner 或你的日常电脑上安装自托管 runner。
 
 macOS 在本机钥匙串中配置 Developer ID 与 notarytool profile，然后对两个架构分别执行：
@@ -136,7 +199,8 @@ CI 的隐藏窗口和包检查不能替代这些交互。测试记录不包含�
 
 ## 草稿与正式发布
 
-将四个最终包及四份 JSON 收集到 `dist/final`，本机先运行：
+自动签名已创建草稿时直接进行实际安装验收，然后运行下述发布工作流。
+仅使用本机备用签名入口时，将四个最终包及四份 JSON 收集到 `dist/final`，运行：
 
 ```sh
 cargo xtask verify dist/final
@@ -155,7 +219,7 @@ run ID，以及 `publish VERSION` 验收确认。工作流先对源提交重新�
 `release` Environment 只允许 main 手动任务，要求维护者批准；单人维护允许本人批准
 自己触发的任务，但不能省略这一步。普通任务只读；读取 Draft 的签名校验任务因
 GitHub 的草稿访问要求使用写 token，仅在下载步骤传入，其他步骤不持有该环境变量。
-不储存长期 PAT 或任何签名秘密。
+不储存长期 PAT；正式签名 Secrets 仅在签名工作流的原生签名步骤显式注入。
 
 ## 失败与恢复
 
@@ -167,7 +231,9 @@ GitHub 的草稿访问要求使用写 token，仅在下载步骤传入，其他�
 ## 自动化边界
 
 - `ci.yml`：日常开发检查和开发包结构测试，无分发上传。
+- `messages.yml`：PR 标题和分支提交格式，标题编辑也会重查，无秘密和写权限。
 - `candidates.yml`：仅手动生成指定提交的未签名候选包，无发布权限。
+- `sign.yml`：仅手动校验候选来源、审批后签名并创建草稿，不发布。
 - `publish.yml`：仅手动验收并发布已有草稿，经过 Environment 批准。
 - `xtask/`：共用检查、版本元数据、包结构、校验清单和发行输入验证。
 - `packaging/`：各平台必须原生执行的签名/公证接口；不得复制业务逻辑。
