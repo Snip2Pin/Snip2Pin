@@ -471,8 +471,8 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
         };
         execute(
             Command::new("lipo")
-                .args(["-verify_arch", architecture])
-                .arg(&binary),
+                .arg(&binary)
+                .args(["-verify_arch", architecture]),
         )?;
         verify_version(&binary, &data.version)?;
     } else if target.contains("windows") {
