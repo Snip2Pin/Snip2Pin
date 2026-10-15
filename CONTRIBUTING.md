@@ -11,6 +11,9 @@ validation, packaging and manual releases.
 4. Run `cargo xtask check`. Run `cargo deny check` when changing dependencies.
 5. Open a PR with automatic results and explicit native interaction coverage.
    Tests use generated images, never private desktop or clipboard content.
+   Keep PR descriptions and comments focused on the problem, design, implementation,
+   fixes and necessary validation. Do not publish chat transcripts, personal details,
+   approval conversations, local activity or internal coordination/model settings.
 6. Confirm the original symptom is gone before merging, in addition to passing
    required checks. Keep unverified fixes in a draft PR; visible native interaction
    issues need actual interaction acceptance. Do not enable auto-merge while
