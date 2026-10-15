@@ -2,17 +2,10 @@ name: PR and commit conventions
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Open PR number; select its source branch so checks bind to its exact head
-        required: true
-        type: string
 permissions:
   contents: read
-  pull-requests: read
 concurrency:
-  group: messages-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: messages-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   messages:
@@ -26,15 +19,8 @@ jobs:
       - name: Pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Check PR title and all branch commits
-        if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask check-messages "$BASE_SHA" "$HEAD_SHA" "$PR_TITLE"
-      - name: Revalidate actual PR metadata on its exact source commit
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: cargo xtask check-pr "$PR_NUMBER"

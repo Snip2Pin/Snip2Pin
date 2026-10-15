@@ -1,4 +1,4 @@
-use crate::{Result, execute, output};
+use crate::{Result, output};
 use std::process::Command;
 
 const TYPES: &[&str] = &[
@@ -37,16 +37,12 @@ pub fn validate(subject: &str) -> Result {
     Ok(())
 }
 
-fn validate_sha(sha: &str) -> Result {
-    if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("message checks require full base/head commit SHAs".into());
-    }
-    Ok(())
-}
-
 pub fn check(base: &str, head: &str, title: &str) -> Result {
-    validate_sha(base)?;
-    validate_sha(head)?;
+    for sha in [base, head] {
+        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("message checks require full base/head commit SHAs".into());
+        }
+    }
     validate(title).map_err(|e| format!("PR title: {e}"))?;
     let commits =
         output(Command::new("git").args(["log", "--format=%H", &format!("{base}..{head}")]))?;
@@ -60,36 +56,9 @@ pub fn check(base: &str, head: &str, title: &str) -> Result {
     Ok(())
 }
 
-pub fn check_pr(number: &str) -> Result {
-    let number: u64 = number.parse()?;
-    if number == 0 {
-        return Err("PR number must be positive".into());
-    }
-    let pr: serde_json::Value = serde_json::from_str(&output(Command::new("gh").args([
-        "api",
-        &format!("repos/{}/pulls/{number}", crate::REPOSITORY),
-    ]))?)?;
-    let head = pr["head"]["sha"].as_str().ok_or("missing PR head")?;
-    if pr["state"] != "open" || pr["base"]["ref"] != "main" || head != crate::revision()? {
-        return Err("manual message checks require the open PR's exact head on its source branch, targeting main".into());
-    }
-    let base = pr["base"]["sha"].as_str().ok_or("missing PR base")?;
-    validate_sha(base)?;
-    // Resolve the live base's commit graph without changing the selected source.
-    execute(Command::new("git").args(["fetch", "--no-tags", "origin", base]))?;
-    check(base, head, pr["title"].as_str().ok_or("missing PR title")?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn manual_pr_numbers_are_validated_before_any_api_call() {
-        for value in ["", "0", "../9", "9; echo unsafe"] {
-            assert!(check_pr(value).is_err());
-        }
-    }
 
     #[test]
     fn conventional_subjects_support_scopes_breaking_changes_and_chinese() {
