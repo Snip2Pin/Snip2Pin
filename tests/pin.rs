@@ -1,762 +1,119 @@
-use eframe::egui::{self, Rect, Vec2};
-use snip2pin::{
-    geometry::Placement,
-    pin::{self, Coordinates, Drag, Preparation, Prepared, ToolbarSide},
-};
+use eframe::egui::{self, Rect};
+use snip2pin::pin::{Coordinates, METRICS, minimum_image_size, toolbar_geometry};
+
+fn area() -> Rect {
+    Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0))
+}
+
+fn controls(image: Rect, area: Rect) -> Rect {
+    let row = toolbar_geometry(image, &[area], area, 1.0).expect("visible controls");
+    assert!(area.contains_rect(row));
+    assert!(image.contains_rect(row));
+    assert_eq!(row.size(), METRICS.toolbar_size());
+    row
+}
 
 #[test]
-fn corner_and_edge_resize_keep_the_fixed_corner_throughout_the_gesture() {
-    use pin::{Resize, ResizeHandle as Handle};
-    let image = Rect::from_min_size(egui::pos2(-600.0, 200.0), egui::vec2(300.0, 200.0));
-    for (handle, fixed) in [
-        (Handle::BottomLeft, Handle::TopRight),
-        (Handle::TopRight, Handle::BottomLeft),
-        (Handle::Right, Handle::TopLeft),
-        (Handle::Left, Handle::TopRight),
-        (Handle::Top, Handle::BottomLeft),
-        (Handle::Bottom, Handle::TopLeft),
+fn controls_default_to_the_image_top_right_inside_resize_edges() {
+    let image = Rect::from_min_size(egui::pos2(100.0, 120.0), egui::vec2(200.0, 100.0));
+    let row = controls(image, area());
+    assert_eq!(row.max.x, image.max.x - METRICS.inset);
+    assert_eq!(row.min.y, image.min.y + METRICS.inset);
+}
+
+#[test]
+fn right_and_top_occlusion_move_controls_into_the_visible_image() {
+    let area = area();
+    let right = Rect::from_min_size(egui::pos2(550.0, 150.0), egui::vec2(200.0, 100.0));
+    assert_eq!(controls(right, area).max.x, area.max.x - METRICS.inset);
+    let top = Rect::from_min_size(egui::pos2(100.0, -50.0), egui::vec2(200.0, 200.0));
+    assert_eq!(controls(top, area).min.y, area.min.y + METRICS.inset);
+    let corner = Rect::from_min_size(egui::pos2(550.0, -50.0), egui::vec2(200.0, 200.0));
+    let row = controls(corner, area);
+    assert_eq!(row.max.x, area.max.x - METRICS.inset);
+    assert_eq!(row.min.y, area.min.y + METRICS.inset);
+}
+
+#[test]
+fn controls_stay_inside_images_clipped_at_the_left_or_bottom() {
+    let area = area();
+    for image in [
+        Rect::from_min_size(egui::pos2(-100.0, 100.0), egui::vec2(200.0, 100.0)),
+        Rect::from_min_size(egui::pos2(100.0, 350.0), egui::vec2(200.0, 200.0)),
+        Rect::from_min_size(egui::pos2(-100.0, 350.0), egui::vec2(200.0, 200.0)),
     ] {
-        let pointer = handle.point(image);
-        let mut resize = Resize::default();
-        resize.begin(handle, image, pointer);
-        for delta in [egui::vec2(-35.0, 18.0), egui::vec2(60.0, -25.0), Vec2::ZERO] {
-            for proportional in [true, false] {
-                let next = resize
-                    .update(pointer + delta, proportional, Vec2::splat(1.0), None)
-                    .expect("active gesture");
-                assert_eq!(
-                    fixed.point(next),
-                    fixed.point(image),
-                    "{handle:?}, {delta:?}, proportional={proportional}"
-                );
-            }
-        }
+        controls(image, area);
     }
 }
 
 #[test]
-fn every_resize_corner_keeps_its_opposite_pivot_in_proportional_and_free_modes() {
-    use pin::{Resize, ResizeHandle};
-    let image = Rect::from_min_size(egui::pos2(-300.0, 100.0), egui::vec2(200.0, 100.0));
-    for corner in ResizeHandle::CORNERS {
-        let point = corner.point(image);
-        let sign = egui::vec2(
-            (point.x - image.center().x).signum(),
-            (point.y - image.center().y).signum(),
-        );
-        let pivot = egui::pos2(
-            if sign.x > 0.0 {
-                image.min.x
-            } else {
-                image.max.x
-            },
-            if sign.y > 0.0 {
-                image.min.y
-            } else {
-                image.max.y
-            },
-        );
-        let mut resize = Resize::default();
-        resize.begin(corner, image, point);
-        for proportional in [false, true] {
-            let next = resize
-                .update(
-                    point + egui::vec2(40.0, 10.0) * sign,
-                    proportional,
-                    Vec2::splat(1.0),
-                    None,
-                )
-                .expect("resize");
-            let expected = if proportional {
-                egui::vec2(240.0, 120.0)
-            } else {
-                egui::vec2(240.0, 110.0)
-            };
-            assert!((next.size() - expected).length() < 0.001);
-            assert!(
-                next.min == pivot
-                    || next.max == pivot
-                    || next.left_bottom() == pivot
-                    || next.right_top() == pivot
-            );
-        }
-        let minimum = resize
-            .update(
-                point - image.size() * sign * 3.0,
-                true,
-                egui::vec2(1.0, 3.0),
-                None,
-            )
-            .expect("minimum size");
-        assert_eq!(minimum.size(), egui::vec2(6.0, 3.0));
-        resize.end();
-        assert!(
-            resize
-                .update(point, false, Vec2::splat(1.0), None)
-                .is_none()
-        );
-    }
+fn minimum_window_size_fits_both_buttons_and_resize_insets() {
+    let area = area();
+    let image = Rect::from_min_size(egui::pos2(100.0, 120.0), minimum_image_size());
+    let row = controls(image, area);
+    assert_eq!(row, image.shrink(METRICS.inset));
 }
 
 #[test]
-fn proportional_top_resize_stops_at_menu_bar_without_moving_the_opposite_corner() {
-    let image = Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 100.0));
-    let mut resize = pin::Resize::default();
-    resize.begin(pin::ResizeHandle::TopLeft, image, image.min);
-    let next = resize
-        .update(
-            egui::pos2(-300.0, -300.0),
-            true,
-            Vec2::splat(1.0),
-            Some(30.0),
-        )
-        .expect("bounded resize");
-    assert_eq!(next.min.y, 30.0);
-    assert_eq!(next.max, image.max);
-    assert_eq!(next.width() / next.height(), image.width() / image.height());
-}
-
-#[test]
-fn manual_resize_survives_release_and_zoom_without_changing_source_placement() {
-    let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
-    let placement = Placement {
-        position: [100.0, 100.0],
-        size: [200.0, 100.0],
-    };
-    let frame = pin::frame_geometry(placement, area, 1.0, 1.0);
-    let mut prepared = Preparation::default();
-    let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
-    let _ = prepared.update(frame, Some(frame.window), Some(frame.window), 1.0);
-    prepared.commit(frame.resized_to(
-        Rect::from_min_size(
-            frame.image.min + frame.window.min.to_vec2(),
-            egui::vec2(300.0, 140.0),
-        ),
-        &[area],
-        1.0,
-    ));
-    let zoomed = pin::frame_geometry(placement, area, 0.5, 2.0);
-    let Prepared::Paint { frame: painted, .. } =
-        prepared.update(zoomed, Some(zoomed.window), Some(zoomed.window), 0.5)
-    else {
-        panic!("resize cannot reinitialize");
-    };
-    assert_eq!(
-        painted.image.size() * painted.grid,
-        egui::vec2(300.0, 140.0)
-    );
-    assert_eq!(placement.size, [200.0, 100.0]);
-}
-
-#[test]
-fn delayed_and_out_of_order_host_reports_never_replace_user_geometry() {
-    let area = Rect::from_min_size(egui::pos2(-1600.0, 30.0), egui::vec2(3200.0, 1000.0));
-    let initial = pin::frame_geometry(
-        Placement {
-            position: [-500.0, 200.0],
-            size: [300.0, 200.0],
-        },
-        area,
-        1.0,
-        1.0,
-    );
-    let desired = initial.resized_to(
-        Rect::from_min_max(egui::pos2(-540.0, 180.0), egui::pos2(-200.0, 400.0)),
-        &[area],
-        1.0,
-    );
-    let mut prepared = Preparation::default();
-    let _ = prepared.update(initial, Some(initial.window), Some(initial.window), 1.0);
-    prepared.commit(desired);
-    let expected = desired.image.translate(desired.window.min.to_vec2());
-    for host in [
-        initial.window,
-        Rect::from_min_size(initial.window.min, desired.window.size()),
-        Rect::from_min_size(desired.window.min, initial.window.size()),
-        initial.window,
-        desired.window,
+fn insufficient_visible_space_returns_none_without_relocating_the_image() {
+    let area = area();
+    for image in [
+        Rect::from_min_size(egui::pos2(630.0, 150.0), egui::vec2(200.0, 100.0)),
+        Rect::from_min_size(egui::pos2(100.0, 430.0), egui::vec2(200.0, 100.0)),
+        Rect::from_min_size(egui::pos2(800.0, 500.0), egui::vec2(200.0, 100.0)),
     ] {
-        let Prepared::Paint { frame, .. } = prepared.update(initial, Some(host), Some(host), 1.0)
-        else {
-            panic!("one initialization");
-        };
-        assert_eq!(frame.image.translate(host.min.to_vec2()), expected);
-        assert_eq!(prepared.image(1.0), Some(expected));
+        assert!(toolbar_geometry(image, &[area], area, 1.0).is_none());
     }
 }
 
 #[test]
-fn system_drag_absorbs_native_movement_but_not_a_change_of_coordinate_units() {
-    let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3000.0, 2000.0));
-    let initial = pin::frame_geometry(
-        Placement {
-            position: [1100.0, 600.0],
-            size: [300.0, 200.0],
-        },
-        area,
-        1.0,
-        1.0,
-    );
-    let mut prepared = Preparation::default();
-    prepared.commit(initial);
-    let _ = prepared.update(initial, Some(initial.window), Some(initial.window), 1.0);
-    prepared.begin_system_drag(initial.window.min);
-    let mut zoomed = initial;
-    zoomed.grid = 2.0;
-    let half_host = Rect::from_min_max(initial.window.min / 2.0, initial.window.max / 2.0);
-    let _ = prepared.update(zoomed, Some(half_host), Some(half_host), 0.5);
-    let expected = initial.image.translate(initial.window.min.to_vec2());
-    assert_eq!(prepared.image(1.0), Some(expected));
-    let moved = half_host.translate(egui::vec2(20.0, -10.0));
-    let _ = prepared.update(zoomed, Some(moved), Some(moved), 0.5);
-    assert_eq!(
-        prepared.image(1.0),
-        Some(expected.translate(egui::vec2(40.0, -20.0)))
-    );
-    prepared.end_system_drag();
-    let _ = prepared.update(zoomed, Some(half_host), Some(half_host), 0.5);
-    assert_eq!(
-        prepared.image(1.0),
-        Some(expected.translate(egui::vec2(40.0, -20.0)))
-    );
-}
-
-#[test]
-fn narrow_images_retain_distinct_edges_and_proportional_anchors() {
-    use pin::{Resize, ResizeHandle};
-    for size in [
-        egui::vec2(6.0, 200.0),
-        egui::vec2(200.0, 6.0),
-        egui::vec2(6.0, 6.0),
-    ] {
-        let image = Rect::from_min_size(egui::pos2(100.0, 100.0), size);
-        for handle in ResizeHandle::ALL {
-            let hit = handle.hit_rect(image, 12.0);
-            assert!(hit.is_positive());
-            assert!(hit.contains(handle.point(image)));
-            for other in ResizeHandle::ALL {
-                if other != handle {
-                    assert!(
-                        !other.hit_rect(image, 12.0).contains(handle.point(image)),
-                        "{other:?} must not steal {handle:?}"
-                    );
-                }
-            }
-            let press = handle.point(image);
-            let mut resize = Resize::default();
-            resize.begin(handle, image, press);
-            let next = resize
-                .update(
-                    press + (press - image.center()),
-                    true,
-                    Vec2::splat(1.0),
-                    None,
-                )
-                .expect("resize");
-            assert!((next.aspect_ratio() - image.aspect_ratio()).abs() < 0.001);
-        }
-    }
-}
-
-#[test]
-fn screen_sized_image_initial_fit_keeps_controls_reachable_without_cropping() {
-    let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
-    let mut frame = pin::frame_geometry(
-        Placement {
-            position: area.min.into(),
-            size: area.size().into(),
-        },
-        area,
-        1.0,
-        1.0,
-    );
-    frame = frame.moved_to(area.min, &[area], 1.0);
-    frame.fit_host_top();
-    assert!(frame.image.width() < area.width());
-    assert!((frame.image.aspect_ratio() - area.aspect_ratio()).abs() < 0.001);
-    assert!(Rect::from_min_size(egui::Pos2::ZERO, frame.window.size()).contains_rect(frame.image));
-    for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
-        assert!(area.contains_rect(button.translate(frame.window.min.to_vec2())));
-        assert!(!button.intersects(frame.image));
-    }
-}
-
-#[test]
-fn menu_bar_switches_controls_before_the_image_reaches_the_screen_top() {
-    for origin in [egui::pos2(0.0, 30.0), egui::pos2(-680.0, -170.0)] {
-        for (ratio, grid) in [(1.0, 1.0), (0.8, 1.25)] {
-            let area = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
-            let frame = pin::frame_geometry(
-                Placement {
-                    position: (origin + Vec2::splat(100.0)).into(),
-                    size: [193.0, 121.0],
-                },
-                area,
-                ratio,
-                grid,
-            );
-            let top = origin.y * ratio;
-            for (y, side) in [
-                (
-                    top + pin::METRICS.toolbar_height() + 1.0 / grid,
-                    ToolbarSide::Top,
-                ),
-                (
-                    top + pin::METRICS.toolbar_height() - 1.0 / grid,
-                    ToolbarSide::Bottom,
-                ),
-                (top - frame.image.height() / 2.0, ToolbarSide::Bottom),
-                (
-                    top - frame.image.height() - pin::METRICS.image_gap,
-                    ToolbarSide::Bottom,
-                ),
-                (top + 100.0 * ratio, ToolbarSide::Top),
-            ] {
-                let image_origin = egui::pos2(frame.image.min.x + frame.window.min.x, y);
-                let mut moved = frame.moved_to(image_origin, &[area], ratio);
-                moved.fit_host_top();
-                assert_eq!(moved.toolbar_side, side);
-                assert!(
-                    moved.window.min.y >= top,
-                    "native host stays below the menu bar"
-                );
-                assert!((moved.image.size() - frame.image.size()).length() < 0.001);
-                assert!(
-                    (moved.image.min + moved.window.min.to_vec2())
-                        .distance(egui::pos2(image_origin.x, image_origin.y.max(top)))
-                        < 0.001
-                );
-                for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
-                    assert!(
-                        moved
-                            .controls_area
-                            .expand(0.001)
-                            .contains_rect(button.translate(moved.window.min.to_vec2()))
-                    );
-                    assert!(
-                        Rect::from_min_size(egui::Pos2::ZERO, moved.window.size())
-                            .expand(0.001)
-                            .contains_rect(button)
-                    );
-                    assert!(!button.intersects(moved.image));
-                }
-                assert!(
-                    Rect::from_min_size(egui::Pos2::ZERO, moved.window.size())
-                        .expand(0.001)
-                        .contains_rect(moved.image)
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn released_drag_preserves_the_complete_image_touching_the_menu_bar() {
-    let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0));
-    let mut frame = pin::frame_geometry(
-        Placement {
-            position: [100.0, 100.0],
-            size: [193.0, 121.0],
-        },
-        area,
-        1.0,
-        1.0,
-    );
-    frame.fit_host_top();
-    let mut preparation = Preparation::default();
-    let _ = preparation.update(frame, Some(frame.window), Some(frame.window), 1.0);
-    let _ = preparation.update(frame, Some(frame.window), Some(frame.window), 1.0);
-    let units = Coordinates::new(1.0, 1.0, 1.0);
-    let desired = egui::pos2(100.0, -30.0);
-    preparation.drag.begin(
-        frame.image.center() - frame.image.min,
-        frame.image.min + frame.window.min.to_vec2(),
-        &units,
-    );
-    let _ = preparation
-        .drag
-        .move_to((desired + frame.image.size() / 2.0).into(), &units);
-    let mut host = frame.moved_to(desired, &[area], 1.0);
-    host.fit_host_top();
-    let bounded = host.image.min + host.window.min.to_vec2();
-    preparation.commit(host);
-    preparation.drag.end();
-    let Prepared::Paint { frame: painted, .. } =
-        preparation.update(frame, Some(host.window), Some(host.window), 1.0)
-    else {
-        panic!("drag cannot reinitialize the window");
-    };
-    assert_eq!(painted.image.size(), frame.image.size());
-    assert_eq!(painted.image.min + host.window.min.to_vec2(), bounded);
-    assert_eq!(bounded.y, area.min.y);
-    assert!(Rect::from_min_size(egui::Pos2::ZERO, host.window.size()).contains_rect(painted.image));
-    assert!(!preparation.drag.is_active());
-}
-
-#[test]
-fn controls_remain_visible_at_every_edge_and_corner_without_resizing_or_overlap() {
-    for origin in [egui::pos2(0.0, 28.0), egui::pos2(-2560.0, -172.0)] {
-        for ratio in [1.0, 0.8, 0.625] {
-            for size in [[1.0, 1.0], [12.0, 8.0], [193.0, 121.0], [680.0, 420.0]] {
-                let area = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
-                let frame = pin::frame_geometry(
-                    Placement {
-                        position: (origin + Vec2::splat(100.0)).into(),
-                        size,
-                    },
-                    area,
-                    ratio,
-                    ratio.recip(),
-                );
-                let inset = egui::vec2(4.0, 7.0) * ratio;
-                let scaled = frame.controls_area;
-                for target in [
-                    scaled.left_top(),
-                    scaled.center_top(),
-                    scaled.right_top(),
-                    scaled.right_center(),
-                    scaled.right_bottom(),
-                    scaled.center_bottom(),
-                    scaled.left_bottom(),
-                    scaled.left_center(),
-                ] {
-                    let direction = (target - scaled.center()).normalized();
-                    let candidate = target + direction * scaled.size().length()
-                        - frame.image.center().to_vec2()
-                        - inset;
-                    let position = frame.drag_position(candidate, inset, &[area], ratio);
-                    let inner = Rect::from_min_size(position + inset, frame.window.size());
-                    let mut moved = frame;
-                    moved.place_controls(inner, &[area], area, ratio);
-                    assert_eq!(
-                        moved.image, frame.image,
-                        "switching sides does not move or resize pixels"
-                    );
-                    let local_bounds = Rect::from_min_size(egui::Pos2::ZERO, inner.size());
-                    for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
-                        assert!(local_bounds.expand(0.001).contains_rect(button));
-                        assert!(
-                            scaled
-                                .expand(0.001)
-                                .contains_rect(button.translate(inner.min.to_vec2())),
-                            "buttons stay in work area for {size:?}, {target:?}, {:?}",
-                            moved.toolbar_side
-                        );
-                        assert!(!button.intersects(moved.image));
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn dragging_can_cross_a_monitor_gap_without_being_limited_by_the_old_monitor() {
-    let left = Rect::from_min_size(egui::pos2(-680.0, -172.0), egui::vec2(680.0, 420.0));
-    let right = Rect::from_min_size(egui::pos2(500.0, 28.0), left.size());
-    let frame = pin::frame_geometry(
-        Placement {
-            position: [-500.0, -50.0],
-            size: [193.0, 121.0],
-        },
-        left,
-        1.0,
-        1.0,
-    );
-    let target = right.min + Vec2::splat(100.0);
-    let candidate = target - frame.image.min.to_vec2();
-    let position = frame.drag_position(candidate, Vec2::ZERO, &[left, right], 1.0);
-    assert_eq!(position, candidate);
-    let mut moved = frame;
-    moved.place_controls(
-        Rect::from_min_size(position, frame.window.size()),
-        &[left, right],
-        left,
-        1.0,
-    );
-    assert_eq!(moved.controls_area, right);
-}
-
-#[test]
-fn right_edge_overflow_places_controls_to_the_left_of_the_image() {
-    for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
-        for ratio in [1.0, 0.8] {
-            let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
-            let mut frame = pin::frame_geometry(
-                Placement {
-                    position: [screen.max.x - 50.0, screen.min.y + 100.0],
-                    size: [193.0, 121.0],
-                },
-                screen,
-                ratio,
-                ratio.recip(),
-            );
-            frame = frame.moved_to(
-                egui::pos2(screen.max.x - 50.0, screen.min.y + 100.0) * ratio,
-                &[screen],
-                ratio,
-            );
-            let image = frame.image.translate(frame.window.min.to_vec2());
-            for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
-                let button = button.translate(frame.window.min.to_vec2());
-                assert!(
-                    button.max.x < image.min.x,
-                    "right overflow should put controls on the left"
-                );
-                assert!(frame.controls_area.contains_rect(button));
-                assert!(!button.intersects(image));
-            }
-        }
-    }
-}
-
-#[test]
-fn tall_pins_keep_a_reachable_row_before_and_after_moving_off_the_top() {
-    let display = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
-    let usable = Rect::from_min_max(egui::pos2(0.0, 28.0), display.max);
-    let mut frame = pin::frame_geometry(
-        Placement {
-            position: [0.0, 0.0],
-            size: display.size().into(),
-        },
-        usable,
-        1.0,
-        1.0,
-    );
-    frame.place_controls(frame.window, &[usable], usable, 1.0);
-    assert!(
-        frame.toolbar_side != ToolbarSide::Bottom,
-        "a tall initial pin needs its visible upper row"
-    );
-    let position = frame.window.min - egui::vec2(0.0, display.height() / 2.0);
-    frame.place_controls(
-        Rect::from_min_size(position, frame.window.size()),
-        &[usable],
-        usable,
-        1.0,
-    );
-    assert!(
-        (frame.toolbar_side == ToolbarSide::Bottom),
-        "the lower row becomes reachable when the image leaves the top"
-    );
-    for button in [frame.toolbar_rects().0, frame.toolbar_rects().1] {
-        assert!(usable.contains_rect(button.translate(position.to_vec2())));
-    }
-}
-
-#[test]
-fn small_images_can_leave_the_work_area_while_controls_avoid_system_bars() {
-    let display = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
-    let usable = Rect::from_min_max(egui::pos2(0.0, 28.0), display.max);
-    let mut frame = pin::frame_geometry(
-        Placement {
-            position: [100.0, 28.0],
-            size: [12.0, 8.0],
-        },
-        usable,
-        1.0,
-        1.0,
-    );
-    frame.place_controls(frame.window, &[usable], usable, 1.0);
-    let position = frame.drag_position(
-        egui::pos2(frame.window.min.x, -display.height()),
-        Vec2::ZERO,
-        &[usable],
-        1.0,
-    );
-    assert!(position.y + frame.image.max.y < usable.min.y);
-    frame.place_controls(
-        Rect::from_min_size(position, frame.window.size()),
-        &[usable],
-        usable,
-        1.0,
-    );
-    let (copy, close) = frame.toolbar_rects();
-    for button in [copy, close] {
-        assert!(usable.contains_rect(button.translate(position.to_vec2())));
-    }
-}
-
-#[test]
-fn upward_boundary_depends_on_lower_controls_instead_of_image_top() {
-    for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
-        for ratio in [1.0, 0.8] {
-            let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
-            let frame = pin::frame_geometry(
-                Placement {
-                    position: (origin + Vec2::splat(100.0)).into(),
-                    size: [193.0, 121.0],
-                },
-                screen,
-                ratio,
-                ratio.recip(),
-            );
-            let inset = egui::vec2(4.0, 7.0) * ratio;
-            for distance in [frame.image.height() / 2.0, frame.image.height() * 2.0] {
-                let candidate = egui::pos2(
-                    frame.window.min.x,
-                    frame.controls_area.min.y - frame.image.min.y - distance,
-                ) - inset;
-                let position = frame.drag_position(candidate, inset, &[screen], ratio);
-                let inner = Rect::from_min_size(position + inset, frame.window.size());
-                let image = frame.image.translate(inner.min.to_vec2());
-                assert!(image.min.y < frame.controls_area.min.y);
-                assert!((image.size() - frame.image.size()).length() < 0.001);
-                let mut moved = frame;
-                moved.place_controls(inner, &[screen], screen, ratio);
-                assert!((moved.toolbar_side == ToolbarSide::Bottom));
-                for button in [moved.toolbar_rects().0, moved.toolbar_rects().1] {
-                    assert!(
-                        moved
-                            .controls_area
-                            .expand(0.001)
-                            .contains_rect(button.translate(inner.min.to_vec2()))
-                    );
-                }
-                if distance > frame.image.height() {
-                    assert!(
-                        image.max.y < frame.controls_area.min.y,
-                        "even the entire image may leave the usable area"
-                    );
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn an_offscreen_image_keeps_the_work_area_of_its_nearest_monitor() {
-    let left = Rect::from_min_size(egui::pos2(-680.0, -172.0), egui::vec2(680.0, 420.0));
-    let right = Rect::from_min_size(egui::pos2(0.0, 28.0), left.size());
-    let mut frame = pin::frame_geometry(
-        Placement {
-            position: [-500.0, -50.0],
-            size: [193.0, 121.0],
-        },
-        left,
-        1.0,
-        1.0,
-    );
-    let inner = frame.window.translate(egui::vec2(0.0, -left.height()));
-    frame.place_controls(inner, &[right, left], right, 1.0);
-    assert_eq!(frame.controls_area, left);
-}
-
-#[test]
-fn dragging_can_put_the_image_at_the_top_while_margins_leave_the_work_area() {
-    for origin in [egui::pos2(0.0, 28.0), egui::pos2(-680.0, -172.0)] {
-        for (ratio, grid) in [(1.0, 1.0), (0.8, 1.25)] {
-            let screen = Rect::from_min_size(origin, egui::vec2(680.0, 420.0));
-            let layout = pin::frame_geometry(
-                Placement {
-                    position: (origin + egui::vec2(100.0, 100.0)).into(),
-                    size: [193.0, 121.0],
-                },
-                screen,
-                ratio,
-                grid,
-            );
-            let inset = egui::vec2(4.0, 7.0) * ratio;
-            let outer = layout.window.translate(-inset);
-            let press = layout.image.center();
-            let mut drag = Drag::default();
-            let coordinates = Coordinates::new(1.0, 1.0, 1.0);
-            drag.begin(
-                press.to_vec2() + (layout.window.min - outer.min),
-                outer.min,
-                &coordinates,
-            );
-            let target_image = origin * ratio;
-            let cursor = target_image + press.to_vec2() - layout.image.min.to_vec2();
-            let moved = drag
-                .move_to(cursor.into(), &coordinates)
-                .expect("user moves the pointer");
-            let inner = Rect::from_min_size(moved + inset, layout.window.size());
-            let image = layout.image.translate(inner.min.to_vec2());
-            assert!(image.min.distance(target_image) < 0.001);
-            assert!(
-                inner.min.y < screen.min.y * ratio,
-                "transparent upper row may leave the work area"
-            );
-            assert!((image.size() - layout.image.size()).length() < 0.001);
-            let mut frame = layout;
-            frame.place_controls(inner, &[screen], screen, ratio);
-            assert!((frame.toolbar_side == ToolbarSide::Bottom));
-            let (copy, close) = frame.toolbar_rects();
-            assert!(copy.min.y > frame.image.max.y && close.min.y > frame.image.max.y);
-            assert_eq!(
-                drag.move_to(cursor.into(), &coordinates),
-                None,
-                "a stationary pointer must not cause retries"
-            );
-            let cursor = cursor + Vec2::splat(pin::METRICS.toolbar_height() * 3.0);
-            let moved = drag
-                .move_to(cursor.into(), &coordinates)
-                .expect("drag away from top");
-            frame.place_controls(
-                Rect::from_min_size(moved + inset, layout.window.size()),
-                &[screen],
-                screen,
-                ratio,
-            );
-            assert!(frame.toolbar_side != ToolbarSide::Bottom);
-            drag.end();
-            assert_eq!(
-                drag.move_to((cursor + Vec2::splat(100.0)).into(), &coordinates),
-                None
-            );
-        }
-    }
-}
-
-#[test]
-fn drag_anchor_survives_a_change_in_zoom_or_native_dpi() {
-    let from = Coordinates::new(1.0, 1.0, 1.0);
-    let to = Coordinates::new(1.0, 2.0, 2.0);
-    let inner = Rect::from_min_size(egui::pos2(-500.0, 100.0), egui::vec2(200.0, 200.0));
-    let outer = inner.translate(-egui::vec2(4.0, 7.0));
-    let press = egui::pos2(80.0, 100.0);
-    let mut drag = Drag::default();
-    drag.begin(press.to_vec2() + (inner.min - outer.min), outer.min, &from);
-    let native_cursor = egui::pos2(-200.0, -100.0);
-    let expected_native_origin = native_cursor - (press.to_vec2() + (inner.min - outer.min));
-    assert_eq!(
-        drag.move_to(native_cursor.into(), &to),
-        Some(to.cursor(expected_native_origin.into()))
-    );
-}
-
-#[test]
-fn native_geometry_mismatch_only_changes_local_image_offset_once() {
-    let screen = Rect::from_min_size(egui::pos2(-680.0, -172.0), egui::vec2(680.0, 420.0));
-    let frame = pin::frame_geometry(
-        Placement {
-            position: [-500.0, 100.0],
-            size: [193.0, 121.0],
-        },
-        screen,
-        1.0,
-        1.0,
-    );
-    let actual = frame.window.translate(egui::vec2(4.0, 3.0));
-    let mut preparation = Preparation::default();
-    assert!(matches!(
-        preparation.update(frame, Some(actual), Some(actual), 1.0),
-        Prepared::Initialize { .. }
-    ));
-    for first in [true, false, false] {
-        let Prepared::Paint {
-            frame: painted,
-            first: actual_first,
-        } = preparation.update(frame, Some(actual), Some(actual), 1.0)
-        else {
-            panic!("initialization must not repeat");
-        };
-        assert_eq!(actual_first, first);
-        assert_eq!(painted.image.size(), frame.image.size());
-        assert_eq!(
-            painted.image.min + actual.min.to_vec2(),
-            frame.image.min + frame.window.min.to_vec2()
+fn negative_monitor_origins_and_fractional_dpi_use_one_coordinate_space() {
+    let left = Rect::from_min_size(egui::pos2(-1280.0, -170.0), egui::vec2(1280.0, 900.0));
+    let right = area();
+    for ratio in [1.0, 0.8, 0.625] {
+        let image = Rect::from_min_size(
+            egui::pos2(-1000.0, 100.0) * ratio,
+            egui::vec2(200.0, 100.0) * ratio,
         );
+        let scaled = Rect::from_min_max(left.min * ratio, left.max * ratio);
+        let row = toolbar_geometry(image, &[right, left], right, ratio).expect("left display");
+        assert!(scaled.contains_rect(row));
+        assert!(image.contains_rect(row));
+        assert_eq!(toolbar_geometry(image, &[], left, ratio), Some(row));
     }
+}
+
+#[test]
+fn controls_use_a_roomy_intersection_when_the_closest_screen_only_shows_a_strip() {
+    let left = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1920.0, 1040.0));
+    let right = Rect::from_min_max(egui::pos2(1920.0, 0.0), egui::pos2(3200.0, 720.0));
+    let image = Rect::from_min_max(egui::pos2(1800.0, 700.0), egui::pos2(2220.0, 880.0));
+    for screens in [[left, right], [right, left]] {
+        let row = toolbar_geometry(image, &screens, right, 1.0).expect("left visible image");
+        assert!(left.contains_rect(row));
+        assert!(image.contains_rect(row));
+    }
+}
+
+#[test]
+fn controls_choose_the_nearest_valid_position_to_the_image_top_right() {
+    let left = Rect::from_min_max(egui::pos2(-700.0, 0.0), egui::pos2(-100.0, 500.0));
+    let right = Rect::from_min_max(egui::pos2(100.0, 100.0), egui::pos2(700.0, 600.0));
+    let image = Rect::from_min_max(egui::pos2(-200.0, 150.0), egui::pos2(200.0, 350.0));
+    for screens in [[left, right], [right, left]] {
+        let row = toolbar_geometry(image, &screens, left, 1.0).expect("right visible image");
+        assert!(right.contains_rect(row));
+        assert_eq!(row.max.x, image.max.x - METRICS.inset);
+        assert_eq!(row.min.y, image.min.y + METRICS.inset);
+    }
+}
+
+#[test]
+fn viewport_coordinate_conversion_keeps_native_and_capture_units_distinct() {
+    let coordinates = Coordinates::new(2.0, 1.25, 2.5);
+    assert_eq!(coordinates.ratio, 0.8);
+    assert_eq!(
+        coordinates.grid,
+        if cfg!(target_os = "macos") { 1.25 } else { 2.5 }
+    );
 }

@@ -63,43 +63,6 @@ pub fn relaunch_command() -> Result<std::process::Command, String> {
 #[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
-/// Respect AppKit's top boundary using image-aware margins: the complete image
-/// can touch the menu bar, while controls switch below it before becoming hidden.
-pub fn pin_host(frame: snip2pin::pin::Frame) -> snip2pin::pin::Frame {
-    snip2pin::pin::host_frame(frame)
-}
-
-/// Apply one user gesture before rendering. No retry or runtime class changes.
-pub fn layout_pin(
-    id: u64,
-    frame: snip2pin::pin::Frame,
-    painter: Option<&egui::Painter>,
-) -> Option<egui::Rect> {
-    #[cfg(target_os = "macos")]
-    {
-        let thread = objc2::MainThreadMarker::new()?;
-        let app = objc2_app_kit::NSApplication::sharedApplication(thread);
-        let title = format!("Snip2Pin · 贴图 {id}");
-        let window = app
-            .windows()
-            .into_iter()
-            .find(|window| window.title().to_string() == title)?;
-        let (actual, changed) = macos::layout_pin(&window, frame)?;
-        if changed && let Some(painter) = painter {
-            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size());
-            painter
-                .with_clip_rect(bounds)
-                .add(macos::drawable_callback(id, bounds));
-        }
-        Some(actual)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (id, frame, painter);
-        None
-    }
-}
-
 /// Read usable display bounds on the UI thread; never show or activate windows.
 pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
     let bounds =

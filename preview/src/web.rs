@@ -1,10 +1,12 @@
 use std::{cell::RefCell, sync::Arc};
 
-use eframe::egui::{self, ColorImage, Pos2, Rect, TextureHandle, Vec2};
+use eframe::egui::{
+    self, ColorImage, Pos2, Rect, ResizeDirection, TextureHandle, Vec2, ViewportCommand,
+};
 use snip2pin::{
     capture,
     geometry::Placement,
-    pin::{self, Preparation},
+    pin,
     settings::{Binding, Preferences},
     ui::{launcher, overlay, pin as pin_view},
 };
@@ -13,8 +15,46 @@ use wasm_bindgen::{JsCast, prelude::*};
 struct Pin {
     id: u64,
     texture: TextureHandle,
-    prepared: Preparation,
-    original: Vec2,
+    image: Rect,
+    gesture: Option<Gesture>,
+}
+
+/// Browser-only stand-in for a desktop window manager. Native builds never use
+/// this geometry path, and the sandbox cannot validate native live resizing.
+struct Gesture {
+    origin: Pos2,
+    image: Rect,
+    direction: Option<ResizeDirection>,
+}
+
+impl Gesture {
+    fn image_at(&self, pointer: Pos2, maximum: Vec2) -> Rect {
+        let delta = pointer - self.origin;
+        let Some(direction) = self.direction else {
+            return self.image.translate(delta);
+        };
+        use ResizeDirection::*;
+        let minimum = pin::minimum_image_size();
+        let maximum = maximum.max(minimum);
+        let mut image = self.image;
+        if matches!(direction, West | NorthWest | SouthWest) {
+            image.min.x = (self.image.min.x + delta.x)
+                .clamp(self.image.max.x - maximum.x, self.image.max.x - minimum.x);
+        }
+        if matches!(direction, East | NorthEast | SouthEast) {
+            image.max.x = (self.image.max.x + delta.x)
+                .clamp(self.image.min.x + minimum.x, self.image.min.x + maximum.x);
+        }
+        if matches!(direction, North | NorthWest | NorthEast) {
+            image.min.y = (self.image.min.y + delta.y)
+                .clamp(self.image.max.y - maximum.y, self.image.max.y - minimum.y);
+        }
+        if matches!(direction, South | SouthWest | SouthEast) {
+            image.max.y = (self.image.max.y + delta.y)
+                .clamp(self.image.min.y + minimum.y, self.image.min.y + maximum.y);
+        }
+        image
+    }
 }
 
 struct Sandbox {
@@ -134,7 +174,7 @@ impl eframe::App for Sandbox {
                                 rect.height as f32 / self.source.size[1] as f32 * bounds.height(),
                             ),
                         );
-                        let frame = pin::frame_geometry(
+                        let layout = pin::frame_geometry(
                             Placement {
                                 position: image.min.into(),
                                 size: image.size().into(),
@@ -143,8 +183,6 @@ impl eframe::App for Sandbox {
                             1.0,
                             1.0,
                         );
-                        let mut prepared = Preparation::default();
-                        prepared.commit(frame);
                         self.pins.push(Pin {
                             id: self.next_id,
                             texture: ui.ctx().load_texture(
@@ -152,8 +190,8 @@ impl eframe::App for Sandbox {
                                 pixels,
                                 Default::default(),
                             ),
-                            prepared,
-                            original: image.size(),
+                            image: layout.image,
+                            gesture: None,
                         });
                         self.message = Some("已复制并置顶（沙箱仅模拟复制）。".into());
                     }
@@ -168,7 +206,7 @@ impl eframe::App for Sandbox {
         ui.painter().text(
             bounds.right_bottom() - Vec2::splat(20.0),
             egui::Align2::RIGHT_BOTTOM,
-            "本地 UI 沙箱 · 生成图片 · 不访问桌面 / 剪贴板 / 系统设置",
+            "本地 UI 沙箱 · 生成图片 · 拖动/自由缩放为模拟 · 不访问桌面/剪贴板",
             egui::FontId::proportional(13.0),
             ui.visuals().weak_text_color(),
         );
@@ -219,46 +257,59 @@ impl eframe::App for Sandbox {
         }
         let events = RefCell::new(Vec::new());
         for pin in &mut self.pins {
-            let image = pin
-                .prepared
-                .image(1.0)
-                .unwrap_or(Rect::from_min_size(Pos2::ZERO, pin.original));
-            let mut frame = pin::frame_geometry(
-                Placement {
-                    position: image.min.into(),
-                    size: image.size().into(),
-                },
-                bounds,
-                1.0,
-                1.0,
-            )
-            .resized_to(image, &[bounds], 1.0);
-            frame.image = frame.image.translate(frame.window.min.to_vec2());
-            let window = frame.window;
-            frame.window = bounds;
+            let pointer = ui.ctx().pointer_latest_pos();
+            if let Some(gesture) = &pin.gesture
+                && let Some(pointer) = pointer
+            {
+                pin.image = gesture.image_at(pointer, bounds.size());
+            }
+            if !ui.input(|input| input.pointer.primary_down()) {
+                pin.gesture = None;
+            }
+            let mut requested = None;
             egui::Area::new(egui::Id::new(("pin", pin.id)))
                 .order(egui::Order::Foreground)
                 .movable(false)
-                .fixed_pos(window.min)
+                .constrain(false)
+                .fixed_pos(pin.image.min)
                 .show(ui.ctx(), |ui| {
-                    ui.set_min_size(window.size());
-                    let pointer = ui.ctx().pointer_latest_pos().map(Into::into);
-                    pin_view::show(
+                    ui.set_min_size(pin.image.size());
+                    ui.set_max_size(pin.image.size());
+                    let controls = pin::toolbar_geometry(ui.max_rect(), &[bounds], bounds, 1.0);
+                    let hovered = pointer.is_some_and(|point| ui.max_rect().contains(point));
+                    pin_view::image_with_host(
                         ui,
-                        pin_view::Model {
-                            id: pin.id,
-                            texture: &pin.texture,
-                            frame,
-                            events: &|action| events.borrow_mut().push(action),
-                            monitors: &[bounds],
-                            coordinate_ratio: 1.0,
-                            minimum_size: Vec2::splat(1.0),
-                            surface: pin_view::Surface::Embedded,
-                        },
-                        &mut pin.prepared,
-                        || pointer,
+                        pin.id,
+                        &pin.texture,
+                        false,
+                        controls,
+                        &|action| events.borrow_mut().push(action),
+                        |command| requested = Some(command),
                     );
+                    if hovered && let Some(row) = controls {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                            pin_view::controls(ui, pin.id, &|action| {
+                                events.borrow_mut().push(action)
+                            });
+                        });
+                    }
                 });
+            if let Some(command) = requested
+                && let Some(pointer) = ui.input(|input| input.pointer.press_origin())
+            {
+                let direction = match command {
+                    ViewportCommand::StartDrag => Some(None),
+                    ViewportCommand::BeginResize(direction) => Some(Some(direction)),
+                    _ => None,
+                };
+                if let Some(direction) = direction {
+                    pin.gesture = Some(Gesture {
+                        origin: pointer,
+                        image: pin.image,
+                        direction,
+                    });
+                }
+            }
         }
         for event in events.into_inner() {
             match event {

@@ -18,7 +18,7 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图可移动，拖动边框或边角等比缩放，Shift 自由缩放，双击关闭；悬停显示复制图标和 ×。仅初始空间不足时自动等比缩小，复制始终使用原图，按钮避开系统栏。
+- 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、关闭按钮，遮挡时自动移位；小图会放大至可操作尺寸，复制始终使用原图。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出。关闭主页会留在后台；主窗口可开启「开机自启」，默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
@@ -36,10 +36,10 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
-- Drag a pin to move it; edges and corners resize proportionally, **Shift** allows
-  free resizing. Double-click to close; hover for **Copy** and **×**. Initial pins
-  shrink proportionally only when space is insufficient. Copy always uses the
-  original screenshot; controls avoid system bars.
+- Drag a pin to move it and its edges to resize; proportions, **Shift** and anchors
+  follow the operating system. Double-click to close. Copy always uses the original
+  screenshot. Hover to show copy/close controls; they move within the visible image.
+  Tiny pins enlarge to keep the controls usable.
 - The menu bar / tray offers Home, Capture, Close All and Quit. Closing Home keeps
   the app running. Enable login startup in Home if wanted; it is **off by default**.
 

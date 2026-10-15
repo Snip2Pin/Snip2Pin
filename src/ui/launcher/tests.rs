@@ -163,7 +163,7 @@ fn capture_tooltip_wraps_completely_inside_the_viewport() {
             let egui::Shape::Text(text) = &tooltip.shape else {
                 unreachable!()
             };
-            assert!(text.galley.text().ends_with("双击关闭。"));
+            assert!(text.galley.text().ends_with("悬停贴图可复制或关闭。"));
             let painted = tooltip.shape.visual_bounding_rect();
             assert!(
                 Rect::from_min_size(Pos2::ZERO, size)

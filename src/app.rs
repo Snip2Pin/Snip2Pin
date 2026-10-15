@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -12,10 +12,10 @@ use std::{
 use eframe::egui::{self, ColorImage, TextureHandle, ViewportCommand, ViewportId};
 use snip2pin::{
     capture::{self, Display, Snapshot},
-    geometry::{self, Placement},
+    geometry,
     icon::{self, Variant},
     permission::ScreenPermission,
-    pin::{Coordinates, Preparation as PinPreparation, Prepared},
+    pin::{self, Coordinates},
     session::CaptureGate,
     settings::{self, Binding, Preferences},
 };
@@ -27,6 +27,19 @@ use crate::{
 
 const SHORTCUT_SUPPRESSION: Duration = Duration::from_millis(200);
 const OVERLAY_SIZE_TOLERANCE: f32 = 0.5;
+
+fn pin_id(id: u64) -> ViewportId {
+    ViewportId::from_hash_of(("pin", id))
+}
+
+fn dispatch_pin(action: ui::pin::Action, events: &Sender<Event>, ctx: &egui::Context) {
+    let event = match action {
+        ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
+        ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
+    };
+    let _ = events.send(event);
+    ctx.request_repaint_of(ViewportId::ROOT);
+}
 
 pub enum Event {
     Capture,
@@ -57,12 +70,13 @@ struct Layer {
 struct Pin {
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
-    placement: Placement,
+    initial: egui::Rect,
     display_scale: f32,
     screen: egui::Rect,
     screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
-    prepared: Arc<Mutex<PinPreparation>>,
+    ready: Arc<AtomicBool>,
+    minimum_scale: Arc<AtomicU32>,
 }
 
 pub struct Snip2Pin {
@@ -342,7 +356,7 @@ impl Snip2Pin {
             }
             Action::Capture => self.capture_command(ctx),
             Action::ClosePins => {
-                self.pins.clear();
+                self.close_pins(ctx);
                 if matches!(
                     self.phase,
                     Phase::Selecting {
@@ -356,7 +370,7 @@ impl Snip2Pin {
             Action::Quit => {
                 self.exiting = true;
                 self.restore(ctx);
-                self.pins.clear();
+                self.close_pins(ctx);
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
             }
         }
@@ -393,6 +407,15 @@ impl Snip2Pin {
             self.booting = false;
             true
         }
+    }
+
+    fn cancel_capture(&mut self, ctx: &egui::Context) {
+        if let Phase::Selecting { pending_pin, .. } = &mut self.phase
+            && let Some(id) = pending_pin.take()
+        {
+            self.close_pin(id, ctx);
+        }
+        self.restore(ctx);
     }
 
     fn restore(&mut self, ctx: &egui::Context) {
@@ -509,10 +532,7 @@ impl Snip2Pin {
             return;
         }
         if matches!(action, overlay::Action::Cancel) {
-            if let Some(pin) = *pending_pin {
-                self.pins.remove(&pin);
-            }
-            self.restore(ctx);
+            self.cancel_capture(ctx);
             return;
         }
         if pending_pin.is_some() {
@@ -581,12 +601,21 @@ impl Snip2Pin {
                 Pin {
                     texture,
                     pixels,
-                    placement,
+                    initial: {
+                        let zoom = ctx.zoom_factor();
+                        let units = Coordinates::new(
+                            snapshot.display.scale,
+                            zoom,
+                            snapshot.display.scale * zoom,
+                        );
+                        pin::frame_geometry(placement, screen, units.ratio, units.grid).image
+                    },
                     display_scale: snapshot.display.scale,
                     screen,
                     screen_areas,
                     session: id,
-                    prepared: Arc::new(Mutex::new(PinPreparation::default())),
+                    ready: Arc::new(AtomicBool::new(false)),
+                    minimum_scale: Arc::new(AtomicU32::new(0)),
                 },
             );
             // Keep the selection image until the pin has painted its first frame.
@@ -604,10 +633,20 @@ impl Snip2Pin {
     }
 
     fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
-        self.pins.remove(&id);
+        if let Some(pin) = self.pins.remove(&id)
+            && pin.ready.load(Ordering::Acquire)
+        {
+            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+        }
         if matches!(&self.phase, Phase::Selecting { pending_pin: Some(pending), .. } if *pending == id)
         {
             self.restore(ctx);
+        }
+    }
+
+    fn close_pins(&mut self, ctx: &egui::Context) {
+        for id in self.pins.keys().copied().collect::<Vec<_>>() {
+            self.close_pin(id, ctx);
         }
     }
 
@@ -828,31 +867,25 @@ impl Snip2Pin {
     fn show_pins(&self, ctx: &egui::Context) {
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
-            let pixel_size = egui::vec2(pin.pixels.size[0] as f32, pin.pixels.size[1] as f32);
             let events = self.sender.clone();
-            let prepared = pin.prepared.clone();
+            let ready = pin.ready.clone();
+            let minimum_scale = pin.minimum_scale.clone();
             let session = pin.session;
-            let placement = pin.placement;
             let display_scale = pin.display_scale;
             let screen = pin.screen;
-            let screen_areas = pin.screen_areas.clone();
-            let initial_units = Coordinates::new(display_scale, 1.0, display_scale);
-            let initial = platform::pin_host(ui::pin::frame_geometry(
-                placement,
-                screen,
-                initial_units.ratio,
-                initial_units.grid,
-            ));
+            let areas = pin.screen_areas.clone();
+            let initial = pin.initial;
             ctx.show_viewport_deferred(
-                ViewportId::from_hash_of(("pin", id)),
+                pin_id(id),
                 self.window_icon(egui::ViewportBuilder::default())
                     .with_title(format!("Snip2Pin · 贴图 {id}"))
                     .with_decorations(false)
-                    .with_transparent(true)
-                    .with_has_shadow(false)
-                    .with_position(initial.window.min)
-                    .with_inner_size(initial.window.size())
-                    .with_resizable(false)
+                    .with_transparent(false)
+                    .with_has_shadow(true)
+                    .with_position(initial.min)
+                    .with_inner_size(initial.size())
+                    .with_min_inner_size(pin::minimum_image_size())
+                    .with_resizable(true)
                     .with_always_on_top()
                     .with_active(false)
                     .with_taskbar(false),
@@ -860,71 +893,52 @@ impl Snip2Pin {
                     if ui.input(|input| {
                         input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
                     }) {
-                        let _ = events.send(Event::ClosePin(id));
-                        ui.ctx().request_repaint_of(ViewportId::ROOT);
+                        dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx());
                         return;
                     }
-                    let coordinates = Coordinates::new(
+                    let units = Coordinates::new(
                         display_scale,
                         ui.ctx().zoom_factor(),
                         ui.ctx().pixels_per_point(),
                     );
-                    let ratio = coordinates.ratio;
-                    let Ok(mut prepared) = prepared.lock() else {
-                        return;
-                    };
-                    let (inner, outer) = ui
-                        .input(|input| (input.viewport().inner_rect, input.viewport().outer_rect));
-                    let frame = platform::pin_host(ui::pin::frame_geometry(
-                        placement,
-                        screen,
-                        ratio,
-                        coordinates.grid,
-                    ));
-                    let (mut frame, first_frame) = match prepared.update(frame, inner, outer, ratio)
-                    {
-                        Prepared::Initialize {
-                            window,
-                            outer_position,
-                        } => {
-                            // Set the initial native host once; image geometry
-                            // remains independent of its platform boundaries.
-                            let _ = platform::prepare_floating_windows();
-                            ui.ctx()
-                                .send_viewport_cmd(ViewportCommand::InnerSize(window.size()));
-                            ui.ctx()
-                                .send_viewport_cmd(ViewportCommand::OuterPosition(outer_position));
-                            ui.ctx().request_repaint();
-                            return;
-                        }
-                        Prepared::Paint { frame, first } => (frame, first),
-                    };
-                    if let Some(actual) = inner {
-                        frame.place_controls(actual, &screen_areas, screen, ratio);
+                    // Some backends cache minimum sizes in physical pixels.
+                    // Refresh the constraint only when the actual DPI changes.
+                    let scale = ui.ctx().pixels_per_point().to_bits();
+                    if minimum_scale.swap(scale, Ordering::AcqRel) != scale {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::MinInnerSize(
+                            pin::minimum_image_size(),
+                        ));
                     }
-                    let painter = ui.painter().clone();
-                    ui::pin::show_with_host(
+                    // Native geometry is authoritative; painting never changes it.
+                    let controls =
+                        if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
+                            pin::toolbar_geometry(image, &areas, screen, units.ratio)
+                                .map(|rect| rect.translate(-image.min.to_vec2()))
+                        } else {
+                            // Wayland may not expose global positions. Keep controls
+                            // inside the observed content instead of guessing one.
+                            let bounds = ui.max_rect();
+                            pin::toolbar_geometry(bounds, &[], bounds, 1.0)
+                        };
+                    let hovered = ui
+                        .input(|input| input.pointer.hover_pos())
+                        .is_some_and(|point| ui.max_rect().contains(point));
+                    let ctx = ui.ctx().clone();
+                    let dispatch = |action| dispatch_pin(action, &events, &ctx);
+                    ui::pin::image(
                         ui,
-                        ui::pin::Model {
-                            id,
-                            texture: &texture,
-                            frame,
-                            events: &|action| {
-                                let _ = events.send(match action {
-                                    ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
-                                    ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
-                                });
-                            },
-                            monitors: &screen_areas,
-                            coordinate_ratio: ratio,
-                            minimum_size: egui::Vec2::from(placement.size) * ratio / pixel_size,
-                            surface: ui::pin::Surface::Native,
-                        },
-                        &mut prepared,
-                        platform::pointer_position,
-                        |frame| platform::layout_pin(id, frame, Some(&painter)),
+                        id,
+                        &texture,
+                        cfg!(target_os = "macos"),
+                        controls,
+                        &dispatch,
                     );
-                    if first_frame {
+                    if hovered && let Some(row) = controls {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                            ui::pin::controls(ui, id, &dispatch);
+                        });
+                    }
+                    if !ready.swap(true, Ordering::AcqRel) {
                         let _ = events.send(Event::PinReady(session, id));
                         ui.ctx().request_repaint_of(ViewportId::ROOT);
                     }
@@ -943,7 +957,7 @@ impl eframe::App for Snip2Pin {
         if !matches!(self.phase, Phase::Idle)
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
-            self.restore(ctx);
+            self.cancel_capture(ctx);
         }
         self.update_icon(ctx);
         if let Err(error) = platform::prepare_floating_windows() {
@@ -1012,7 +1026,7 @@ impl eframe::App for Snip2Pin {
         );
         match action {
             Some(launcher::Action::Capture) => self.capture_command(&ctx),
-            Some(launcher::Action::ClosePins) => self.pins.clear(),
+            Some(launcher::Action::ClosePins) => self.close_pins(&ctx),
             Some(launcher::Action::RecordShortcut) => {
                 self.recording = !self.recording;
                 self.message = None;
