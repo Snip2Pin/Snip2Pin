@@ -17,7 +17,47 @@ fn main() {
         window::{Theme, Window, WindowId, WindowLevel},
     };
 
-    struct Lifecycle;
+    struct TransparentOrder {
+        window: objc2::rc::Retained<objc2_app_kit::NSWindow>,
+        frame: objc2_foundation::NSRect,
+        style: objc2_app_kit::NSWindowStyleMask,
+    }
+    impl TransparentOrder {
+        fn assert_unchanged(&self, app: &objc2_app_kit::NSApplication) {
+            assert_eq!(
+                self.window.frame(),
+                self.frame,
+                "viewport info moved the pin"
+            );
+            assert_eq!(self.window.styleMask(), self.style);
+            assert_eq!(
+                self.window.contentRectForFrameRect(self.window.frame()),
+                self.frame,
+                "content origin and size must remain unchanged"
+            );
+            let view = self.window.contentView().expect("ordered pin content view");
+            assert_eq!(
+                self.window
+                    .convertRectToScreen(view.convertRect_toView(view.bounds(), None)),
+                self.frame,
+                "content view must fill the pin"
+            );
+            assert_eq!(self.window.alphaValue(), 0.0);
+            assert!(self.window.ignoresMouseEvents());
+            assert!(!self.window.isKeyWindow() && !app.isActive());
+        }
+    }
+    impl Drop for TransparentOrder {
+        fn drop(&mut self) {
+            self.window.close();
+        }
+    }
+
+    #[derive(Default)]
+    struct Lifecycle {
+        transparent_orders: Vec<TransparentOrder>,
+        top_windows: Vec<Window>,
+    }
     impl ApplicationHandler for Lifecycle {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             let sizes = [(300.0, 200.0), (1.0, 1.0), (12.0, 120.0)];
@@ -273,7 +313,78 @@ fn main() {
                 aligned_windows.push(image);
             }
             drop(aligned_windows);
+            // Hidden windows do not reproduce AppKit's titlebar adjustment.
+            // Order only small, fully transparent, input-ignoring test windows.
+            for (index, screen) in screens.iter().enumerate() {
+                let size = [188.0, 148.0];
+                let visible = screen.visibleFrame();
+                let position = [
+                    (visible.origin.x + (visible.size.width - f64::from(size[0])) / 2.0).floor()
+                        as f32,
+                    (desktop_top - visible.origin.y - visible.size.height) as f32,
+                ];
+                let ctx = egui::Context::default();
+                let title = format!("Snip2Pin · 贴图 ordered-{index}");
+                let builder = egui::ViewportBuilder::default()
+                    .with_title(&title)
+                    .with_decorations(false)
+                    .with_transparent(false)
+                    .with_has_shadow(true)
+                    .with_position(position)
+                    .with_inner_size(size)
+                    .with_resizable(true)
+                    .with_always_on_top()
+                    .with_active(false)
+                    .with_taskbar(false)
+                    .with_visible(false);
+                let image = event_loop
+                    .create_window(egui_winit::create_winit_window_attributes(
+                        &ctx,
+                        builder.clone(),
+                    ))
+                    .expect("initially hidden ordered test pin");
+                egui_winit::apply_viewport_builder_to_window(&ctx, &image, &builder);
+                let native = app
+                    .windows()
+                    .into_iter()
+                    .find(|window| window.title().to_string() == title)
+                    .expect("native ordered test pin");
+                native.setAlphaValue(0.0);
+                native.setIgnoresMouseEvents(true);
+                let guard = TransparentOrder {
+                    frame: native.frame(),
+                    style: native.styleMask(),
+                    window: native,
+                };
+                guard.assert_unchanged(&app);
+                assert!(!guard.window.isVisible());
+                assert_eq!(
+                    guard.frame.origin.y + guard.frame.size.height,
+                    visible.origin.y + visible.size.height,
+                    "test pin starts directly below the menu bar"
+                );
+                assert_eq!(
+                    [guard.frame.size.width, guard.frame.size.height],
+                    size.map(f64::from)
+                );
+                guard.window.orderFront(None);
+                guard.assert_unchanged(&app);
+                let mut viewport_info = egui::ViewportInfo::default();
+                egui_winit::update_viewport_info(&mut viewport_info, &ctx, &image, true);
+                guard.assert_unchanged(&app);
+                self.transparent_orders.push(guard);
+                self.top_windows.push(image);
+            }
             drop(images);
+        }
+        fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            let thread = objc2::MainThreadMarker::new().expect("main thread");
+            let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+            for guard in &self.transparent_orders {
+                guard.assert_unchanged(&app);
+            }
+            self.transparent_orders.clear();
+            self.top_windows.clear();
             event_loop.exit();
         }
         fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
@@ -284,9 +395,11 @@ fn main() {
         .build()
         .expect("hidden event loop");
     event_loop
-        .run_app(&mut Lifecycle)
+        .run_app(&mut Lifecycle::default())
         .expect("native lifecycle");
-    println!("macOS hidden native image lifecycle passed; visible live-resize remains unverified");
+    println!(
+        "macOS invisible native image lifecycle passed; visible live-resize remains unverified"
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
