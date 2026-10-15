@@ -1,10 +1,9 @@
 use crate::package::{self, Distribution, Manifest, TARGETS};
-use crate::{Result, execute, manifest, output, revision};
+use crate::{REPOSITORY, Result, execute, manifest, output, revision};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
-const REPOSITORY: &str = "Snip2Pin/Snip2Pin";
 const UNVERIFIED_NOTICE: &str = "## 未验证发布者 / Unverified publisher\n\n这些安装包没有受系统信任的发布者签名；macOS 包仅有 ad-hoc 完整性签名，未经 Apple 公证，Windows 包未签名。首次打开可能需要用户通过系统提供的选项手动允许；系统或组织策略可能禁止运行。macOS 更新可能需要重新授予截屏权限。\n\nThese packages have no trusted publisher signature. macOS bundles use an ad-hoc integrity seal and are not notarized by Apple; Windows executables are unsigned. Opening may require explicit approval using OS-provided controls and may be blocked by device policy. macOS updates may require screen capture permission again.";
 
 pub fn validate_inputs(version: &str, revision: &str) -> Result {

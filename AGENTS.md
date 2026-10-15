@@ -96,6 +96,10 @@ coverage; link issues when applicable. `messages.yml` checks titles on edits and
 all branch commits on updates; fix/reword invalid commits before merging.
 Squash commits use the validated PR title and PR body. Do not bypass the required
 `messages` check. Conventional formatting never authorizes a version bump/release.
+If event delivery is delayed, manually dispatch CI and the message workflow on
+the PR's exact source branch, passing its PR number. The tool checks live PR
+metadata and rejects a stale or mismatched checkout. Never fabricate a status
+or bypass a required check to recover from missing events.
 
 Use `cargo xtask check` locally and in CI. Shared development/packaging logic
 belongs in the Rust `xtask` workspace member; native scripts only adapt platform

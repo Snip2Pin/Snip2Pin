@@ -28,6 +28,10 @@ PR 标题及分支内每个 commit 的标题使用 Conventional Commits：
 关联 Issue 和验证缺口。独立 `messages.yml` 在 PR 更新和标题修改时检查，失败阻止合并；
 修改不合规提交后使用安全的分支更新，不强推 main。squash commit 沿用 PR 标题和正文。
 
+事件延迟时可在 PR 源分支手动运行 `ci.yml` 和 `messages.yml`（填写 `pr_number`）。
+手动格式检查从 GitHub 读取真实 PR 标题、base/head，要求检出恰好对应 PR 最新 SHA；
+错误分支、过期提交或已关闭的 PR 会失败。所有必需检查仍须通过，不手工补写状态。
+
 ## 统一验证
 
 ```sh
