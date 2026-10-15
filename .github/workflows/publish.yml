@@ -9,11 +9,11 @@ on:
         type: choice
         options: [prepare, publish]
       version:
-        description: Stable MAJOR.MINOR.PATCH of the existing draft
+        description: Stable MAJOR.MINOR.PATCH already merged into main
         required: true
         type: string
       revision:
-        description: Full source SHA, matching the candidate build and draft
+        description: Full source SHA matching the candidate packages
         required: true
         type: string
       candidate_run:
@@ -21,11 +21,11 @@ on:
         required: true
         type: string
       acceptance:
-        description: 'Confirm native install/upgrade/interaction checks: publish VERSION'
+        description: 'Publish only, after native acceptance: publish VERSION'
         required: false
         type: string
       distribution:
-        description: Must match every package and the draft
+        description: Unverified needs no certificate; signed requires production credentials
         required: true
         default: unverified
         type: choice
