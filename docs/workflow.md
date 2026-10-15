@@ -56,7 +56,7 @@ Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lo
 | 原生目标 | 包格式 | 共有校验；signed 模式额外校验 |
 | --- | --- | --- |
 | aarch64-apple-darwin | 含 `.app` 的 ZIP | 完整性、架构、应用标识与版本；Developer ID、时间戳、Hardened Runtime、公证票据 |
-| x86_64-apple-darwin | `.app.zip` | 同上 |
+| x86_64-apple-darwin | 含 `.app` 的 ZIP | 同上 |
 | x86_64-pc-windows-msvc | 便携 ZIP | 结构、版本及所选签名状态；Authenticode、时间戳 |
 | x86_64-unknown-linux-gnu | tar.gz | 动态库依赖、版本、X11/Wayland 声明 |
 

@@ -149,9 +149,10 @@ on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
 Explicit identifier migrations use `--install --migrate-identity`, preserving the
 same signing certificate; macOS may require screen permission again after that
 one-time identity change. Subsequent updates use ordinary `--install`.
-This script builds and optionally installs a local development bundle. Formal
-distribution uses the separate manual workflows and signing steps in
-[the release guide](docs/workflow.md), including Developer ID notarization on macOS.
+This script builds and optionally installs a local development bundle. Distribution
+uses the manual workflows in [the release guide](docs/workflow.md). The default
+`unverified` mode needs no paid certificate; `signed` requires production credentials
+and Developer ID notarization on macOS.
 
 SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
 Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
