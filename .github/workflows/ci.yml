@@ -53,8 +53,13 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Repository checks
         run: cargo xtask check
-      - name: Package structure and CLI smoke check (no signing/upload)
+      - name: Package structure and CLI smoke check (no credentials/upload)
         run: cargo xtask package ${{ matrix.target }} debug
+      - name: Check unverified package integrity without credentials or upload
+        shell: bash
+        run: |
+          cargo xtask prepare-unverified .build/packages/debug/${{ matrix.target }} .build/unverified-final/${{ matrix.target }} ${{ matrix.target }}
+          cargo xtask verify-native .build/unverified-final/${{ matrix.target }} ${{ matrix.target }} unverified
       - name: Minimum supported Rust
         run: cargo xtask check-msrv
   dependencies:

@@ -1,5 +1,14 @@
 Snip2Pin — 截图并置顶 / Capture and pin
 
+macOS: 解压，将 Snip2Pin.app 放到「应用程序」。/ Extract and move Snip2Pin.app to Applications.
+标有 -unverified 的包没有受信任的发布者签名：macOS 未经 Apple 公证，Windows 未签名。
+系统可能拦截。macOS 可参考 https://support.apple.com/102445 ，通过系统设置确认打开；
+组织策略可能禁止运行。macOS 更新可能需要重新授予截屏权限。
+Packages marked -unverified have no trusted publisher signature: macOS builds are
+not notarized and Windows builds are unsigned. The OS or device policy may block
+them. See Apple's instructions above for user-approved opening. macOS updates may
+require screen capture permission again.
+
 Windows: 解压后运行 snip2pin.exe。/ Extract and run snip2pin.exe.
 Linux: 在解压目录运行 ./snip2pin。/ Run ./snip2pin from the extracted directory.
 Linux builds target Ubuntu 24.04 or compatible systems with the required desktop

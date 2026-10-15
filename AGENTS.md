@@ -13,6 +13,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
+- 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
 - 自动覆盖所有显示器，每次截图刷新屏幕布局；贴图初始保持截图原始尺寸，禁止自动缩放或拉伸。用户可拖动图片边角自由缩放，按住 Shift 保持本次缩放开始时的比例。顶部空间不足时只调整位置和留白，不能借此缩放图片。
 - 手动缩放只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。缩放锚点、图片位置和尺寸以原生坐标保存，适配 DPI 和缩放变化；复制、关闭按钮仍须在可用区内。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页和正常关闭行为。
@@ -31,8 +32,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
 - 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
-- macOS 本地安装必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名。
-- 更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。只有用户明确要求更换应用标识时，才使用显式迁移选项，仅替换签名要求中的 identifier，完整保留原证书和信任约束。
+- macOS 本机开发构建安装（`build.sh --install`）必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名；GitHub 分发包按明确选择的分发模式处理。
+- 本机开发更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。只有用户明确要求更换应用标识时，才使用显式迁移选项，仅替换签名要求中的 identifier，完整保留原证书和信任约束。
 - 本地开发签名私钥保留在独立的本地钥匙串，不导出到 CI；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
 - 正式发行凭据可保存在受审批保护的 GitHub `release` Environment Secrets；只允许手动、main 来源的签名任务读取。私钥、钥匙串、密码和令牌不得进入 Git、日志、缓存或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。Secrets 并非不可导出的硬件密钥，授权任务可以读取明文，需审阅工作流和依赖并及时轮换泄露凭据。
 - 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
@@ -110,11 +111,14 @@ and preserve required third-party license notices.
 
 CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
 platform-specific caches. PRs cannot access signing credentials. Daily checks
-may build unsigned debug packages to validate layout without GUI activation,
-installing, uploading distribution files, signing, tagging or creating Releases.
+may build unsigned debug packages and verify final unverified package layout
+without GUI activation, installing, uploading distribution files, using signing
+credentials, tagging or creating Releases. macOS debug bundle integrity checks
+may use an ad-hoc seal; never use the local development identity in CI.
 Only explicit manual candidate builds upload unsigned release-profile artifacts.
 Formal publication requires a complete set of four native targets, matching
-version/source SHA, checksums, native signature/notarization checks, recorded
+version/source SHA, checksums, native checks for the explicitly selected
+distribution mode, recorded
 installation/upgrade acceptance and approval of the `release` Environment.
 Do not run candidate, signing, stage or publish commands without an explicit
 release request. Implementing/testing these workflows is not such a request.
@@ -125,9 +129,12 @@ runners, single-step secret exposure, temporary keychains/certificate imports an
 cleanup on failure. No credentials in caches/artifacts; no signing on PRs or
 automatic push/merge events. Do not attach a public-PR self-hosted runner to the
 user's everyday computer. Missing/invalid production credentials must fail closed;
-never fall back to ad-hoc/development signatures. No automatic version bump/release.
-The manual signing workflow validates the original candidate run/source/digests,
-signs without rebuilding, verifies native packages and creates only a draft.
+never fall back to ad-hoc/development signatures in `signed` mode. No automatic
+version bump/release. `publish.yml` defaults to the `prepare` operation and explicit `unverified` distribution,
+without secrets; it validates candidate run/source/digests, prepares packages
+without rebuilding, checks native integrity and creates only a draft. Manifests
+record the distribution mode. Never mix modes or publish unverified files using
+signed names/checks. Preserve the bilingual trust notice in unverified Releases.
 Actual publication remains a separate manual request with native acceptance and
 Environment approval. Windows PFX support requires a provider-approved exportable
 code-signing certificate; nonexportable/hardware identities need a cloud signing
@@ -197,7 +204,8 @@ An explicitly requested identifier change uses `--install --migrate-identity`,
 which preserves the certificate requirement; later updates use ordinary `--install`.
 `build.sh --install` performs a local development update. Formal distribution
 uses the manual workflows documented in docs/workflow.md, production signing
-and notarization; never use the local development certificate to release.
+and notarization only when `signed` is explicitly selected; default `unverified`
+packages are not Apple-notarized. Never use the local development certificate to release.
 
 The initial task authorizes creation and pushing of this GitHub repository.
 Do not infer permission to publish releases or change repository visibility.

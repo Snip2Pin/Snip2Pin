@@ -39,16 +39,17 @@ fn run() -> Result {
             package::macos_bundle(Path::new(binary), Path::new(destination), variant)
         }
         ["verify", directory] => package::verify(Path::new(directory)).map(|_| ()),
-        ["verify-native", directory, target] => package::verify_native(Path::new(directory), target),
+        ["verify-native", directory, target, distribution] => package::verify_native(Path::new(directory), target, package::Distribution::parse(distribution)?),
+        ["prepare-unverified", candidate, destination, target] => package::prepare_unverified(Path::new(candidate), Path::new(destination), target),
         ["finalize", candidate, archive] => package::finalize(Path::new(candidate), Path::new(archive)),
         ["release-check", version, revision] => release::preflight(version, revision),
-        ["stage", version, revision, directory, notes, "--confirm"] => {
-            release::stage(version, revision, Path::new(directory), Path::new(notes))
+        ["stage", version, revision, directory, notes, distribution, "--confirm"] => {
+            release::stage(version, revision, Path::new(directory), Path::new(notes), package::Distribution::parse(distribution)?)
         }
-        ["publish", version, revision, run_id, directory, "--confirm"] => {
-            release::publish(version, revision, run_id, Path::new(directory))
+        ["publish", version, revision, run_id, directory, distribution, "--confirm"] => {
+            release::publish(version, revision, run_id, Path::new(directory), package::Distribution::parse(distribution)?)
         }
-        _ => Err("usage: cargo xtask check | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES --confirm | publish VERSION SHA BUILD_RUN DIR --confirm".into()),
+        _ => Err("usage: cargo xtask check | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
     }
 }
 

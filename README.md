@@ -29,6 +29,8 @@ keep it above other windows, drag to move, and double-click to close.
 macOS 首次使用：在「系统设置 → 隐私与安全性 → 屏幕录制」
 （较新系统称为「屏幕与系统音频录制」）中允许 Snip2Pin，再重新打开应用。
 
+采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
+
 ### English
 
 - Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
@@ -49,6 +51,11 @@ immediately; local update installs apply the saved icon to Finder and Launchpad.
 
 On first use on macOS, allow Snip2Pin in System Settings → Privacy & Security →
 Screen Recording (Screen & System Audio Recording on newer macOS), then reopen it.
+
+Distribution uses GitHub Releases, outside the App Store. Packages marked
+`-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
+block them. Move the macOS app to Applications, then follow [Apple's instructions](https://support.apple.com/en-us/102445)
+if opening is blocked. Updates to these packages may require screen capture permission again.
 
 ## Platform support
 
@@ -78,7 +85,7 @@ removes after reading. The app itself does not retain files or a capture history
 
 See [Contributing](CONTRIBUTING.md) and [开发与发版流程 / Workflow](docs/workflow.md).
 Development uses short branches, PRs and native CI. Releases require an explicit
-request, a manual build, approved Actions signing and a separate manual publication.
+request, a manual build, approved package preparation and a separate manual publication.
 
 Install [Rust](https://rustup.rs/). The toolchain is pinned to 1.99.0.
 Install [Git LFS](https://git-lfs.com/), then fetch the binary icon resources
@@ -142,9 +149,10 @@ on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
 Explicit identifier migrations use `--install --migrate-identity`, preserving the
 same signing certificate; macOS may require screen permission again after that
 one-time identity change. Subsequent updates use ordinary `--install`.
-This script builds and optionally installs a local development bundle. Formal
-distribution uses the separate manual workflows and signing steps in
-[the release guide](docs/workflow.md), including Developer ID notarization on macOS.
+This script builds and optionally installs a local development bundle. Distribution
+uses the manual workflows in [the release guide](docs/workflow.md). The default
+`unverified` mode needs no paid certificate; `signed` requires production credentials
+and Developer ID notarization on macOS.
 
 SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
 Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
