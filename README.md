@@ -1,4 +1,4 @@
-# Snip2Pin · 小贴图
+# Snip2Pin · 截图置顶
 
 [源码 / Source](https://github.com/Snip2Pin/Snip2Pin)
 
