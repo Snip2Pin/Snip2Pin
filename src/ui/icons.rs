@@ -1,5 +1,41 @@
 use eframe::egui::{self, Color32, Rect, Stroke, StrokeKind};
 
+pub fn paint_lock_icon(ui: &egui::Ui, rect: Rect, locked: bool, color: Color32) {
+    const DESIGN_SIZE: f32 = 24.0;
+    const DISPLAY_SIZE: f32 = 16.0;
+    const LINE_WIDTH: f32 = 1.7;
+    let origin = rect.center() - egui::Vec2::splat(DISPLAY_SIZE / 2.0);
+    let point = |x, y| origin + egui::vec2(x, y) * (DISPLAY_SIZE / DESIGN_SIZE);
+    let stroke = Stroke::new(LINE_WIDTH * DISPLAY_SIZE / DESIGN_SIZE, color);
+    ui.painter().rect_stroke(
+        Rect::from_min_max(point(5.0, 10.0), point(19.0, 21.0)),
+        2,
+        stroke,
+        StrokeKind::Middle,
+    );
+    let shackle = if locked {
+        vec![
+            point(8.0, 10.0),
+            point(8.0, 6.0),
+            point(9.0, 3.0),
+            point(15.0, 3.0),
+            point(16.0, 6.0),
+            point(16.0, 10.0),
+        ]
+    } else {
+        vec![
+            point(8.0, 10.0),
+            point(8.0, 6.0),
+            point(9.0, 3.0),
+            point(15.0, 3.0),
+            point(17.0, 6.0),
+        ]
+    };
+    ui.painter().add(egui::Shape::line(shackle, stroke));
+    ui.painter()
+        .line_segment([point(12.0, 14.0), point(12.0, 17.0)], stroke);
+}
+
 // Copy artwork uses its own design coordinate system, independent of layout.
 pub fn paint_copy_icon(ui: &egui::Ui, rect: Rect) {
     const DESIGN_SIZE: f32 = 24.0;

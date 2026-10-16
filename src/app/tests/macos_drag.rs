@@ -41,6 +41,8 @@ impl Fixture {
             screen_areas: pin.screen_areas.clone(),
             session: pin.session,
             ready: Arc::new(AtomicBool::new(false)),
+            locked: false,
+            highlight_until: None,
             presented: Cell::new(false),
         };
         app.pins.insert(2, second);
@@ -184,8 +186,14 @@ fn first_press_keeps_its_native_event_across_multiple_ui_passes() {
 
 #[test]
 fn queued_body_drag_cannot_consume_a_later_copy_or_close_press() {
-    for size in [egui::vec2(196.0, 137.0), egui::vec2(32.0, 120.0)] {
-        for close in [false, true] {
+    for size in [
+        egui::vec2(196.0, 137.0),
+        egui::vec2(62.0, 120.0),
+        egui::vec2(32.0, 120.0),
+    ] {
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let row = pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("toolbar");
+        for index in 0..row.count {
             let fixture = Fixture::with_size(size);
             let body = egui::pos2(size.x / 2.0, size.y - 20.0);
             fixture.paint(1, body, None, false).textures_delta.clear();
@@ -202,22 +210,10 @@ fn queued_body_drag_cannot_consume_a_later_copy_or_close_press() {
                 .textures_delta
                 .clear();
 
-            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
-            let row = pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("toolbar");
-            let vertical = row.height() > row.width();
-            let second = if vertical { !close } else { close };
             let step = pin::METRICS.button + pin::METRICS.button_gap;
-            let button = row.min
+            let button = row.bounds.min
                 + egui::Vec2::splat(pin::METRICS.button / 2.0)
-                + if second {
-                    if vertical {
-                        egui::vec2(0.0, step)
-                    } else {
-                        egui::vec2(step, 0.0)
-                    }
-                } else {
-                    egui::Vec2::ZERO
-                };
+                + egui::vec2(index as f32 * step, 0.0);
             fixture.paint(1, button, None, false).textures_delta.clear();
             fixture.observe(NSEventType::LeftMouseDown, 22, 2, button);
             fixture
@@ -323,7 +319,7 @@ fn older_ui_input_cannot_adopt_a_newer_native_button_press() {
     fixture.observe(NSEventType::LeftMouseUp, 22, 1, body);
     let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, fixture.size);
     let controls = pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("controls");
-    let button = controls.center();
+    let button = controls.bounds.center();
     fixture.observe(NSEventType::LeftMouseDown, 22, 2, button);
     let current = fixture.app.pin_drag.requests().current().expect("new down");
     // Replay an older RawInput while AppKit has already observed the next click.

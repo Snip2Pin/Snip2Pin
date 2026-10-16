@@ -11,6 +11,7 @@ pub enum Action {
     ClosePins,
     CopyPin(u64),
     ClosePin(u64),
+    ToggleLock(u64),
     Quit,
 }
 
@@ -131,6 +132,12 @@ fn action(id: &str) -> Option<Action> {
 }
 
 fn pin_action(id: &str) -> Option<Action> {
+    if let Some(value) = id.strip_prefix("pin-lock:") {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        return value.parse().ok().map(Action::ToggleLock);
+    }
     let (value, close) = if let Some(value) = id.strip_prefix("pin-copy:") {
         (value, false)
     } else {
@@ -171,6 +178,7 @@ mod tests {
         for (id, expected) in [
             ("pin-copy:42", Action::CopyPin(42)),
             ("pin-close:42", Action::ClosePin(42)),
+            ("pin-lock:42", Action::ToggleLock(42)),
             ("pin-copy:18446744073709551615", Action::CopyPin(u64::MAX)),
         ] {
             assert_eq!(action(id), Some(expected));
@@ -182,6 +190,9 @@ mod tests {
             "pin-copy:+1",
             "pin-copy:1:2",
             "pin-close:18446744073709551616",
+            "pin-lock:",
+            "pin-lock:-1",
+            "pin-lock:18446744073709551616",
             "pin-copy: 42",
             "other:42",
             "pin-copy:４２",

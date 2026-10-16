@@ -13,11 +13,21 @@ pub enum Action {
     Startup(bool),
     OpenCaptureSettings,
     Restart,
+    SelectPin(u64),
+    Pin(super::pin::Action),
+}
+
+pub struct PinEntry<'a> {
+    pub id: u64,
+    pub texture: &'a egui::TextureHandle,
+    pub size: [usize; 2],
+    pub locked: bool,
+    pub selected: bool,
 }
 
 pub struct Model<'a> {
     pub locale: Locale,
-    pub pin_count: usize,
+    pub pins: &'a [PinEntry<'a>],
     pub message: Option<&'a str>,
     pub global_shortcut: bool,
     pub preferences: Preferences,
@@ -107,6 +117,33 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 if model.recording {
                     ui.weak(text(Text::RecordShortcut));
                 }
+                if !model.pins.is_empty() {
+                    ui.add_space(LAUNCHER.action_gap);
+                    egui::CollapsingHeader::new(locale.pin_count(model.pins.len()))
+                        .id_salt("pin-list")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("pin-list-scroll")
+                                .max_height(LAUNCHER.pin_list_height)
+                                .show(ui, |ui| {
+                                    for pin in model.pins {
+                                        if let Some(selected) = pin_row(ui, pin, locale) {
+                                            action = Some(selected);
+                                        }
+                                    }
+                                });
+                            if ui
+                                .add_enabled(
+                                    model.pins.iter().any(|pin| !pin.locked),
+                                    egui::Link::new(text(Text::ClosePins)),
+                                )
+                                .clicked()
+                            {
+                                action = Some(Action::ClosePins);
+                            }
+                        });
+                }
                 if model.permission_required {
                     ui.add_space(LAUNCHER.action_gap);
                     ui.label(text(Text::PermissionTitle));
@@ -190,17 +227,6 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 if language != model.preferences.language {
                     action = Some(Action::Language(language));
                 }
-                if model.pin_count > 0
-                    && action_row(
-                        ui,
-                        &locale.pin_count(model.pin_count),
-                        text(Text::CloseAll),
-                        true,
-                    )
-                    .clicked()
-                {
-                    action = Some(Action::ClosePins);
-                }
                 if model.demo {
                     ui.weak(text(Text::Demo));
                 }
@@ -209,6 +235,97 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 }
             });
     });
+    action
+}
+
+fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Action> {
+    let mut action = None;
+    let fill = if pin.selected {
+        ui.visuals().selection.bg_fill
+    } else {
+        ui.visuals().extreme_bg_color
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(4)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = ui
+                        .add_enabled(
+                            !pin.locked,
+                            egui::Button::new("×")
+                                .min_size(egui::Vec2::splat(snip2pin::pin::METRICS.button)),
+                        )
+                        .on_hover_text(locale.text(Text::Close));
+                    close.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled() && !pin.locked,
+                            locale.text(Text::Close),
+                        )
+                    });
+                    if close.clicked() {
+                        action = Some(Action::Pin(super::pin::Action::ClosePin(pin.id)));
+                    }
+                    let lock = ui
+                        .add(
+                            egui::Button::new("")
+                                .min_size(egui::Vec2::splat(snip2pin::pin::METRICS.button)),
+                        )
+                        .on_hover_text(locale.text(if pin.locked {
+                            Text::Unlock
+                        } else {
+                            Text::Lock
+                        }));
+                    lock.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            locale.text(if pin.locked { Text::Unlock } else { Text::Lock }),
+                        )
+                    });
+                    super::icons::paint_lock_icon(
+                        ui,
+                        lock.rect,
+                        pin.locked,
+                        ui.visuals().text_color(),
+                    );
+                    if lock.clicked() {
+                        action = Some(Action::Pin(super::pin::Action::ToggleLock(pin.id)));
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                        let available = egui::Vec2::from(LAUNCHER.pin_thumbnail);
+                        let size = egui::vec2(pin.size[0] as f32, pin.size[1] as f32);
+                        let fitted = size * (available / size).min_elem();
+                        let thumbnail = ui
+                            .add(
+                                egui::Button::image(egui::Image::new((pin.texture.id(), fitted)))
+                                    .frame(false),
+                            )
+                            .on_hover_text(Text::LocatePin.with(pin.id).render(locale));
+                        thumbnail.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                ui.is_enabled(),
+                                Text::LocatePin.with(pin.id).render(locale),
+                            )
+                        });
+                        let label = ui.add(
+                            egui::Button::selectable(
+                                pin.selected,
+                                Text::PinLabel.with(pin.id).render(locale),
+                            )
+                            .truncate(),
+                        );
+                        if thumbnail.clicked() || label.clicked() {
+                            action = Some(Action::SelectPin(pin.id));
+                        }
+                    });
+                });
+            });
+        });
     action
 }
 

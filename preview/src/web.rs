@@ -18,6 +18,8 @@ struct Pin {
     texture: TextureHandle,
     image: Rect,
     gesture: Option<Gesture>,
+    locked: bool,
+    highlight_until: Option<f64>,
 }
 
 /// Browser-only stand-in for a desktop window manager. Native builds never use
@@ -71,6 +73,7 @@ struct Sandbox {
     pins: Vec<Pin>,
     menu: Option<(u64, Pos2)>,
     next_id: u64,
+    selected_pin: Option<u64>,
 }
 
 impl Sandbox {
@@ -110,6 +113,7 @@ impl Sandbox {
             pins: Vec::new(),
             menu: None,
             next_id: 0,
+            selected_pin: None,
         }
     }
 
@@ -123,6 +127,40 @@ impl Sandbox {
             start: None,
             focus_requested: false,
         });
+    }
+
+    fn pin_action(&mut self, action: pin_view::Action, ui: &egui::Ui, bounds: Rect) {
+        match action {
+            pin_view::Action::ClosePin(id) => {
+                self.pins.retain(|pin| pin.id != id || pin.locked);
+                if !self
+                    .pins
+                    .iter()
+                    .any(|pin| Some(pin.id) == self.selected_pin)
+                {
+                    self.selected_pin = None;
+                }
+                self.menu = None;
+            }
+            pin_view::Action::ToggleLock(id) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
+                    pin.locked = !pin.locked;
+                    pin.gesture = None;
+                }
+                self.menu = None;
+            }
+            pin_view::Action::CopyPin(_) => {
+                self.message = Some(Text::DemoCopied.into());
+                self.menu = None;
+            }
+            pin_view::Action::MenuPin(id) => {
+                let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
+                    bounds.min,
+                    (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
+                );
+                self.menu = Some((id, position));
+            }
+        }
     }
 }
 
@@ -200,6 +238,8 @@ impl eframe::App for Sandbox {
                             ),
                             image: layout.image,
                             gesture: None,
+                            locked: false,
+                            highlight_until: None,
                         });
                         self.message = Some(Text::DemoPinned.into());
                     }
@@ -220,6 +260,18 @@ impl eframe::App for Sandbox {
         );
         let mut action = None;
         let message = self.message.as_ref().map(|message| message.render(locale));
+        let pins = self
+            .pins
+            .iter()
+            .rev()
+            .map(|pin| launcher::PinEntry {
+                id: pin.id,
+                texture: &pin.texture,
+                size: pin.texture.size(),
+                locked: pin.locked,
+                selected: self.selected_pin == Some(pin.id),
+            })
+            .collect::<Vec<_>>();
         egui::Window::new("Snip2Pin")
             .id(egui::Id::new("home"))
             .title_bar(false)
@@ -230,7 +282,7 @@ impl eframe::App for Sandbox {
                     ui,
                     launcher::Model {
                         locale,
-                        pin_count: self.pins.len(),
+                        pins: &pins,
                         message: message.as_deref(),
                         global_shortcut: false,
                         preferences: self.preferences,
@@ -246,7 +298,23 @@ impl eframe::App for Sandbox {
             });
         match action {
             Some(launcher::Action::Capture) => self.capture(),
-            Some(launcher::Action::ClosePins) => self.pins.clear(),
+            Some(launcher::Action::ClosePins) => self.pins.retain(|pin| pin.locked),
+            Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
+            Some(launcher::Action::SelectPin(id)) => {
+                if let Some(index) = self.pins.iter().position(|pin| pin.id == id) {
+                    let mut pin = self.pins.remove(index);
+                    pin.highlight_until = Some(
+                        ui.input(|input| input.time)
+                            + snip2pin::ui::style::PIN.highlight_duration.as_secs_f64(),
+                    );
+                    self.pins.push(pin);
+                    self.selected_pin = Some(id);
+                    ui.ctx().move_to_top(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new(("pin", id)),
+                    ));
+                }
+            }
             Some(launcher::Action::RecordShortcut) => self.recording = !self.recording,
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.preferences.theme = theme;
@@ -297,14 +365,33 @@ impl eframe::App for Sandbox {
                         ui,
                         pin.id,
                         &pin.texture,
-                        false,
-                        controls,
+                        pin_view::Interaction {
+                            native_edges: false,
+                            locked: pin.locked,
+                            excluded: controls.map(|toolbar| toolbar.bounds),
+                        },
                         &|action| events.borrow_mut().push(action),
                         |command| requested = Some(command),
                     );
+                    if let Some(until) = pin.highlight_until {
+                        let remaining = until - ui.input(|input| input.time);
+                        if remaining > 0.0 {
+                            let style = &snip2pin::ui::style::PIN;
+                            ui.painter().rect_stroke(
+                                ui.max_rect(),
+                                0,
+                                egui::Stroke::new(style.highlight_stroke, style.highlight),
+                                egui::StrokeKind::Inside,
+                            );
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_secs_f64(
+                                    remaining,
+                                ));
+                        }
+                    }
                     if hovered && let Some(row) = controls {
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
-                            pin_view::controls(ui, pin.id, &|action| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
+                            pin_view::controls(ui, pin.id, pin.locked, row, &|action| {
                                 events.borrow_mut().push(action)
                             });
                         });
@@ -328,23 +415,7 @@ impl eframe::App for Sandbox {
             }
         }
         for event in events.into_inner() {
-            match event {
-                pin_view::Action::ClosePin(id) => {
-                    self.pins.retain(|pin| pin.id != id);
-                    self.menu = None;
-                }
-                pin_view::Action::CopyPin(_) => {
-                    self.message = Some(Text::DemoCopied.into());
-                    self.menu = None;
-                }
-                pin_view::Action::MenuPin(id) => {
-                    let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
-                        bounds.min,
-                        (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
-                    );
-                    self.menu = Some((id, position));
-                }
-            }
+            self.pin_action(event, ui, bounds);
         }
         if let Some((id, position)) = self.menu {
             let menu_rect = Rect::from_min_size(position, pin_view::MENU_SIZE);
@@ -371,17 +442,12 @@ impl eframe::App for Sandbox {
                         ui.set_max_size(pin_view::MENU_SIZE);
                         ui.painter()
                             .rect_filled(ui.max_rect(), 4, ui.visuals().window_fill);
-                        pin_view::menu(ui, id, &|event| *action.borrow_mut() = Some(event));
+                        let locked = self.pins.iter().any(|pin| pin.id == id && pin.locked);
+                        pin_view::menu(ui, id, locked, &|event| *action.borrow_mut() = Some(event));
                     });
                 if let Some(action) = action.into_inner() {
                     self.menu = None;
-                    match action {
-                        pin_view::Action::CopyPin(_) => {
-                            self.message = Some(Text::DemoCopied.into());
-                        }
-                        pin_view::Action::ClosePin(id) => self.pins.retain(|pin| pin.id != id),
-                        pin_view::Action::MenuPin(_) => {}
-                    }
+                    self.pin_action(action, ui, bounds);
                 }
             }
         }

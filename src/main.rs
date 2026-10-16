@@ -3,6 +3,9 @@
 use std::sync::{Arc, Mutex};
 
 mod app;
+#[cfg(target_os = "macos")]
+#[path = "platform/macos_dock.rs"]
+mod macos_dock;
 mod platform;
 mod startup;
 mod tray;

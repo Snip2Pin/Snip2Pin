@@ -12,9 +12,25 @@ fn image(
     events: &dyn Fn(Action),
 ) -> bool {
     let ctx = ui.ctx().clone();
-    image_with_host(ui, id, texture, native_edges, excluded, events, |command| {
-        ctx.send_viewport_cmd(command);
-    })
+    image_with_host(
+        ui,
+        id,
+        texture,
+        Interaction {
+            native_edges,
+            excluded,
+            ..Default::default()
+        },
+        events,
+        |command| ctx.send_viewport_cmd(command),
+    )
+}
+
+fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+    let bounds = ui.max_rect();
+    let toolbar = snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0)
+        .expect("test controls fit their bounds");
+    super::controls(ui, id, false, toolbar, events);
 }
 
 fn pointer(point: Pos2, pressed: bool) -> Event {
@@ -317,10 +333,14 @@ fn body_double_click_and_escape_close_the_pin() {
 }
 
 #[test]
-fn controls_copy_and_close_without_touching_window_geometry() {
+fn controls_copy_lock_and_close_without_touching_window_geometry() {
     for (offset, expected) in [
         (0.0, Action::CopyPin(7)),
-        (METRICS.button + METRICS.button_gap, Action::ClosePin(7)),
+        (METRICS.button + METRICS.button_gap, Action::ToggleLock(7)),
+        (
+            2.0 * (METRICS.button + METRICS.button_gap),
+            Action::ClosePin(7),
+        ),
     ] {
         let ctx = egui::Context::default();
         let size = METRICS.toolbar_size();
@@ -388,7 +408,11 @@ fn image_controls_follow_hover_and_keep_button_presses_out_of_native_gestures() 
     for native_edges in [false, true] {
         for (offset, expected) in [
             (0.0, Action::CopyPin(7)),
-            (METRICS.button + METRICS.button_gap, Action::ClosePin(7)),
+            (METRICS.button + METRICS.button_gap, Action::ToggleLock(7)),
+            (
+                2.0 * (METRICS.button + METRICS.button_gap),
+                Action::ClosePin(7),
+            ),
         ] {
             let ctx = egui::Context::default();
             let texture = texture(&ctx);
@@ -571,18 +595,22 @@ fn body_press_batched_with_motion_uses_its_actual_origin() {
 }
 
 #[test]
-fn vertical_controls_keep_close_above_copy_without_native_gestures() {
-    for (offset, expected) in [
-        (0.0, Action::ClosePin(7)),
-        (METRICS.button + METRICS.button_gap, Action::CopyPin(7)),
+fn narrow_controls_preserve_the_rightmost_horizontal_actions_without_native_gestures() {
+    for (width, offset, expected) in [
+        (26.0, 0.0, Action::ClosePin(7)),
+        (56.0, 0.0, Action::ToggleLock(7)),
+        (
+            56.0,
+            METRICS.button + METRICS.button_gap,
+            Action::ClosePin(7),
+        ),
     ] {
         for native_edges in [false, true] {
             let ctx = egui::Context::default();
             let texture = texture(&ctx);
-            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 72.0));
-            let column = Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 56.0));
-            let point =
-                column.min + egui::vec2(METRICS.button / 2.0, offset + METRICS.button / 2.0);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 72.0));
+            let row = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 26.0));
+            let point = row.min + egui::vec2(offset + METRICS.button / 2.0, METRICS.button / 2.0);
             let mut actions = Vec::new();
             for events in [
                 vec![Event::PointerMoved(point)],
@@ -590,7 +618,7 @@ fn vertical_controls_keep_close_above_copy_without_native_gestures() {
                 vec![pointer(point, false)],
             ] {
                 let (output, emitted, visible) =
-                    paint_composite(&ctx, &texture, bounds, column, events, native_edges);
+                    paint_composite(&ctx, &texture, bounds, row, events, native_edges);
                 assert!(visible);
                 assert_eq!(image_mesh(&output, &texture), bounds);
                 assert!(commands(&output).iter().all(|command| !matches!(
@@ -627,11 +655,13 @@ fn menu_item(output: &FullOutput, label: &str) -> Pos2 {
 }
 
 #[test]
-fn independent_menu_dispatches_copy_and_close_inside_its_own_bounds() {
+fn independent_menu_dispatches_copy_lock_and_close_inside_its_own_bounds() {
     for (locale, label, expected) in [
         (crate::i18n::Locale::Chinese, "复制", Action::CopyPin(7)),
+        (crate::i18n::Locale::Chinese, "锁定", Action::ToggleLock(7)),
         (crate::i18n::Locale::Chinese, "关闭", Action::ClosePin(7)),
         (crate::i18n::Locale::English, "Copy", Action::CopyPin(7)),
+        (crate::i18n::Locale::English, "Lock", Action::ToggleLock(7)),
         (crate::i18n::Locale::English, "Close", Action::ClosePin(7)),
     ] {
         let ctx = egui::Context::default();
@@ -645,7 +675,7 @@ fn independent_menu_dispatches_copy_and_close_inside_its_own_bounds() {
                     events,
                     ..Default::default()
                 },
-                |ui| menu(ui, 7, &|action| actions.borrow_mut().push(action)),
+                |ui| menu(ui, 7, false, &|action| actions.borrow_mut().push(action)),
             );
             output.textures_delta.clear();
             output
@@ -678,13 +708,13 @@ fn right_click_dispatches_one_menu_request_on_image_and_hover_buttons() {
             (egui::vec2(3.0, 3.0), None, egui::pos2(1.0, 1.0)),
             (
                 egui::vec2(240.0, 160.0),
-                Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(56.0, 26.0))),
+                Some(Rect::from_min_size(Pos2::ZERO, METRICS.toolbar_size())),
                 egui::pos2(13.0, 13.0),
             ),
             (
                 egui::vec2(26.0, 72.0),
-                Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 56.0))),
-                egui::pos2(13.0, 43.0),
+                Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(26.0, 26.0))),
+                egui::pos2(13.0, 13.0),
             ),
         ] {
             let ctx = egui::Context::default();
@@ -735,7 +765,7 @@ fn right_click_dispatches_one_menu_request_on_image_and_hover_buttons() {
 }
 
 #[test]
-fn narrow_text_image_keeps_its_displayed_dimensions_with_vertical_controls() {
+fn narrow_text_image_keeps_its_displayed_dimensions_with_only_close_visible() {
     let ctx = egui::Context::default();
     let mut text_image = egui::ColorImage::filled([32, 72], Color32::WHITE);
     // Generated 3×5 glyphs spell TEXT, so this fixture catches enlargement of
@@ -763,14 +793,14 @@ fn narrow_text_image_keeps_its_displayed_dimensions_with_vertical_controls() {
         egui::TextureOptions::NEAREST,
     );
     let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(32.0, 72.0));
-    let column =
-        snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("vertical controls");
-    assert_eq!(column.size(), egui::vec2(26.0, 56.0));
+    let toolbar = snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0).expect("close fits");
+    assert_eq!(toolbar.count, 1);
+    assert_eq!(toolbar.bounds.size(), egui::vec2(26.0, 26.0));
     let (output, actions, visible) = paint_composite(
         &ctx,
         &texture,
         bounds,
-        column,
+        toolbar.bounds,
         vec![Event::PointerMoved(bounds.center())],
         true,
     );
@@ -816,6 +846,236 @@ fn tiny_image_right_click_does_not_enlarge_the_image_or_start_a_native_gesture()
                 command,
                 ViewportCommand::StartDrag | ViewportCommand::BeginResize(_)
             )));
+        }
+    }
+}
+
+#[test]
+fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() {
+    for native_edges in [false, true] {
+        for point in [egui::pos2(1.0, 1.0), egui::pos2(120.0, 80.0)] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            for (index, events) in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+                vec![Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                vec![secondary(point, true)],
+                vec![secondary(point, false)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let actions = RefCell::new(Vec::new());
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        time: Some(index as f64 * 0.05),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let ctx = ui.ctx().clone();
+                        image_with_host(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                native_edges,
+                                locked: true,
+                                excluded: None,
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |command| ctx.send_viewport_cmd(command),
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(image_mesh(&output, &texture), bounds);
+                // egui synchronizes the native theme on a context's first frame.
+                let expected_commands = if index == 0 {
+                    vec![ViewportCommand::SetTheme(egui::SystemTheme::SystemDefault)]
+                } else {
+                    vec![]
+                };
+                assert_eq!(commands(&output), expected_commands.as_slice());
+                assert_eq!(
+                    output.platform_output.cursor_icon,
+                    egui::CursorIcon::Default
+                );
+                assert_eq!(
+                    actions.into_inner(),
+                    if index == 7 {
+                        vec![Action::MenuPin(7)]
+                    } else {
+                        vec![]
+                    }
+                );
+            }
+            let actions = RefCell::new(Vec::new());
+            let mut input = egui::RawInput {
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events = vec![egui::ViewportEvent::Close];
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                image_with_host(
+                    ui,
+                    7,
+                    &texture,
+                    Interaction {
+                        native_edges,
+                        locked: true,
+                        excluded: None,
+                    },
+                    &|action| actions.borrow_mut().push(action),
+                    |command| ctx.send_viewport_cmd(command),
+                );
+            });
+            output.textures_delta.clear();
+            assert_eq!(commands(&output), &[ViewportCommand::CancelClose]);
+            assert!(actions.into_inner().is_empty());
+        }
+    }
+}
+
+#[test]
+fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
+    for (size, cases) in [
+        (
+            egui::vec2(86.0, 26.0),
+            vec![Some(Action::CopyPin(7)), Some(Action::ToggleLock(7)), None],
+        ),
+        (
+            egui::vec2(56.0, 26.0),
+            vec![Some(Action::ToggleLock(7)), None],
+        ),
+        (egui::vec2(26.0, 26.0), vec![None]),
+    ] {
+        for (index, expected) in cases.into_iter().enumerate() {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            let row = Rect::from_min_size(bounds.min, size);
+            let toolbar = snip2pin::pin::toolbar_geometry(row, &[], row, 1.0).unwrap();
+            let point = row.min
+                + egui::vec2(
+                    index as f32 * (METRICS.button + METRICS.button_gap) + METRICS.button / 2.0,
+                    1.0,
+                );
+            let actions = RefCell::new(Vec::new());
+            for (frame, events) in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let ctx = ui.ctx().clone();
+                        image_with_host(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                native_edges: false,
+                                locked: true,
+                                excluded: Some(row),
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |command| ctx.send_viewport_cmd(command),
+                        );
+                        super::controls(ui, 7, true, toolbar, &|action| {
+                            actions.borrow_mut().push(action)
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+                let expected_commands = if frame == 0 {
+                    vec![ViewportCommand::SetTheme(egui::SystemTheme::SystemDefault)]
+                } else {
+                    vec![]
+                };
+                assert_eq!(commands(&output), expected_commands.as_slice());
+                assert_eq!(image_mesh(&output, &texture), bounds);
+            }
+            assert_eq!(
+                actions.into_inner(),
+                expected.into_iter().collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn locked_menu_keeps_copy_and_unlock_available_and_close_disabled_in_both_locales() {
+    for (locale, copy, unlock, close) in [
+        (crate::i18n::Locale::Chinese, "复制", "解锁", "关闭"),
+        (crate::i18n::Locale::English, "Copy", "Unlock", "Close"),
+    ] {
+        for (label, expected) in [
+            (copy, Some(Action::CopyPin(7))),
+            (unlock, Some(Action::ToggleLock(7))),
+            (close, None),
+        ] {
+            let ctx = egui::Context::default();
+            crate::i18n::set_locale(&ctx, locale);
+            let bounds = Rect::from_min_size(Pos2::ZERO, MENU_SIZE);
+            let actions = RefCell::new(Vec::new());
+            let paint = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| menu(ui, 7, true, &|action| actions.borrow_mut().push(action)),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let output = paint(vec![]);
+            let copy_point = menu_item(&output, copy);
+            let unlock_point = menu_item(&output, unlock);
+            let close_point = menu_item(&output, close);
+            assert!(copy_point.y < unlock_point.y && unlock_point.y < close_point.y);
+            for point in [copy_point, unlock_point, close_point] {
+                assert!(bounds.contains(point));
+            }
+            let point = menu_item(&output, label);
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+            ] {
+                assert!(commands(&paint(events)).is_empty());
+            }
+            assert_eq!(
+                actions.into_inner(),
+                expected.into_iter().collect::<Vec<_>>()
+            );
         }
     }
 }

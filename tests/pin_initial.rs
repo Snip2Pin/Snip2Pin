@@ -14,7 +14,7 @@ fn initial_image_keeps_original_size_and_desktop_position_when_space_exists() {
     assert!(
         layout
             .image
-            .contains_rect(layout.controls.expect("controls"))
+            .contains_rect(layout.controls.expect("controls").bounds)
     );
     assert_eq!(placement.position, [-1000.0, 200.0]);
     assert_eq!(placement.size, [300.0, 200.0]);
@@ -53,7 +53,7 @@ fn full_screen_image_keeps_its_size_without_reserving_external_button_space() {
     assert!(
         layout
             .image
-            .contains_rect(layout.controls.expect("controls"))
+            .contains_rect(layout.controls.expect("controls").bounds)
     );
 }
 
@@ -72,7 +72,7 @@ fn oversized_images_fit_the_screen_proportionally() {
         assert!(
             layout
                 .image
-                .contains_rect(layout.controls.expect("controls"))
+                .contains_rect(layout.controls.expect("controls").bounds)
         );
         assert_eq!(placement.size, [1360.0, 840.0]);
     }
@@ -81,7 +81,7 @@ fn oversized_images_fit_the_screen_proportionally() {
 #[test]
 fn images_that_fit_preserve_size_aspect_and_origin_even_when_controls_do_not_fit() {
     let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
-    for width in [2.0, 12.0, 26.0, 40.0, 79.0, 160.0] {
+    for width in [2.0, 12.0, 26.0, 40.0, 55.0, 56.0, 79.0, 85.0, 86.0, 160.0] {
         for height in [2.0, 20.0, 50.0, 120.0, 200.0] {
             let placement = Placement {
                 position: [100.0, 100.0],
@@ -92,20 +92,29 @@ fn images_that_fit_preserve_size_aspect_and_origin_even_when_controls_do_not_fit
             assert_eq!(layout.image.min, egui::Pos2::from(placement.position));
             assert_eq!(layout.image.size(), egui::Vec2::from(placement.size));
             assert_eq!(layout.image.aspect_ratio(), width / height);
-            let expected_controls = if width >= 56.0 && height >= 26.0 {
-                Some(egui::vec2(56.0, 26.0))
-            } else if width >= 26.0 && height >= 56.0 {
-                Some(egui::vec2(26.0, 56.0))
+            let expected_controls = if width >= 86.0 && height >= 26.0 {
+                Some((egui::vec2(86.0, 26.0), 3))
+            } else if width >= 56.0 && height >= 26.0 {
+                Some((egui::vec2(56.0, 26.0), 2))
+            } else if width >= 26.0 && height >= 26.0 {
+                Some((egui::vec2(26.0, 26.0), 1))
             } else {
                 None
             };
             assert_eq!(
-                layout.controls.map(|controls| controls.size()),
+                layout
+                    .controls
+                    .map(|controls| (controls.bounds.size(), controls.count)),
                 expected_controls,
                 "controls must adapt without enlarging {width}x{height}"
             );
             if let Some(controls) = layout.controls {
-                assert!(layout.image.contains_rect(controls));
+                assert!(layout.image.contains_rect(controls.bounds));
+                assert_eq!(
+                    controls.bounds.height(),
+                    26.0,
+                    "controls must remain horizontal"
+                );
             }
             assert_eq!(placement.size, [width, height]);
         }
@@ -156,7 +165,7 @@ fn oversized_extreme_aspect_ratios_only_shrink_proportionally() {
             "an oversized {original:?} screenshot must not stretch"
         );
         if let Some(controls) = layout.controls {
-            assert!(layout.image.contains_rect(controls));
+            assert!(layout.image.contains_rect(controls.bounds));
         }
         assert_eq!(placement.size, original);
     }

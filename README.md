@@ -18,8 +18,9 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
-- 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、关闭按钮，窄图竖排，极小图使用右键菜单；小图保持原始尺寸，复制始终使用原图。
-- 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出。关闭主页会留在后台；主窗口可开启「开机自启」，默认关闭。
+- 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
+- 主页贴图列表可定位并高亮图片，也可锁定或关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
+- 菜单栏／托盘和 macOS Dock 提供主页、截图和关闭未锁定贴图等操作。有托盘时关闭主页会留在后台；「开机自启」默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
@@ -38,10 +39,14 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
 - Drag a pin to move it and its edges to resize; proportions, **Shift** and anchors
   follow the operating system. Double-click to close. Copy always uses the original
-  screenshot. Hover to show copy/close controls; they move within the visible image.
-  Narrow pins stack the controls; tiny pins use the right-click menu without enlarging.
-- The menu bar / tray offers Home, Capture, Close All and Quit. Closing Home keeps
-  the app running. Enable login startup in Home if wanted; it is **off by default**.
+  screenshot. Hover for copy, lock and close controls. Narrow pins hide leftmost
+  buttons; the right-click menu retains every action without enlarging the image.
+- Select a thumbnail in Home to bring its pin forward and highlight it. The list
+  also offers lock and close. Locked pins cannot move, resize or close; quitting
+  with locked pins requires confirmation.
+- The menu bar / tray and macOS Dock offer Home, Capture and Close unlocked pins.
+  Closing Home keeps the app running when a tray is available. Login startup is
+  **off by default**.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **Change shortcut** to change it.
@@ -76,6 +81,8 @@ On Linux with an X11 display (including XWayland), the app uses the X11 window
 backend so floating pins can request always-on-top through the window manager.
 The Linux tray requires a StatusNotifier-compatible desktop tray host.
 Pure Wayland does not expose a universal always-on-top or global-shortcut API.
+Pin locking blocks application gestures and close commands; external window-manager
+move/resize commands can override native window hints on some desktops.
 It also leaves absolute window placement to the compositor, so selection-layer
 placement and original-position pinning require X11/XWayland.
 Use your compositor's window rules/shortcut settings, or an X11 session, when
@@ -119,9 +126,12 @@ cargo run --locked
 ```
 
 Development builds use `target/debug/snip2pin` (`snip2pin.exe` on Windows).
-Version changes, tags, distribution packages, and published releases require an
-explicit release request. CI validates ordinary pushes and pull requests without
-packaging or publishing an application.
+Version changes, tags and published releases require an explicit release request.
+CI validates temporary package structures without uploading installation packages.
+
+macOS bundle builds require the full Xcode installation and its `ibtool` to
+compile the native Dock menu. Command Line Tools alone are insufficient. See
+[the build instructions](docs/workflow.md#本地-macos-菜单资源).
 
 For local macOS installation, create a development identity once. Its key and
 password stay in a private, app-specific keychain directory outside the repository;

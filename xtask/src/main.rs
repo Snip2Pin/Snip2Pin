@@ -187,6 +187,7 @@ fn lint() -> Result {
             "packaging/macos/ci-sign.sh",
         ]))?;
         execute(Command::new("plutil").args(["-lint", "packaging/macos/Info.plist"]))?;
+        execute(Command::new("xmllint").args(["--noout", "packaging/macos/DockMenu.xib"]))?;
         for locale in ["en", "zh-Hans"] {
             execute(Command::new("plutil").args([
                 "-lint",

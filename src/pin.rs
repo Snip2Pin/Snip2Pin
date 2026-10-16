@@ -16,9 +16,35 @@ pub const METRICS: Metrics = Metrics {
     inset: 12.0,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    Copy,
+    Lock,
+    Close,
+}
+
+impl Control {
+    pub const ALL: [Self; 3] = [Self::Copy, Self::Lock, Self::Close];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Toolbar {
+    pub bounds: Rect,
+    pub count: usize,
+}
+
+impl Toolbar {
+    pub fn translate(self, offset: Vec2) -> Self {
+        Self {
+            bounds: self.bounds.translate(offset),
+            ..self
+        }
+    }
+}
+
 impl Metrics {
     pub fn toolbar_width(&self) -> f32 {
-        self.button * 2.0 + self.button_gap
+        self.toolbar_size_for(Control::ALL.len()).x
     }
 
     pub fn toolbar_height(&self) -> f32 {
@@ -27,6 +53,13 @@ impl Metrics {
 
     pub fn toolbar_size(&self) -> Vec2 {
         egui::vec2(self.toolbar_width(), self.toolbar_height())
+    }
+
+    pub fn toolbar_size_for(&self, count: usize) -> Vec2 {
+        egui::vec2(
+            self.button * count as f32 + self.button_gap * count.saturating_sub(1) as f32,
+            self.button,
+        )
     }
 }
 
@@ -42,7 +75,7 @@ pub fn coordinate_ratio(display_scale: f32, zoom: f32, pixels_per_point: f32) ->
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     pub image: Rect,
-    pub controls: Option<Rect>,
+    pub controls: Option<Toolbar>,
 }
 
 /// Preserve the initial image size; only shrink proportionally to fit the screen.
@@ -80,11 +113,14 @@ pub fn menu_position(
 /// Prefer the image's top-right corner, clamped inside a usable display area.
 /// The image is in UI desktop coordinates; monitor bounds are scaled by ratio.
 /// Return None only when no display has enough visible image for the controls.
-pub fn toolbar_geometry(image: Rect, screens: &[Rect], fallback: Rect, ratio: f32) -> Option<Rect> {
-    for size in [
-        METRICS.toolbar_size(),
-        egui::vec2(METRICS.button, METRICS.toolbar_width()),
-    ] {
+pub fn toolbar_geometry(
+    image: Rect,
+    screens: &[Rect],
+    fallback: Rect,
+    ratio: f32,
+) -> Option<Toolbar> {
+    for count in (1..=Control::ALL.len()).rev() {
+        let size = METRICS.toolbar_size_for(count);
         let preferred = image.right_top() + egui::vec2(-METRICS.inset - size.x, METRICS.inset);
         let candidate = screens
             .iter()
@@ -113,12 +149,16 @@ pub fn toolbar_geometry(image: Rect, screens: &[Rect], fallback: Rect, ratio: f3
                 let available = Rect::from_min_max(visible.min + inset, visible.max - inset);
                 let position =
                     preferred.clamp(available.min, (available.max - size).max(available.min));
-                Some(Rect::from_min_size(position, size))
+                Some(Toolbar {
+                    bounds: Rect::from_min_size(position, size),
+                    count,
+                })
             })
             .min_by(|left, right| {
-                left.min
+                left.bounds
+                    .min
                     .distance_sq(preferred)
-                    .total_cmp(&right.min.distance_sq(preferred))
+                    .total_cmp(&right.bounds.min.distance_sq(preferred))
             });
         if candidate.is_some() {
             return candidate;

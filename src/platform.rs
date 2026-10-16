@@ -24,6 +24,34 @@ mod work_area;
 mod macos;
 
 #[cfg(target_os = "macos")]
+pub fn set_pin_movable(id: u64, movable: bool) -> Result<(), Message> {
+    let thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+    let title = format!("Snip2Pin · 贴图 {id}");
+    let windows = app.windows();
+    let window = windows
+        .iter()
+        .find(|window| window.title().to_string() == title)
+        .ok_or(Text::PinNotFound)?;
+    window.setMovable(movable);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn focus_pin(id: u64) -> Result<(), Message> {
+    let thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+    let title = format!("Snip2Pin · 贴图 {id}");
+    let windows = app.windows();
+    let window = windows
+        .iter()
+        .find(|window| window.title().to_string() == title)
+        .ok_or(Text::PinNotFound)?;
+    window.makeKeyAndOrderFront(None);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 #[path = "platform/macos_icon.rs"]
 pub mod macos_icon;
 
