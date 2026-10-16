@@ -1,5 +1,5 @@
 //! Visual choices live here; positions are derived from bounds in each view.
-use eframe::egui::{Color32, Shadow};
+use eframe::egui::Color32;
 
 pub struct LauncherStyle {
     pub window: [f32; 2],
@@ -60,24 +60,9 @@ pub const OVERLAY: OverlayStyle = OverlayStyle {
 };
 
 pub struct PinStyle {
-    pub shadow: Shadow,
-    pub shadow_radius: u8,
-    pub border_alpha: u8,
     pub button_fill: Color32,
-    pub resize_hit: f32,
-    pub resize_mark: f32,
 }
 
 pub const PIN: PinStyle = PinStyle {
-    shadow: Shadow {
-        offset: [0, 2],
-        blur: 12,
-        spread: 1,
-        color: Color32::from_black_alpha(90),
-    },
-    shadow_radius: 2,
-    border_alpha: 190,
     button_fill: Color32::from_black_alpha(160),
-    resize_hit: 12.0,
-    resize_mark: 6.0,
 };

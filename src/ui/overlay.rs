@@ -6,6 +6,8 @@ use super::style::OVERLAY;
 pub struct Selection {
     pub texture: TextureHandle,
     pub pixels: [u32; 2],
+    /// Source pixels per native window coordinate step, independent of UI zoom.
+    pub pixel_step: [u32; 2],
     pub start: Option<Pos2>,
     pub focus_requested: bool,
 }
@@ -60,29 +62,37 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
     }
     let current = ui.input(|input| input.pointer.interact_pos());
     if let (Some(start), Some(current)) = (selection.start, current) {
-        let rect = Rect::from_two_pos(start, current).intersect(bounds);
-        ui.painter().rect_stroke(
-            rect,
-            0,
-            Stroke::new(OVERLAY.stroke, Color32::WHITE),
-            StrokeKind::Inside,
+        let selected = geometry::selection_with_step(
+            [
+                f64::from(start.x - bounds.min.x),
+                f64::from(start.y - bounds.min.y),
+            ],
+            [
+                f64::from(current.x - bounds.min.x),
+                f64::from(current.y - bounds.min.y),
+            ],
+            [f64::from(bounds.width()), f64::from(bounds.height())],
+            selection.pixels,
+            selection.pixel_step,
         );
+        if let Some(pixels) = selected {
+            let units =
+                bounds.size() / egui::vec2(selection.pixels[0] as f32, selection.pixels[1] as f32);
+            let rect = Rect::from_min_size(
+                bounds.min + egui::vec2(pixels.x as f32, pixels.y as f32) * units,
+                egui::vec2(pixels.width as f32, pixels.height as f32) * units,
+            );
+            ui.painter().rect_stroke(
+                rect,
+                0,
+                Stroke::new(OVERLAY.stroke, Color32::WHITE),
+                StrokeKind::Inside,
+            );
+        }
         if response.drag_stopped() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
             selection.start = None;
-            let result = geometry::selection(
-                [
-                    f64::from(start.x - bounds.min.x),
-                    f64::from(start.y - bounds.min.y),
-                ],
-                [
-                    f64::from(current.x - bounds.min.x),
-                    f64::from(current.y - bounds.min.y),
-                ],
-                [f64::from(bounds.width()), f64::from(bounds.height())],
-                selection.pixels,
-            );
-            return result.map(Action::Select);
+            return selected.map(Action::Select);
         }
     }
     let hint_size = egui::Vec2::from(OVERLAY.hint_size);
@@ -112,6 +122,137 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preview_outline_and_released_crop_share_the_native_pixel_grid() {
+        let pixels = [2000, 1600];
+        for (start, end, expected) in [
+            (
+                [100.5, 150.5],
+                [400.5, 350.5],
+                PixelRect {
+                    x: 200,
+                    y: 300,
+                    width: 602,
+                    height: 402,
+                },
+            ),
+            (
+                [400.5, 350.5],
+                [100.5, 150.5],
+                PixelRect {
+                    x: 200,
+                    y: 300,
+                    width: 602,
+                    height: 402,
+                },
+            ),
+            (
+                [400.5, 150.5],
+                [100.5, 350.5],
+                PixelRect {
+                    x: 200,
+                    y: 300,
+                    width: 602,
+                    height: 402,
+                },
+            ),
+            (
+                [100.5, 350.5],
+                [400.5, 150.5],
+                PixelRect {
+                    x: 200,
+                    y: 300,
+                    width: 602,
+                    height: 402,
+                },
+            ),
+            (
+                [500.5, 600.5],
+                [1100.0, 900.0],
+                PixelRect {
+                    x: 1000,
+                    y: 1200,
+                    width: 1000,
+                    height: 400,
+                },
+            ),
+            (
+                [100.5, 150.5],
+                [-20.0, -30.0],
+                PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 202,
+                    height: 302,
+                },
+            ),
+        ] {
+            for zoom in [1.0, 1.25] {
+                let ctx = egui::Context::default();
+                let bounds =
+                    Rect::from_min_size(egui::pos2(13.0, 17.0), egui::vec2(1000.0, 800.0) / zoom);
+                let start = bounds.min + egui::Vec2::from(start) / zoom;
+                let end = bounds.min + egui::Vec2::from(end) / zoom;
+                let mut selection = Selection {
+                    texture: ctx.load_texture(
+                        "generated selection",
+                        egui::ColorImage::filled([2, 2], Color32::BLACK),
+                        egui::TextureOptions::NEAREST,
+                    ),
+                    pixels,
+                    pixel_step: [2, 2],
+                    start: None,
+                    focus_requested: true,
+                };
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                let frames = [
+                    vec![egui::Event::PointerMoved(start)],
+                    vec![button(start, true)],
+                    vec![egui::Event::PointerMoved(end)],
+                    vec![button(end, false)],
+                ];
+                let expected_outline = Rect::from_min_size(
+                    bounds.min + egui::vec2(expected.x as f32, expected.y as f32) / (2.0 * zoom),
+                    egui::vec2(expected.width as f32, expected.height as f32) / (2.0 * zoom),
+                );
+                for (frame, events) in frames.into_iter().enumerate() {
+                    let mut output = ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(Rect::from_min_max(Pos2::ZERO, bounds.max)),
+                        events,
+                        ..Default::default()
+                    }, |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                            let action = show(ui, &mut selection, true);
+                            if frame == 3 {
+                                assert!(matches!(action, Some(Action::Select(rect)) if rect == expected), "released crop must match source grid, zoom={zoom}");
+                            }
+                        });
+                    });
+                    output.textures_delta.clear();
+                    if frame >= 2 {
+                        let outline = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Rect(rect) if rect.stroke.color == Color32::WHITE => {
+                                    Some(rect.rect)
+                                }
+                                _ => None,
+                            })
+                            .expect("selection outline");
+                        assert!(outline.min.distance(expected_outline.min) < 0.001);
+                        assert!(outline.max.distance(expected_outline.max) < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn completing_or_cancelling_selection_restores_the_cursor() {
         for cancel in [false, true] {
             let ctx = egui::Context::default();
@@ -123,6 +264,7 @@ mod tests {
             let mut selection = Selection {
                 texture,
                 pixels: [640, 480],
+                pixel_step: [1, 1],
                 start: None,
                 focus_requested: false,
             };
@@ -195,6 +337,7 @@ mod tests {
         let mut selection = Selection {
             texture,
             pixels: [2, 2],
+            pixel_step: [1, 1],
             start: None,
             focus_requested: false,
         };

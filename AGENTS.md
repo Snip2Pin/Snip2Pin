@@ -15,21 +15,23 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
-- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶优先保持截图原始尺寸。先尝试四边摆放按钮，只有完整图片与按钮在任何方向都无法同时放入可用区时，才允许自动等比缩小并调整位置；不能仅因顶部空间不足而缩小。手动拖动和缩放不触发自动适配。四边和四角默认等比缩放，Shift 自由缩放，窄图也须保留八个方向；等比以本次手势开始时的比例为准。
-- 手动缩放和初始自动适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。缩放锚点、图片位置和尺寸以原生坐标保存，适配 DPI 和缩放变化；复制、关闭按钮仍须在可用区内。
-- 缩放手势始终固定对应角点：拖动角点时固定对角；右边和下边固定左上角，左边固定右上角，上边固定左下角。比例模式切换和原生窗口回调不能改变锚点。
+- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边，不添加应用层最小窗口尺寸；系统自身的尺寸约束须单独验证。复制始终使用原始像素。
+- 移动和缩放优先交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算下一帧窗口位置或尺寸，不在绘制中回写主窗口几何。
+- 缩放和初始适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。显示器、DPI 和应用缩放按统一单位换算；复制、关闭按钮仍须在可用区内。
 - 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页和正常关闭行为。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
 - 截图模式用蓝框标识鼠标所在屏幕，其他屏幕略微变暗；随鼠标切换高亮，不在后台轮询鼠标。
 - 完成或取消截图时恢复普通光标；演示和自动化测试不得修改系统光标或抢占用户焦点。
-- 贴图边框和阴影画在图片外侧；鼠标移入时显示复制和关闭图标，复制在左，关闭在右，不能遮挡图片。复制使用双层照片图标。
+- 贴图采用系统阴影，不为旧边框样式增加透明边距或坐标补偿。复制、关闭在图片内部悬停显示：空间足够时横排（左复制、右关闭），窄图改竖排（上关闭、下复制），仍放不下时通过右键菜单操作；所有贴图均支持右键菜单。复制使用双层照片图标。按钮点击不得触发窗口拖动或缩放。视觉样式可为更流畅的交互调整。
 - 成功框选后自动复制图片到系统剪贴板，复制按钮可再次复制；取消、无效或过期选区不能改动剪贴板。测试只检查复制命令，不写入真实系统剪贴板。
-- 窗口初始化只设置一次，不因原生坐标或尺寸不匹配而重试。普通贴图通过窗口内偏移补偿小幅坐标差值，初始化期间仍须响应 Esc 和关闭。随后仅由用户拖动或缩放事件更新几何；移动只调整透明留白，缩放只按用户操作调整显示尺寸。静止时不得轮询鼠标或重复定位。
-- 贴图可向左右和下方移出屏幕；操作图标必须保持在显示器可用区内、可见且可点击，避开 Dock、菜单栏等系统界面。macOS 顶部遵守系统约束：图片上边缘可紧贴菜单栏下缘，不继续移到菜单栏外，不能用裁切图片模拟越界。其他方向的移动边界由可达的操作图标决定。拖动锚点以图片内的抓取点和原生坐标保存，正确处理 DPI 和缩放变化。无法读取全局鼠标坐标或指定位置的平台使用系统拖动。
+- 初始位置与尺寸在创建贴图时确定并保持构造参数稳定，界面缩放变化不能把用户移动或缩放后的窗口重置回原位。系统实际结果作为后续绘制依据，不因不匹配而重试或补偿。初始化期间仍须响应 Esc 和关闭。原生移动和缩放事件驱动重绘与按钮布局；静止时不得轮询鼠标或重复定位。
+- 图片移动遵守系统原生窗口约束，不借裁切模拟越界或与系统争夺位置。操作按钮根据图片与显示器可用区的交集布局，避开 Dock、菜单栏等系统界面；macOS 图片上边缘应能紧贴菜单栏下缘。不用透明留白实现换边。
 - 位置根据图片、窗口和显示器的实际边界计算，禁止硬编码屏幕坐标。尺寸、间距、颜色、时间阈值等使用有明确用途的配置或常量，避免散落数值；数学常量、格式规范、图标路径和测试样例无需机械抽象。
-- 操作图标的位置根据图片、显示器可用区和实际空间在四边动态计算，优先在图片上方；图片移出右侧时放到左侧，移出左侧时放到右侧。上方按钮的完整区域一旦被菜单栏遮挡，就应放到下方；图片下移后上方空间足够时恢复上方。角落处综合选择可达位置，始终不遮挡图片。不能将透明留白误当作屏幕内可用空间。用户拖动时可重新分配透明留白，让完整图片贴紧菜单栏；不得因此改变图片原始尺寸或抓取点。悬停和按钮操作本身不能重新定位或调整窗口。
+- 操作按钮默认图内右上角，右侧被遮挡时向左移动，顶部被遮挡时向下移动；空间恢复后回到右上角。按钮限制在图内可见交集，不改变图片位置或尺寸，不新增常驻按钮窗口、全局鼠标监听或轮询。macOS/Windows 的右键菜单复用原生菜单后端，由系统管理定位、边缘避让、焦点和关闭；Linux 当前无通用原生菜单接口，保留独立于小图尺寸的轻量回退，不为两个菜单项引入第二套 GUI 运行时。沙箱仅模拟菜单。回退菜单仅在用户操作时创建，操作完成、Esc 或失焦后关闭，不能裁切在极小图片窗口里。极端越界不通过定位重试争夺系统窗口控制。
+- 后端不提供全局窗口位置时（例如部分 Wayland 桌面），按钮依据实际本地内容区布局，不能用初始截图位置或尺寸猜测当前窗口边界；系统负责窗口可达性。
 - 普通贴图必须置于 Dock 和菜单栏之下，不得靠提高到系统界面之上的窗口层级解决移动限制。macOS 使用原生移动接口，保留窗口类型和系统监听的生命周期；不得修改窗口运行时类型或系统共享类。框选层仅在用户主动截图时覆盖系统界面。
-- macOS 窗口按整数原生点取整，图片须在窗口内单独定位和绘制，不能随窗口尺寸取整而偏移或拉伸。
+- 原生内容区就是图片区域；按实际内容区绘制，接受系统原生尺寸与缩放惯例，不保留期望宿主与实际宿主相减的图片偏移。
+- 框选预览边界与最终裁剪共用同一个像素矩形。平台窗口只能表达更粗坐标时，在框选阶段按实际像素密度统一边界；不得在松手后单独取整窗口原点、重新裁剪或补偿位置。非整数像素密度不能假装存在精确的整数网格。
 - 使用预先准备的透明无边框选区层，不切换系统全屏、不隐藏主窗口或已有贴图。
 - 新贴图绘制完成后才清除选区画面，避免截图结束时露出空白帧。
 - 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
@@ -54,14 +56,19 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 - 实现前先弄清用户要解决什么问题、为什么需要这个行为，以及怎样才算使用顺畅。区分用户的目标与用户提出的具体做法，不能把具体做法当成需求的全部；实现和验证都要围绕目标展开。
 - 新方案或评审建议与用户先前指令、已确认需求冲突时，说明冲突、依据与推荐方案，向用户确认；确认前不实施冲突部分，其他独立工作继续。不能擅自覆盖旧要求，也不能仅因旧要求而默认否决新方案。
-- 评审过程、评审意见、单次性能数据和验收记录放在对应 PR 评论中；仓库文档只保留当前使用方法、开发命令、架构与长期维护规范，不提交本次工作的过程报告。
+- PR 正文和评论面向不了解内部沟通的贡献者，只保留问题背景、设计依据、实现、修复的 bug，以及必要的验证结论和限制。技术评审发现放在对应 PR 评论中；仓库文档只保留当前使用方法、开发命令、架构与长期维护规范。
+- 公开引用 commit、PR、Issue、CI 运行或代码位置时使用可点击链接，便于追溯；commit 用短 SHA 作链接文字并指向完整 SHA，PR／Issue 使用编号作链接文字。发布前确认链接目标真实存在。
+- 不得将聊天内容、指令原文、个人信息、偏好与授权经过、本地操作／安装记录、内部协作过程、agent 角色或模型配置写入公开 PR、Issue、提交说明等。公开内容须先提炼为必要的项目技术信息，不直接复制对话或内部评审报告；验收仅记录提交、平台、场景和技术结论。
 - 方案必须考虑通用性和可维护性，覆盖不同平台、显示器布局、DPI、缩放比例、图片尺寸和边缘位置。把共同规则封装在合适的模块中，平台差异留在适配层；保持项目简洁，不为假设中的需求增加抽象或功能。
 - 禁止通过硬编码位置、偏移量或针对某个场景的特殊数值修补现象。坐标和布局应从实际边界及统一的坐标换算推导，样式参数和阈值应有明确含义并集中管理。仅把散落数字改成常量，不能代替对模型和计算方式的改进。
 - 出现偏移或位置异常时，先定位坐标单位、DPI、缩放、窗口边框、原生系统约束及生命周期中的根因。不得用反复移动、缩放、重试或轮询来掩盖错误；之前用定位重试补偿偏移既未解决根因，又引入了死循环问题，不能再采用这种做法。
 - 图标放到图片下方的目的是让用户操作更顺畅：图片移动时复制和关闭图标仍应留在屏幕内并可操作。“顶部时把图标放下面”只是实现手段；macOS 顶部应让完整图片贴紧菜单栏下缘，不能被旧的透明上边距阻挡，也不能用裁切实现。其他方向应保留图片越界移动能力。
 - 验证用户最终能否完成操作，而不只验证中间数值或某个分支。涉及窗口行为时，检查真实的平台约束和完整交互路径；布局计算正确或隐藏窗口能设置位置，不代表用户拖动时一定正确。明确区分自动化验证与用户实际交互验证，发现缺口时补足测试。
-- 贴图以一个原生桌面坐标 Rect 保存位置与显示尺寸；手势锚点不能兼任持久几何。延迟、分批或乱序的原生窗口反馈只影响局部绘制位置，不能覆盖用户期望。系统拖动是显式手势，只在该手势期间吸收原生位移，跨 DPI 时先统一坐标单位。
-- 窗口布局与渲染的时序必须按实际后端验证。macOS 手势通过窄适配器在绘制前一次设置窗口位置和尺寸，读取实际内容边界并更新绘制裁剪；Glow 后端在目标视口绑定后、图片绘制前更新 drawable 并清空可能重新分配的缓冲区。不得在 UI 阶段更新可能属于其他窗口的当前 GL context。其他异步宿主按已观察边界绘制、等待事件重绘。不得把“先应用全部窗口命令”的理想测试当成后端行为，也不得用巨大透明窗口或定位重试掩盖时序问题。
+- 确认原始问题真正消失前不得合并或启用自动合并，证据不足的修复保持 Draft PR。闪烁、跳动、瞬时偏移须验证可见原生窗口连续操作的中间帧；自动检查、网页或隐藏缓冲区测试通过不能视为真实交互通过。用户不允许操控屏幕时先安装验证构建，等待用户明确确认；仍能复现就继续修复，不先合入或宣称完成。验收记录关联具体提交，后续影响该行为的改动须重新验证。
+- 原生窗口是移动、缩放和当前几何的唯一权威；Rust 只保留不可变原图、初始放置与图内按钮布局。删除应用层的拖动锚点、缩放求解、重复期望 Rect 和反馈补偿；跨 DPI 先统一坐标单位。
+- macOS 原生拖动使用所属窗口的原始鼠标按下事件，不能在延迟重绘后用 `NSApplication.currentEvent` 代替。应用内监听仅保留一次有效按下，松开或消费后释放；请求匹配原始按下点并绑定该次按下的代际和目标窗口，过期请求不能消费后来的点击。不安装全局监听，不吞掉事件，不自行求解拖动位置。
+- 窗口与渲染时序按实际后端验证，包括 egui 多 pass 重绘和连续原生事件。图片绘制不能产生主窗口几何副作用，不能依赖某个可能被丢弃的 UI pass 提交 drawable 补丁。不得用巨大透明窗口、手动更新 GL context 或定位重试掩盖问题。
+- 原生状态查询也要验证是否会改变窗口；macOS 贴图先在隐藏状态完成后端初始化，再显示，不能依赖隐藏窗口一定会绘制首帧。依赖优先使用官方发布包，不将第三方库源码整包复制到仓库，不修改本机依赖缓存或用构建脚本注入补丁；需要依赖修复时优先采用上游修复，不通过坐标补偿掩盖后端副作用。
 - 截图线程使用有界队列，取消立即恢复 UI、丢弃晚到结果并阻止尚未开始的后续屏幕采集，不承诺强停正在执行的系统调用。像素转换在工作线程完成，截图数据与纹理上传共享不可变图片；上传前验证 GPU 纹理边长上限。多屏并行不跨线程搬运非 Send 原生句柄，Linux Portal 不并发请求。
 - GUI 沙箱复用实际 Rust 视图和几何，不复制一套 HTML 产品界面；仅使用生成图片，禁止真实截图、系统剪贴板、权限、自启和全局快捷键操作。多 agent 评审使用各自独立的 headless 浏览器上下文；浏览器交互和隐藏原生几何验证都不能替代合成器视觉验收。
 
@@ -69,13 +76,14 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 - `src/capture.rs`, `src/capture/worker.rs`: monitor enumeration, shared in-memory pixels and bounded cancellable capture work.
 - `src/geometry.rs`: validated pixel selection and original-position pin placement.
-- `src/pin.rs`: pin layout metrics, coordinate conversion, one-time preparation, and drag anchoring.
+- `src/pin.rs`: initial proportional fitting, display coordinate conversion and adaptive visible image controls placement.
 - `src/app.rs`: capture state machine, events, and window lifecycle.
 - `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
 - `preview/`: local WebAssembly sandbox using the same Rust UI and generated images; no native services.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
-- `src/platform/macos.rs`: pin stacking adapter, preserving the backend's window class and observation lifecycle.
+- `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
+- `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `src/permission.rs`: user-driven authorization state without native calls or polling.
 - `src/platform/macos_access.rs`: main-thread permission requests, settings navigation, and installation/identity migration checks.
@@ -181,13 +189,15 @@ cover the menu bar, and release keyboard focus when capture finishes.
 macOS pins stay at floating window level, below the Dock and menu bar. Never
 replace the runtime class of an observed window: AppKit owns KVO subclasses and
 their observation bookkeeping. Test creation, movement, appearance changes,
-and destruction using real winit windows, hidden with activation prohibited;
+and destruction using real winit windows, invisible with activation prohibited;
 plain NSWindow geometry tests alone cannot cover backend observation teardown.
 After raising macOS selection windows above system UI, restore `NSScreen.frame`
 instead of the work area. Warm inactive layers too, and defer image painting
 until the viewport reports the complete display size; never stretch a desktop
 capture into a menu-bar-constrained window. Native geometry tests must keep
-windows invisible and prohibit application activation.
+windows invisible and prohibit application activation. An ordered-window
+regression must use small fully transparent, mouse-pass-through windows and
+release them before exit; hidden-window checks alone do not cover ordering.
 Use egui's theme preference to follow system appearance without polling. Theme
 and icon changes must preserve unrelated settings and existing shortcut files.
 Keep unsafe code denied by default. A platform API that requires unsafe may have

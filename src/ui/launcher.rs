@@ -73,9 +73,9 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                         ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture)
                     })
                     .inner
-                    .on_hover_text(
-                        "拖动框选，Esc 取消。贴图可拖动、边框或边角等比缩放，按 Shift 自由缩放，双击关闭。",
-                    )
+                    .on_hover_ui(|ui| {
+                        super::tooltip(ui, "拖动框选，Esc 取消。拖动贴图移动，边缘缩放，双击关闭。悬停贴图可复制或关闭。")
+                    })
                     .clicked()
                 {
                     action = Some(Action::Capture);
@@ -114,7 +114,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                     ui.weak("已允许但仍不可用时，请重新打开应用。");
                     if ui
                         .button("重新打开应用")
-                        .on_hover_text("重新打开会关闭当前贴图。")
+                        .on_hover_ui(|ui| super::tooltip(ui, "重新打开会关闭当前贴图。"))
                         .clicked()
                     {
                         action = Some(Action::Restart);
@@ -154,7 +154,9 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                             if ui
                                 .checkbox(&mut enabled, "")
                                 .labelled_by(label)
-                                .on_hover_text("登录后在菜单栏后台运行，默认关闭。")
+                                .on_hover_ui(|ui| {
+                                    super::tooltip(ui, "登录后在菜单栏后台运行，默认关闭。")
+                                })
                                 .changed()
                             {
                                 action = Some(Action::Startup(enabled));
@@ -197,7 +199,7 @@ fn footer(ui: &mut egui::Ui) {
                         "版本与下载 ↗",
                         concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"),
                     )
-                    .on_hover_text("在浏览器中查看 GitHub Releases。");
+                    .on_hover_ui(|ui| super::tooltip(ui, "在浏览器中查看 GitHub Releases。"));
                 });
             });
         });

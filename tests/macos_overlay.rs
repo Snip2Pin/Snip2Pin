@@ -110,8 +110,7 @@ fn main() {
         let original_class = pin.class();
         pin.setTitle(&NSString::from_str("Snip2Pin · 贴图"));
         platform::prepare_floating_windows().expect("prepare native windows");
-        // AppKit rounds fractional window dimensions to integral native points.
-        // Keep that rounding in the transparent window, not in the captured image.
+        // AppKit owns the accepted native content size and position.
         let window_size = NSSize::new(target.size.width.ceil(), target.size.height.ceil());
         pin.setContentSize(window_size);
         pin.setFrameOrigin(target.origin);
@@ -120,20 +119,15 @@ fn main() {
             NSRect::new(target.origin, window_size),
             "native rounding must be accounted for before positioning the pin"
         );
-        let padding =
-            f64::from(snip2pin::pin::METRICS.padding + snip2pin::pin::METRICS.toolbar_height());
         let image_top = visible.origin.y + visible.size.height;
-        let origin = NSPoint::new(target.origin.x, image_top + padding - window_size.height);
+        let origin = NSPoint::new(target.origin.x, image_top - window_size.height);
         pin.setFrameOrigin(origin);
         assert_eq!(
             pin.frame().origin,
             origin,
-            "user drag can move transparent margins beyond the native work area"
+            "image content can touch the menu bar without transparent margins"
         );
-        assert_eq!(
-            pin.frame().origin.y + pin.frame().size.height - padding,
-            image_top
-        );
+        assert_eq!(pin.frame().origin.y + pin.frame().size.height, image_top);
         assert_eq!(
             pin.frame().size,
             window_size,

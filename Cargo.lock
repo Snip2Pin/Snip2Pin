@@ -3595,11 +3595,11 @@ dependencies = [
 name = "snip2pin"
 version = "0.2.0"
 dependencies = [
+ "block2 0.6.2",
  "directories",
  "eframe",
+ "egui-winit",
  "global-hotkey",
- "glow",
- "glutin",
  "image",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
