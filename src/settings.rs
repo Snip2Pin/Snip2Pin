@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::i18n::{Language, Locale, Message, Text};
 use crate::icon::Variant;
 use eframe::egui;
 use global_hotkey::hotkey::{HotKey, Modifiers};
@@ -27,21 +28,21 @@ impl Default for Binding {
 }
 
 impl Binding {
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str) -> Result<Self, Message> {
         let key: HotKey = text
             .trim()
             .parse()
-            .map_err(|error| format!("无效快捷键：{error}"))?;
+            .map_err(|error| Text::InvalidShortcut.with(error))?;
         if !key
             .mods
             .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER)
         {
-            return Err("请同时按住 Ctrl、Alt，或 macOS 的 Command 键。".into());
+            return Err(Text::ShortcutModifiers.into());
         }
         Ok(Self(key))
     }
 
-    pub fn from_key(key: egui::Key, modifiers: egui::Modifiers) -> Result<Self, String> {
+    pub fn from_key(key: egui::Key, modifiers: egui::Modifiers) -> Result<Self, Message> {
         let mut parts = Vec::new();
         if modifiers.ctrl {
             parts.push("Ctrl");
@@ -93,7 +94,7 @@ impl Binding {
 }
 
 impl TryFrom<String> for Binding {
-    type Error = String;
+    type Error = Message;
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(&value)
     }
@@ -115,12 +116,12 @@ pub enum Theme {
 }
 
 impl Theme {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::System => "跟随系统",
-            Self::Light => "浅色",
-            Self::Dark => "深色",
-        }
+    pub fn label(self, locale: Locale) -> &'static str {
+        locale.text(match self {
+            Self::System => Text::System,
+            Self::Light => Text::Light,
+            Self::Dark => Text::Dark,
+        })
     }
 
     pub fn preference(self) -> egui::ThemePreference {
@@ -150,12 +151,12 @@ pub enum Icon {
 }
 
 impl Icon {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "跟随主题",
-            Self::Line => "极简线条",
-            Self::Metal => "深色金属",
-        }
+    pub fn label(self, locale: Locale) -> &'static str {
+        locale.text(match self {
+            Self::Auto => Text::AutoIcon,
+            Self::Line => Text::LineIcon,
+            Self::Metal => Text::MetalIcon,
+        })
     }
 
     pub fn resolve(self, theme: egui::Theme) -> Variant {
@@ -173,6 +174,7 @@ pub struct Preferences {
     pub binding: Binding,
     pub theme: Theme,
     pub icon: Icon,
+    pub language: Language,
 }
 
 impl Preferences {
@@ -181,9 +183,19 @@ impl Preferences {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, Message> {
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|error| format!("读取设置失败：{error}")),
+            Ok(text) => {
+                let value: toml::Value =
+                    toml::from_str(&text).map_err(|error| Text::ReadSettings.with(error))?;
+                // Validate before Serde turns typed shortcut errors into diagnostic strings.
+                if let Some(binding) = value.get("binding").and_then(toml::Value::as_str) {
+                    Binding::parse(binding).map_err(|error| Text::ReadSettings.context(error))?;
+                }
+                value
+                    .try_into()
+                    .map_err(|error| Text::ReadSettings.with(error))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 match std::fs::read_to_string(path.with_file_name("shortcut.txt")) {
                     Ok(text) => Ok(Self {
@@ -193,15 +205,15 @@ impl Preferences {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         Ok(Self::default())
                     }
-                    Err(error) => Err(format!("读取旧快捷键设置失败：{error}")),
+                    Err(error) => Err(Text::ReadLegacyShortcut.with(error)),
                 }
             }
-            Err(error) => Err(format!("读取设置失败：{error}")),
+            Err(error) => Err(Text::ReadSettings.with(error)),
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn save(self, path: &Path) -> Result<(), String> {
+    pub fn save(self, path: &Path) -> Result<(), Message> {
         let result = || -> Result<(), Box<dyn std::error::Error>> {
             let parent = path
                 .parent()
@@ -214,7 +226,7 @@ impl Preferences {
             file.persist(path)?;
             Ok(())
         };
-        result().map_err(|error| format!("保存设置失败：{error}"))
+        result().map_err(|error| Text::SaveSettings.with(error))
     }
 }
 

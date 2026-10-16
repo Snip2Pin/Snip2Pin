@@ -269,6 +269,14 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     fs::copy("packaging/macos/Info.plist", &plist)?;
     fs::copy("LICENSE", resources.join("LICENSE"))?;
     fs::copy("packaging/README.txt", resources.join("README.txt"))?;
+    for locale in ["en", "zh-Hans"] {
+        let directory = resources.join(format!("{locale}.lproj"));
+        fs::create_dir_all(&directory)?;
+        fs::copy(
+            format!("packaging/macos/{locale}.lproj/InfoPlist.strings"),
+            directory.join("InfoPlist.strings"),
+        )?;
+    }
     let icon = if variant == "line" {
         "AppIcon-Line"
     } else {
@@ -450,6 +458,12 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
             }
         }
         let plist = app.join("Contents/Info.plist");
+        for locale in ["en", "zh-Hans"] {
+            let strings = app.join(format!(
+                "Contents/Resources/{locale}.lproj/InfoPlist.strings"
+            ));
+            execute(Command::new("plutil").arg("-lint").arg(strings))?;
+        }
         let id = output(
             Command::new("plutil")
                 .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])

@@ -1,4 +1,5 @@
 use eframe::egui::{self, RichText};
+use snip2pin::i18n::{Language, Locale, Text};
 use snip2pin::settings::{Icon, Preferences, Theme};
 
 use super::style::LAUNCHER;
@@ -8,12 +9,14 @@ pub enum Action {
     ClosePins,
     RecordShortcut,
     Appearance(Theme, Icon),
+    Language(Language),
     Startup(bool),
     OpenCaptureSettings,
     Restart,
 }
 
 pub struct Model<'a> {
+    pub locale: Locale,
     pub pin_count: usize,
     pub message: Option<&'a str>,
     pub global_shortcut: bool,
@@ -28,9 +31,11 @@ pub struct Model<'a> {
 }
 
 pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
+    let locale = model.locale;
+    let text = |key| locale.text(key);
     ui.painter()
         .rect_filled(ui.max_rect(), 0, ui.visuals().panel_fill);
-    footer(ui);
+    footer(ui, locale);
     let mut action = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Frame::new()
@@ -49,19 +54,19 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 });
                 ui.add_space(LAUNCHER.section_gap);
                 ui.label(
-                    RichText::new("框选，复制，置顶。")
+                    RichText::new(text(Text::Heading))
                         .size(LAUNCHER.heading)
                         .strong(),
                 );
-                ui.weak("自动复制，留在框选原位。");
+                ui.weak(text(Text::Subtitle));
                 ui.add_space(LAUNCHER.section_gap);
                 let capture = egui::Button::new(
                     RichText::new(if model.capturing {
-                        "正在截图 · 点击取消"
+                        text(Text::Capturing)
                     } else if model.permission_required {
-                        "授权后继续截图"
+                        text(Text::ContinueCapture)
                     } else {
-                        "截图并置顶"
+                        text(Text::Capture)
                     })
                     .color(LAUNCHER.capture_text),
                 )
@@ -73,9 +78,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                         ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture)
                     })
                     .inner
-                    .on_hover_ui(|ui| {
-                        super::tooltip(ui, "拖动框选，Esc 取消。拖动贴图移动，边缘缩放，双击关闭。悬停贴图可复制或关闭。")
-                    })
+                    .on_hover_ui(|ui| super::tooltip(ui, text(Text::CaptureHelp)))
                     .clicked()
                 {
                     action = Some(Action::Capture);
@@ -85,15 +88,15 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 let shortcut = if model.global_shortcut {
                     binding
                 } else {
-                    format!("窗口内 {binding}")
+                    Text::LocalShortcut.with(binding).render(locale)
                 };
                 if action_row(
                     ui,
                     &shortcut,
                     if model.recording {
-                        "取消修改"
+                        text(Text::CancelEdit)
                     } else {
-                        "修改快捷键"
+                        text(Text::ChangeShortcut)
                     },
                     model.idle,
                 )
@@ -102,19 +105,19 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                     action = Some(Action::RecordShortcut);
                 }
                 if model.recording {
-                    ui.weak("按下新的组合键，Esc 取消。");
+                    ui.weak(text(Text::RecordShortcut));
                 }
                 if model.permission_required {
                     ui.add_space(LAUNCHER.action_gap);
-                    ui.label("需要屏幕录制权限");
-                    ui.weak("打开系统设置，允许 Snip2Pin 后返回这里继续。");
-                    if ui.button("打开授权设置").clicked() {
+                    ui.label(text(Text::PermissionTitle));
+                    ui.weak(text(Text::PermissionHelp));
+                    if ui.button(text(Text::OpenSettings)).clicked() {
                         action = Some(Action::OpenCaptureSettings);
                     }
-                    ui.weak("已允许但仍不可用时，请重新打开应用。");
+                    ui.weak(text(Text::RestartHelp));
                     if ui
-                        .button("重新打开应用")
-                        .on_hover_ui(|ui| super::tooltip(ui, "重新打开会关闭当前贴图。"))
+                        .button(text(Text::Restart))
+                        .on_hover_ui(|ui| super::tooltip(ui, text(Text::RestartWarning)))
                         .clicked()
                     {
                         action = Some(Action::Restart);
@@ -124,39 +127,56 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 ui.separator();
                 let mut theme = model.preferences.theme;
                 let mut icon = model.preferences.icon;
+                let mut language = model.preferences.language;
                 ui.add_enabled_ui(model.idle && !model.recording, |ui| {
-                    setting_row(ui, "主题", |ui, label| {
+                    setting_row(ui, text(Text::Theme), |ui, label| {
                         egui::ComboBox::from_id_salt("theme")
                             .width(LAUNCHER.control_width)
-                            .selected_text(theme.label())
+                            .selected_text(theme.label(locale))
                             .show_ui(ui, |ui| {
                                 for choice in [Theme::System, Theme::Light, Theme::Dark] {
-                                    ui.selectable_value(&mut theme, choice, choice.label());
+                                    ui.selectable_value(&mut theme, choice, choice.label(locale));
                                 }
                             })
                             .response
                             .labelled_by(label);
                     });
-                    setting_row(ui, "图标", |ui, label| {
+                    setting_row(ui, text(Text::Icon), |ui, label| {
                         egui::ComboBox::from_id_salt("icon")
                             .width(LAUNCHER.control_width)
-                            .selected_text(icon.label())
+                            .selected_text(icon.label(locale))
                             .show_ui(ui, |ui| {
                                 for choice in [Icon::Auto, Icon::Line, Icon::Metal] {
-                                    ui.selectable_value(&mut icon, choice, choice.label());
+                                    ui.selectable_value(&mut icon, choice, choice.label(locale));
+                                }
+                            })
+                            .response
+                            .labelled_by(label);
+                    });
+                    setting_row(ui, text(Text::Language), |ui, label| {
+                        egui::ComboBox::from_id_salt("language")
+                            .width(LAUNCHER.control_width)
+                            .selected_text(language.label(locale))
+                            .show_ui(ui, |ui| {
+                                for choice in
+                                    [Language::System, Language::Chinese, Language::English]
+                                {
+                                    ui.selectable_value(
+                                        &mut language,
+                                        choice,
+                                        choice.label(locale),
+                                    );
                                 }
                             })
                             .response
                             .labelled_by(label);
                     });
                     if let Some(mut enabled) = model.startup {
-                        setting_row(ui, "开机自启", |ui, label| {
+                        setting_row(ui, text(Text::Startup), |ui, label| {
                             if ui
                                 .checkbox(&mut enabled, "")
                                 .labelled_by(label)
-                                .on_hover_ui(|ui| {
-                                    super::tooltip(ui, "登录后在菜单栏后台运行，默认关闭。")
-                                })
+                                .on_hover_ui(|ui| super::tooltip(ui, text(Text::StartupHelp)))
                                 .changed()
                             {
                                 action = Some(Action::Startup(enabled));
@@ -167,14 +187,22 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 if theme != model.preferences.theme || icon != model.preferences.icon {
                     action = Some(Action::Appearance(theme, icon));
                 }
+                if language != model.preferences.language {
+                    action = Some(Action::Language(language));
+                }
                 if model.pin_count > 0
-                    && action_row(ui, &format!("{} 张贴图", model.pin_count), "关闭全部", true)
-                        .clicked()
+                    && action_row(
+                        ui,
+                        &locale.pin_count(model.pin_count),
+                        text(Text::CloseAll),
+                        true,
+                    )
+                    .clicked()
                 {
                     action = Some(Action::ClosePins);
                 }
                 if model.demo {
-                    ui.weak("演示模式：不读取屏幕。");
+                    ui.weak(text(Text::Demo));
                 }
                 if let Some(message) = model.message {
                     ui.colored_label(ui.visuals().warn_fg_color, message);
@@ -184,7 +212,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
     action
 }
 
-fn footer(ui: &mut egui::Ui) {
+fn footer(ui: &mut egui::Ui, locale: Locale) {
     egui::Panel::bottom("launcher-footer")
         .resizable(false)
         .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(
@@ -196,10 +224,10 @@ fn footer(ui: &mut egui::Ui) {
                 ui.weak(concat!("v", env!("CARGO_PKG_VERSION")));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.hyperlink_to(
-                        "版本与下载 ↗",
+                        locale.text(Text::Downloads),
                         concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"),
                     )
-                    .on_hover_ui(|ui| super::tooltip(ui, "在浏览器中查看 GitHub Releases。"));
+                    .on_hover_ui(|ui| super::tooltip(ui, locale.text(Text::DownloadsHelp)));
                 });
             });
         });

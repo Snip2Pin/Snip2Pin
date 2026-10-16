@@ -187,6 +187,12 @@ fn lint() -> Result {
             "packaging/macos/ci-sign.sh",
         ]))?;
         execute(Command::new("plutil").args(["-lint", "packaging/macos/Info.plist"]))?;
+        for locale in ["en", "zh-Hans"] {
+            execute(Command::new("plutil").args([
+                "-lint",
+                &format!("packaging/macos/{locale}.lproj/InfoPlist.strings"),
+            ]))?;
+        }
         execute(Command::new("rustfmt").args(["--check", "packaging/macos/tests/signing.rs"]))?;
     }
     Ok(())

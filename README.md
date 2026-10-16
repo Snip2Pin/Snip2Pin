@@ -24,7 +24,7 @@ keep it above other windows, drag to move, and double-click to close.
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
 
-主题默认跟随系统，图标默认跟随主题；均可在主窗口修改，设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
+界面默认按系统首选语言选择中英文，无匹配时使用英文；可在「语言」中手动选择。主题默认跟随系统，图标默认跟随主题；设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
 
 macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内「打开授权设置」，
 允许 Snip2Pin 后点击「授权后继续截图」；若仍未生效，点击「重新打开应用」。
@@ -33,7 +33,7 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 
 ### English
 
-- Click **“截图并置顶” (Capture and pin)** or use the shortcut. Drag to select a
+- Click **Capture & pin** or use the shortcut. Drag to select a
   region on any monitor; release to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
 - Drag a pin to move it and its edges to resize; proportions, **Shift** and anchors
@@ -44,16 +44,16 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
   the app running. Enable login startup in Home if wanted; it is **off by default**.
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
-Click **“修改快捷键” (Change shortcut)** to change it.
+Click **Change shortcut** to change it.
 
-Theme follows the system and icons follow the theme by default. Change either
-in the main window; settings are saved automatically. On macOS, Dock icons update
+The interface follows your system's preferred languages (Chinese or English),
+falling back to English. Override it under **Language**. Theme follows the system
+and icons follow the theme; settings are saved automatically. On macOS, Dock icons update
 immediately; local update installs apply the saved icon to Finder and Launchpad.
 
 On first capture on macOS, allow screen recording. If access is missing, use
-**“打开授权设置” (Open permission settings)**, allow Snip2Pin, then click
-**“授权后继续截图” (Continue after authorizing)**. If needed, use
-**“重新打开应用” (Reopen app)**.
+**Open permission settings**, allow Snip2Pin, then click
+**Allow access & continue**. If needed, use **Reopen app**.
 
 Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
@@ -193,6 +193,7 @@ src/
   platform.rs      Global shortcut and local font/icon adapters
   settings.rs      Shortcut validation, theme/icon settings, local preferences
   icon.rs          Icon selection, PNG loading, and SVG resource generation
+  i18n.rs          Typed Chinese/English catalogue and system language matching
   tray.rs          Native menu bar/tray commands and symbolic status icon
   startup.rs       Opt-in current-user login startup registration
   app/tests.rs     Capture/window lifecycle regressions

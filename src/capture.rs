@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use xcap::Monitor;
 
 use crate::geometry::PixelRect;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::i18n::{Message, Text};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod worker;
@@ -70,7 +72,7 @@ impl Display {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn describe(monitor: &Monitor) -> Result<Display, String> {
+fn describe(monitor: &Monitor) -> Result<Display, Message> {
     let result = || -> xcap::XCapResult<Display> {
         Ok(from_backend(
             monitor.id()?,
@@ -79,7 +81,7 @@ fn describe(monitor: &Monitor) -> Result<Display, String> {
             monitor.scale_factor()?,
         ))
     };
-    result().map_err(|error| error.to_string())
+    result().map_err(|error| error.to_string().into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,7 +100,7 @@ fn from_backend(id: u32, origin: [f32; 2], size: [f32; 2], scale: f32) -> Displa
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn displays() -> Result<Vec<Display>, String> {
+pub fn displays() -> Result<Vec<Display>, Message> {
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     monitors
         .into_iter()
@@ -107,16 +109,16 @@ pub fn displays() -> Result<Vec<Display>, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, String> {
+pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, Message> {
     #[cfg(target_os = "macos")]
     if !objc2_core_graphics::CGPreflightScreenCaptureAccess() {
         // The UI owns authorization. A worker must never present a permission
         // dialog or capture while access is absent/revoked.
-        return Err("尚未获得屏幕录制权限，请在应用中打开授权设置。".into());
+        return Err(Text::NoCaptureAccess.into());
     }
     let monitors = Monitor::all().map_err(|error| error.to_string())?;
     if monitors.is_empty() {
-        return Err("没有可用屏幕。".into());
+        return Err(Text::NoDisplays.into());
     }
     let displays = monitors
         .iter()
@@ -135,7 +137,7 @@ pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, String> {
                 .map_err(|error| error.to_string())?
                 .into_iter()
                 .find(|monitor| monitor.id().ok() == Some(display.id))
-                .ok_or_else(|| "显示器已断开，请重新截图。".to_string())?;
+                .ok_or(Text::DisplayDisconnected)?;
             capture_monitor(&monitor, display, cancelled)
         },
         cancelled,
@@ -147,15 +149,15 @@ fn capture_monitor(
     monitor: &Monitor,
     display: Display,
     cancelled: &AtomicBool,
-) -> Result<Snapshot, String> {
+) -> Result<Snapshot, Message> {
     if cancelled.load(Ordering::Acquire) {
-        return Err("截图已取消。".into());
+        return Err(Text::CaptureCanceled.into());
     }
     let pixels = monitor
         .capture_image()
-        .map_err(|error| format!("截图失败：{error}。请检查系统截图权限。"))?;
+        .map_err(|error| Text::CaptureFailed.with(error))?;
     if pixels.width() == 0 || pixels.height() == 0 {
-        return Err("系统没有返回有效的截图。".into());
+        return Err(Text::EmptyCapture.into());
     }
     Ok(Snapshot::from_rgba(display, pixels))
 }
@@ -175,12 +177,12 @@ fn backend_units(scale: f32) -> f32 {
 fn collect_displays(
     displays: Vec<Display>,
     parallel: bool,
-    capture: impl Fn(Display) -> Result<Snapshot, String> + Sync,
+    capture: impl Fn(Display) -> Result<Snapshot, Message> + Sync,
     cancelled: &AtomicBool,
-) -> Result<Vec<Snapshot>, String> {
+) -> Result<Vec<Snapshot>, Message> {
     let capture = |display| {
         if cancelled.load(Ordering::Acquire) {
-            Err("截图已取消。".into())
+            Err(Text::CaptureCanceled.into())
         } else {
             capture(display)
         }
@@ -197,7 +199,10 @@ fn collect_displays(
             })
             .collect();
         jobs.into_iter()
-            .map(|job| job.join().map_err(|_| "截图任务异常结束。".to_string())?)
+            .map(|job| {
+                job.join()
+                    .map_err(|_| Message::from(Text::CaptureCrashed))?
+            })
             .collect()
     })
 }

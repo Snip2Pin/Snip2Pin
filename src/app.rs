@@ -13,6 +13,7 @@ use eframe::egui::{self, ColorImage, TextureHandle, ViewportCommand, ViewportId}
 use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry,
+    i18n::{self, Language, Locale, Message, Text},
     icon::{self, Variant},
     permission::ScreenPermission,
     pin,
@@ -55,7 +56,7 @@ fn dispatch_pin(
 
 pub enum Event {
     Capture,
-    Ready(u64, Result<Vec<Snapshot>, String>, Option<[f32; 2]>),
+    Ready(u64, Result<Vec<Snapshot>, Message>, Option<[f32; 2]>),
     Selection(u64, u32, overlay::Action),
     PinReady(u64, u64),
     #[cfg(target_os = "macos")]
@@ -115,7 +116,8 @@ pub struct Snip2Pin {
     #[cfg(target_os = "macos")]
     pin_drag: platform::macos_drag::DragEvents,
     next_pin: u64,
-    message: Option<String>,
+    message: Option<Message>,
+    system_locale: Locale,
     shortcut: Option<Shortcut>,
     preferences: Preferences,
     applied_icon: Option<Variant>,
@@ -150,6 +152,13 @@ impl Snip2Pin {
             .unwrap_or(Ok(Preferences::default()));
         let mut message = loaded.as_ref().err().cloned();
         let preferences = loaded.unwrap_or_default();
+        let system_locale = Locale::system();
+        let locale = preferences.language.resolve(system_locale);
+        i18n::set_locale(&cc.egui_ctx, locale);
+        cc.egui_ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            ViewportCommand::Title(locale.text(Text::WindowTitle).into()),
+        );
         cc.egui_ctx
             .options_mut(|options| options.fallback_theme = egui::Theme::Light);
         cc.egui_ctx.set_theme(preferences.theme.preference());
@@ -164,7 +173,7 @@ impl Snip2Pin {
             }) {
                 Ok(shortcut) => Some(shortcut),
                 Err(error) => {
-                    message = Some(format!("全局快捷键不可用：{error}"));
+                    message = Some(Text::GlobalShortcutError.context(error));
                     None
                 }
             }
@@ -196,13 +205,13 @@ impl Snip2Pin {
         } else {
             let sender = sender.clone();
             let ctx = cc.egui_ctx.clone();
-            match crate::tray::Tray::new(move |action| {
+            match crate::tray::Tray::new(locale, move |action| {
                 let _ = sender.send(Event::Tray(action));
                 ctx.request_repaint_of(ViewportId::ROOT);
             }) {
                 Ok(tray) => Some(tray),
                 Err(error) => {
-                    message = Some(format!("菜单栏图标不可用：{error}"));
+                    message = Some(Text::TrayError.context(error));
                     cc.egui_ctx
                         .send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
                     cc.egui_ctx
@@ -223,7 +232,7 @@ impl Snip2Pin {
             {
                 Ok((startup, enabled)) => (Some(startup), enabled),
                 Err(error) => {
-                    message = Some(format!("开机自启不可用：{error}"));
+                    message = Some(Text::StartupError.context(error));
                     (None, false)
                 }
             }
@@ -254,6 +263,7 @@ impl Snip2Pin {
             pin_drag,
             next_pin: 0,
             message,
+            system_locale,
             shortcut,
             preferences,
             applied_icon: None,
@@ -371,7 +381,7 @@ impl Snip2Pin {
                 if let Ok(mut relaunch) = self.relaunch.lock() {
                     *relaunch = Some(command);
                 } else {
-                    self.message = Some("无法准备重新打开应用。".into());
+                    self.message = Some(Text::RestartError.into());
                     return;
                 }
                 self.tray_action(crate::tray::Action::Quit, ctx);
@@ -481,7 +491,7 @@ impl Snip2Pin {
     fn accept_capture(
         &mut self,
         id: u64,
-        result: Result<Vec<Snapshot>, String>,
+        result: Result<Vec<Snapshot>, Message>,
         pointer: Option<[f32; 2]>,
         ctx: &egui::Context,
     ) {
@@ -494,9 +504,7 @@ impl Snip2Pin {
                 .iter()
                 .any(|snapshot| snapshot.pixels.size.iter().any(|side| *side > limit))
             {
-                Err(format!(
-                    "当前显卡最多支持 {limit} 像素边长的截图，屏幕分辨率超出限制。"
-                ))
+                Err(Text::TextureLimit.with(limit))
             } else {
                 Ok(snapshots)
             }
@@ -545,7 +553,7 @@ impl Snip2Pin {
                 ctx.request_repaint_of(ViewportId::ROOT);
             }
             result => {
-                self.message = Some(result.err().unwrap_or_else(|| "没有可用屏幕。".into()));
+                self.message = Some(result.err().unwrap_or_else(|| Text::NoDisplays.into()));
                 if !self.demo && !platform::capture_permission() {
                     self.permission = ScreenPermission::Required;
                 }
@@ -680,7 +688,10 @@ impl Snip2Pin {
             return;
         }
         if !self.demo {
-            match platform::pin_menu::show(id) {
+            match platform::pin_menu::show(
+                id,
+                self.preferences.language.resolve(self.system_locale),
+            ) {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {
@@ -737,7 +748,7 @@ impl Snip2Pin {
             }) {
                 Ok(shortcut) => self.shortcut = Some(shortcut),
                 Err(error) => {
-                    self.message = Some(format!("快捷键不可用，请换一个组合：{error}"));
+                    self.message = Some(Text::ShortcutError.context(error));
                     return;
                 }
             }
@@ -769,9 +780,9 @@ impl Snip2Pin {
         self.preferences = preferences;
         self.message = Some(
             if self.shortcut.is_some() {
-                "快捷键已保存。"
+                Text::ShortcutSaved
             } else {
-                "快捷键已保存；当前桌面仅支持窗口内快捷键。"
+                Text::ShortcutSavedLocal
             }
             .into(),
         );
@@ -800,13 +811,44 @@ impl Snip2Pin {
         ctx.set_theme(theme.preference());
         self.message = Some(
             if self.demo {
-                "演示外观已更新，本次有效。"
+                Text::DemoAppearance
             } else {
-                "外观设置已保存。"
+                Text::AppearanceSaved
             }
             .into(),
         );
         ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    fn change_language(&mut self, language: Language, ctx: &egui::Context) {
+        let preferences = Preferences {
+            language,
+            ..self.preferences
+        };
+        if let Some(path) = &self.config_path
+            && let Err(error) = preferences.save(path)
+        {
+            self.message = Some(error);
+            return;
+        }
+        self.preferences = preferences;
+        i18n::set_locale(ctx, language.resolve(self.system_locale));
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            ViewportCommand::Title(
+                language
+                    .resolve(self.system_locale)
+                    .text(Text::WindowTitle)
+                    .into(),
+            ),
+        );
+        ctx.request_repaint_of(ViewportId::ROOT);
+        for id in self.pins.keys() {
+            ctx.request_repaint_of(pin_id(*id));
+        }
+        if self.pin_menu.is_some() {
+            ctx.request_repaint_of(pin_menu_id());
+        }
     }
 
     fn update_icon(&mut self, ctx: &egui::Context) {
@@ -1117,6 +1159,7 @@ impl eframe::App for Snip2Pin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        i18n::set_locale(ctx, self.preferences.language.resolve(self.system_locale));
         if !matches!(self.phase, Phase::Idle)
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
@@ -1161,6 +1204,7 @@ impl eframe::App for Snip2Pin {
         }
         if let Some(tray) = &mut self.tray {
             tray.update(
+                self.preferences.language.resolve(self.system_locale),
                 matches!(self.phase, Phase::Idle | Phase::Capturing) && !self.recording,
                 !self.pins.is_empty(),
                 matches!(self.phase, Phase::Capturing),
@@ -1183,11 +1227,14 @@ impl eframe::App for Snip2Pin {
         }
         self.update_icon(&ctx);
         let idle = matches!(self.phase, Phase::Idle);
+        let locale = self.preferences.language.resolve(self.system_locale);
+        let message = self.message.as_ref().map(|message| message.render(locale));
         let action = launcher::show(
             ui,
             launcher::Model {
+                locale,
                 pin_count: self.pins.len(),
-                message: self.message.as_deref(),
+                message: message.as_deref(),
                 global_shortcut: self.shortcut.is_some(),
                 preferences: self.preferences,
                 icon_texture: self.icon_texture.as_ref(),
@@ -1209,6 +1256,7 @@ impl eframe::App for Snip2Pin {
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.change_appearance(theme, icon, &ctx)
             }
+            Some(launcher::Action::Language(language)) => self.change_language(language, &ctx),
             Some(launcher::Action::Startup(enabled)) => self.set_startup(enabled),
             Some(launcher::Action::OpenCaptureSettings) => {
                 if let Err(error) = platform::open_capture_settings() {

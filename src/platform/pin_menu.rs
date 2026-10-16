@@ -1,20 +1,23 @@
 //! Native context menus use the current pointer and the owning pin window.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+use snip2pin::i18n::Text;
+use snip2pin::i18n::{Locale, Message};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray_icon::menu::{ContextMenu, Menu, MenuItem};
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
-fn entries(id: u64) -> [(String, &'static str); 2] {
+fn entries(id: u64, locale: Locale) -> [(String, &'static str); 2] {
     [
-        (format!("pin-copy:{id}"), "复制"),
-        (format!("pin-close:{id}"), "关闭"),
+        (format!("pin-copy:{id}"), locale.text(Text::Copy)),
+        (format!("pin-close:{id}"), locale.text(Text::Close)),
     ]
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn menu(id: u64) -> Result<Menu, String> {
+fn menu(id: u64, locale: Locale) -> Result<Menu, Message> {
     let menu = Menu::new();
-    for (id, label) in entries(id) {
+    for (id, label) in entries(id, locale) {
         menu.append(&MenuItem::with_id(id, label, true, None))
             .map_err(|error| error.to_string())?;
     }
@@ -25,20 +28,20 @@ fn menu(id: u64) -> Result<Menu, String> {
 /// `true` includes user cancellation; `false` means this backend is unsupported.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
-pub fn show(id: u64) -> Result<bool, String> {
+pub fn show(id: u64, locale: Locale) -> Result<bool, Message> {
     use objc2::rc::Retained;
     use objc2_app_kit::NSApplication;
 
-    let thread = objc2::MainThreadMarker::new().ok_or("贴图菜单必须在 UI 线程打开。")?;
+    let thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
     let application = NSApplication::sharedApplication(thread);
     let title = format!("Snip2Pin · 贴图 {id}");
     let windows = application.windows();
     let window = windows
         .iter()
         .find(|window| window.title().to_string() == title)
-        .ok_or("未找到贴图的原生窗口。")?;
-    let view = window.contentView().ok_or("贴图窗口没有内容视图。")?;
-    let menu = menu(id)?;
+        .ok_or(Text::PinNotFound)?;
+    let view = window.contentView().ok_or(Text::PinViewMissing)?;
+    let menu = menu(id, locale)?;
     // SAFETY: MainThreadMarker confirms AppKit's UI thread. The retained window,
     // content view and menu stay alive throughout this synchronous tracking call.
     // Only the borrowed NSView pointer is passed; no class or ownership changes.
@@ -48,7 +51,7 @@ pub fn show(id: u64) -> Result<bool, String> {
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
-pub fn show(id: u64) -> Result<bool, String> {
+pub fn show(id: u64, locale: Locale) -> Result<bool, Message> {
     use windows_sys::{
         Win32::{
             Foundation::{HWND, LPARAM},
@@ -98,9 +101,9 @@ pub fn show(id: u64) -> Result<bool, String> {
     // The callback only borrows it and retains a handle owned by this process.
     unsafe { EnumWindows(Some(find), (&mut search as *mut Search) as LPARAM) };
     if search.window.is_null() {
-        return Err("未找到贴图的原生窗口。".into());
+        return Err(Text::PinNotFound.into());
     }
-    let menu = menu(id)?;
+    let menu = menu(id, locale)?;
     // SAFETY: This UI-thread call uses the live pin HWND found in this process.
     // Menu events only enqueue app actions; the app cannot remove the owner
     // while this synchronous native menu tracking call is still running.
@@ -109,7 +112,7 @@ pub fn show(id: u64) -> Result<bool, String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn show(_id: u64) -> Result<bool, String> {
+pub fn show(_id: u64, _locale: Locale) -> Result<bool, Message> {
     // The existing Linux menu backend has no GTK integration or event loop.
     // Keep the lightweight app fallback without starting a second GUI runtime.
     Ok(false)
@@ -120,14 +123,14 @@ mod tests {
     #[test]
     fn native_menu_definition_has_two_scoped_actions_without_resizing_the_pin() {
         assert_eq!(
-            super::entries(42),
+            super::entries(42, super::Locale::Chinese),
             [
                 ("pin-copy:42".into(), "复制"),
                 ("pin-close:42".into(), "关闭"),
             ]
         );
         assert_eq!(
-            super::entries(u64::MAX)[0].0,
+            super::entries(u64::MAX, super::Locale::English)[0].0,
             "pin-copy:18446744073709551615"
         );
     }
@@ -135,6 +138,6 @@ mod tests {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn unsupported_backend_requests_the_lightweight_fallback() {
-        assert_eq!(super::show(42), Ok(false));
+        assert_eq!(super::show(42, super::Locale::English), Ok(false));
     }
 }

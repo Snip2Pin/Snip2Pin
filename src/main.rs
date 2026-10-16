@@ -65,7 +65,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let background = action.as_deref() == Some("--background");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Snip2Pin · 小贴图")
+            .with_title(snip2pin::APP_NAME)
             .with_app_id(snip2pin::APP_ID)
             .with_inner_size(ui::style::LAUNCHER.window)
             .with_transparent(true)
@@ -97,7 +97,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     if let Some(mut command) = relaunch
         .lock()
-        .map_err(|_| "重新打开应用的请求不可用。")?
+        .map_err(|_| snip2pin::i18n::Message::from(snip2pin::i18n::Text::RestartError))?
         .take()
     {
         command.spawn()?;

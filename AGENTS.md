@@ -10,6 +10,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
 - 项目网站后续使用 GitHub Pages；建立并验证页面之前，不添加尚不存在的主页链接。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
+- 界面支持中文、英文，默认在启动时按系统首选语言顺序匹配，无匹配或读取失败时回退英文；用户可选择跟随系统、简体中文或 English，手动选择立即生效并持久保存。文案集中在类型化翻译目录，新增文案同时提供中英文，原生界面与 WebAssembly 共用。消息保留语义直到显示时翻译，系统或第三方诊断信息保留原文；翻译不得参与事件路由或原生窗口身份识别。覆盖长英文、小窗口、动态参数及旧设置兼容，不轮询系统语言。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
@@ -85,6 +86,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
 - `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
+- `src/i18n.rs`: typed Chinese/English catalogue, deferred messages and locale matching.
 - `src/permission.rs`: user-driven authorization state without native calls or polling.
 - `src/platform/macos_access.rs`: main-thread permission requests, settings navigation, and installation/identity migration checks.
 - `src/tray.rs`: event-driven native menu bar/tray commands and status artwork.

@@ -7,6 +7,16 @@ fn frame(
     events: Vec<Event>,
     busy: bool,
 ) -> (FullOutput, Option<Action>) {
+    localized_frame(ctx, size, events, busy, Locale::Chinese)
+}
+
+fn localized_frame(
+    ctx: &egui::Context,
+    size: Vec2,
+    events: Vec<Event>,
+    busy: bool,
+    locale: Locale,
+) -> (FullOutput, Option<Action>) {
     let mut action = None;
     let mut output = ctx.run_ui(
         egui::RawInput {
@@ -18,6 +28,7 @@ fn frame(
             action = show(
                 ui,
                 Model {
+                    locale,
                     pin_count: 1,
                     message: None,
                     global_shortcut: true,
@@ -198,4 +209,135 @@ fn long_shortcut_wraps_without_losing_the_change_action() {
         let change = visible_text(&output, "修改快捷键");
         assert!(screen.contains_rect(change));
     }
+}
+
+#[test]
+fn both_languages_keep_primary_actions_and_settings_reachable() {
+    for locale in [Locale::English, Locale::Chinese] {
+        let ctx = egui::Context::default();
+        let size = Vec2::from(LAUNCHER.window);
+        let _ = localized_frame(&ctx, size, vec![], false, locale);
+        let output = localized_frame(&ctx, size, vec![], false, locale).0;
+        for key in [
+            Text::Capture,
+            Text::ChangeShortcut,
+            Text::Theme,
+            Text::Icon,
+            Text::Language,
+            Text::Startup,
+            Text::CloseAll,
+            Text::Downloads,
+        ] {
+            let bounds = visible_text(&output, locale.text(key));
+            assert!(
+                Rect::from_min_size(Pos2::ZERO, size).contains_rect(bounds),
+                "{locale:?} {key:?}"
+            );
+        }
+        let capture = visible_text(&output, locale.text(Text::Capture)).center();
+        let event = |pressed| Event::PointerButton {
+            pos: capture,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let _ = localized_frame(
+            &ctx,
+            size,
+            vec![Event::PointerMoved(capture), event(true)],
+            false,
+            locale,
+        );
+        assert!(matches!(
+            localized_frame(&ctx, size, vec![event(false)], false, locale).1,
+            Some(Action::Capture)
+        ));
+    }
+}
+
+#[test]
+fn english_capture_tooltip_wraps_in_a_small_viewport() {
+    let ctx = egui::Context::default();
+    ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
+    let size = egui::vec2(280.0, 600.0);
+    let _ = localized_frame(&ctx, size, vec![], false, Locale::English);
+    let output = localized_frame(&ctx, size, vec![], false, Locale::English).0;
+    let point = visible_text(&output, "Capture & pin").center();
+    let _ = localized_frame(
+        &ctx,
+        size,
+        vec![Event::PointerMoved(point)],
+        false,
+        Locale::English,
+    );
+    for _ in 0..4 {
+        let output = localized_frame(&ctx, size, vec![], false, Locale::English).0;
+        if let Some(shape) = output.shapes.iter().find(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Locale::English.text(Text::CaptureHelp))) {
+            let painted = shape.shape.visual_bounding_rect();
+            assert!(shape.clip_rect.expand(1.0).contains_rect(painted));
+            assert!(Rect::from_min_size(Pos2::ZERO, size).expand(1.0).contains_rect(painted));
+            return;
+        }
+    }
+    panic!("English hover instructions must be complete");
+}
+
+#[test]
+fn language_picker_emits_a_language_action() {
+    let ctx = egui::Context::default();
+    let size = egui::vec2(LAUNCHER.window[0], 650.0);
+    let _ = localized_frame(&ctx, size, vec![], false, Locale::English);
+    let output = localized_frame(&ctx, size, vec![], false, Locale::English).0;
+    let language_row = visible_text(&output, "Language");
+    let choice = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Follow system" => {
+                Some(text.pos + text.galley.size() / 2.0)
+            }
+            _ => None,
+        })
+        .min_by(|a, b| {
+            (a.y - language_row.center().y)
+                .abs()
+                .total_cmp(&(b.y - language_row.center().y).abs())
+        })
+        .expect("language dropdown");
+    let click_at = |point: Pos2| {
+        let _ = localized_frame(
+            &ctx,
+            size,
+            vec![Event::PointerMoved(point)],
+            false,
+            Locale::English,
+        );
+        let mut result = None;
+        let mut output = None;
+        for pressed in [true, false] {
+            let frame = localized_frame(
+                &ctx,
+                size,
+                vec![Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+                false,
+                Locale::English,
+            );
+            result = result.or(frame.1);
+            output = Some(frame.0);
+        }
+        (output.expect("painted"), result)
+    };
+    let _ = click_at(choice);
+    let _ = localized_frame(&ctx, size, vec![], false, Locale::English);
+    let output = localized_frame(&ctx, size, vec![], false, Locale::English).0;
+    let english = visible_text(&output, "English").center();
+    assert!(matches!(
+        click_at(english).1,
+        Some(Action::Language(Language::English))
+    ));
 }
