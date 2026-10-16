@@ -1638,6 +1638,127 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
+fn pin_initializes_hidden_and_becomes_visible_without_a_first_paint() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let app = tiny_pin_app(&ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let viewport = &setup.viewport_output[&pin_id(1)];
+    assert_eq!(viewport.builder.visible, Some(false));
+    let position = viewport.builder.position;
+    let size = viewport.builder.inner_size.expect("initial size");
+    let paint = viewport.viewport_ui_cb.as_ref().expect("pin UI");
+    let mut initialized = egui::RawInput::default();
+    initialized.viewports.insert(
+        pin_id(1),
+        egui::ViewportInfo {
+            inner_rect: Some(egui::Rect::from_min_size(
+                position.expect("initial position"),
+                size,
+            )),
+            occluded: Some(true),
+            ..Default::default()
+        },
+    );
+    let mut shown = ctx.run_ui(initialized, |ui| {
+        app.show_pins(ui.ctx());
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx()
+                .request_discard("visibility must survive a discarded root pass");
+        }
+    });
+    shown.textures_delta.clear();
+    assert!(!app.pins[&1].ready.load(Ordering::Acquire));
+    assert_eq!(
+        shown.viewport_output[&pin_id(1)]
+            .commands
+            .iter()
+            .filter(|command| matches!(command, ViewportCommand::Visible(true)))
+            .count(),
+        1
+    );
+    let mut input = egui::RawInput {
+        viewport_id: pin_id(1),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(pin_id(1), egui::ViewportInfo::default());
+    let mut painted = ctx.run_ui(input, |ui| {
+        paint(ui);
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx()
+                .request_discard("first pin paint can run multiple passes");
+        }
+    });
+    painted.textures_delta.clear();
+    assert!(painted.shapes.iter().any(|shape|
+        matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == app.pins[&1].texture.id())));
+    assert_eq!(
+        app.events
+            .try_iter()
+            .filter(|event| matches!(event, Event::PinReady(_, 1)))
+            .count(),
+        1
+    );
+    for repeat in [true, false] {
+        let mut shown = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_pins(ui.ctx());
+            if repeat && ui.ctx().current_pass_index() == 0 {
+                ui.ctx()
+                    .request_discard("visibility must survive a discarded root pass");
+            }
+        });
+        shown.textures_delta.clear();
+        let viewport = &shown.viewport_output[&pin_id(1)];
+        assert_eq!(viewport.builder.visible, Some(false));
+        assert_eq!(viewport.builder.position, position);
+        assert_eq!(viewport.builder.inner_size, Some(size));
+        assert!(!viewport.commands.iter().any(|command| matches!(
+            command,
+            ViewportCommand::OuterPosition(_)
+                | ViewportCommand::InnerSize(_)
+                | ViewportCommand::Visible(_)
+        )));
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn initialized_pin_can_be_shown_when_all_windows_are_occluded() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let app = tiny_pin_app(&ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .get_mut(&ViewportId::ROOT)
+        .expect("root")
+        .occluded = Some(true);
+    input.viewports.insert(
+        pin_id(1),
+        egui::ViewportInfo {
+            inner_rect: Some(app.pins[&1].initial),
+            occluded: Some(true),
+            ..Default::default()
+        },
+    );
+    let output = ctx.run_logic(&input, |ctx| app.show_pins(ctx));
+    assert!(matches!(
+        output.viewport_commands[&pin_id(1)].as_slice(),
+        [ViewportCommand::Visible(true)]
+    ));
+    assert!(!app.pins[&1].ready.load(Ordering::Acquire));
+    let output = ctx.run_logic(&input, |ctx| app.show_pins(ctx));
+    assert!(!output.viewport_commands.contains_key(&pin_id(1)));
+}
+
+#[test]
 fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image() {
     for zoom in [1.0, 1.25, 2.0] {
         let ctx = egui::Context::default();

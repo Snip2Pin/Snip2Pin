@@ -10,7 +10,6 @@ publish = false
 
 [workspace]
 members = ["xtask", "preview"]
-exclude = ["vendor/egui-winit"]
 default-members = ["."]
 resolver = "3"
 
@@ -73,7 +72,3 @@ unsafe_code = "deny"
 [lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
-
-[patch.crates-io]
-# Remove when an upstream release avoids the macOS borderless maximize query.
-egui-winit = { path = "vendor/egui-winit" }

@@ -363,8 +363,8 @@ fn main() {
                 aligned_windows.push(image);
             }
             drop(aligned_windows);
-            // Hidden windows do not reproduce AppKit's titlebar adjustment.
-            // Order only small, fully transparent, input-ignoring test windows.
+            // Initialize while hidden, as the app does before its first paint.
+            // Then order only transparent, input-ignoring test windows.
             for (index, screen) in screens.iter().enumerate() {
                 let size = [188.0, 148.0];
                 let visible = screen.visibleFrame();
@@ -417,10 +417,12 @@ fn main() {
                     [guard.frame.size.width, guard.frame.size.height],
                     size.map(f64::from)
                 );
-                guard.window.orderFront(None);
-                guard.assert_unchanged(&app);
                 let mut viewport_info = egui::ViewportInfo::default();
                 egui_winit::update_viewport_info(&mut viewport_info, &ctx, &image, true);
+                guard.assert_unchanged(&app);
+                image.set_visible(true);
+                guard.assert_unchanged(&app);
+                egui_winit::update_viewport_info(&mut viewport_info, &ctx, &image, false);
                 guard.assert_unchanged(&app);
                 self.transparent_orders.push(guard);
                 self.top_windows.push(image);

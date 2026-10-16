@@ -41,6 +41,7 @@ impl Fixture {
             screen_areas: pin.screen_areas.clone(),
             session: pin.session,
             ready: Arc::new(AtomicBool::new(false)),
+            presented: Cell::new(false),
         };
         app.pins.insert(2, second);
         let area = egui::Rect::from_min_max(egui::pos2(0.0, 30.0), egui::pos2(2560.0, 1440.0));

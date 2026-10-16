@@ -19,6 +19,8 @@ use snip2pin::{
     session::CaptureGate,
     settings::{self, Binding, Preferences},
 };
+#[cfg(target_os = "macos")]
+use std::cell::Cell;
 
 use crate::{
     platform::{self, Shortcut},
@@ -90,6 +92,8 @@ struct Pin {
     screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
     ready: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    presented: Cell<bool>,
 }
 
 struct PinMenu {
@@ -653,6 +657,8 @@ impl Snip2Pin {
                     screen_areas,
                     session: id,
                     ready: Arc::new(AtomicBool::new(false)),
+                    #[cfg(target_os = "macos")]
+                    presented: Cell::new(false),
                 },
             );
             // Keep the selection image until the pin has painted its first frame.
@@ -947,104 +953,118 @@ impl Snip2Pin {
             let initial = pin.initial;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
-            ctx.show_viewport_deferred(
-                pin_id(id),
-                self.window_icon(egui::ViewportBuilder::default())
-                    .with_title(format!("Snip2Pin · 贴图 {id}"))
-                    .with_decorations(false)
-                    .with_transparent(false)
-                    .with_has_shadow(true)
-                    .with_position(initial.min)
-                    .with_inner_size(initial.size())
-                    .with_resizable(true)
-                    .with_always_on_top()
-                    .with_active(false)
-                    .with_taskbar(false),
-                move |ui, _| {
-                    if ui.input(|input| {
-                        input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
-                    }) {
-                        dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx(), None);
-                        return;
-                    }
-                    let ratio = pin::coordinate_ratio(
-                        display_scale,
-                        ui.ctx().zoom_factor(),
-                        ui.ctx().pixels_per_point(),
-                    );
-                    // Native geometry is authoritative; painting never changes it.
-                    let controls =
-                        if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
-                            pin::toolbar_geometry(image, &areas, screen, ratio)
-                                .map(|rect| rect.translate(-image.min.to_vec2()))
-                        } else {
-                            // Wayland may not expose global positions. Keep controls
-                            // inside the observed content instead of guessing one.
-                            let bounds = ui.max_rect();
-                            pin::toolbar_geometry(bounds, &[], bounds, 1.0)
-                        };
-                    let hovered = ui
-                        .input(|input| input.pointer.hover_pos())
-                        .is_some_and(|point| ui.max_rect().contains(point));
-                    let ctx = ui.ctx().clone();
-                    let menu_position = fallback_menu
-                        .then(|| {
-                            ctx.input(|input| {
-                                input
-                                    .viewport()
-                                    .inner_rect
-                                    .zip(input.pointer.interact_pos())
-                                    .map(|(window, point)| {
-                                        pin::menu_position(
-                                            window.min + point.to_vec2(),
-                                            ui::pin::MENU_SIZE,
-                                            &areas,
-                                            screen,
-                                            ratio,
-                                        )
-                                    })
-                            })
+            let builder = self
+                .window_icon(egui::ViewportBuilder::default())
+                .with_title(format!("Snip2Pin · 贴图 {id}"))
+                .with_decorations(false)
+                .with_transparent(false)
+                .with_has_shadow(true)
+                .with_position(initial.min)
+                .with_inner_size(initial.size())
+                .with_resizable(true)
+                .with_always_on_top()
+                .with_active(false)
+                .with_taskbar(false);
+            #[cfg(target_os = "macos")]
+            let builder = {
+                // Querying maximized state moves an ordered borderless AppKit window.
+                // Native geometry confirms hidden backend initialization, even when
+                // occlusion prevents the image callback from painting its first frame.
+                let initialized = ctx.input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&pin_id(id))
+                        .is_some_and(|viewport| viewport.inner_rect.is_some())
+                });
+                if initialized && !pin.presented.replace(true) {
+                    ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Visible(true));
+                }
+                builder.with_visible(false)
+            };
+            ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
+                if ui.input(|input| {
+                    input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
+                }) {
+                    dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx(), None);
+                    return;
+                }
+                let ratio = pin::coordinate_ratio(
+                    display_scale,
+                    ui.ctx().zoom_factor(),
+                    ui.ctx().pixels_per_point(),
+                );
+                // Native geometry is authoritative; painting never changes it.
+                let controls = if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
+                    pin::toolbar_geometry(image, &areas, screen, ratio)
+                        .map(|rect| rect.translate(-image.min.to_vec2()))
+                } else {
+                    // Wayland may not expose global positions. Keep controls
+                    // inside the observed content instead of guessing one.
+                    let bounds = ui.max_rect();
+                    pin::toolbar_geometry(bounds, &[], bounds, 1.0)
+                };
+                let hovered = ui
+                    .input(|input| input.pointer.hover_pos())
+                    .is_some_and(|point| ui.max_rect().contains(point));
+                let ctx = ui.ctx().clone();
+                let menu_position = fallback_menu
+                    .then(|| {
+                        ctx.input(|input| {
+                            input
+                                .viewport()
+                                .inner_rect
+                                .zip(input.pointer.interact_pos())
+                                .map(|(window, point)| {
+                                    pin::menu_position(
+                                        window.min + point.to_vec2(),
+                                        ui::pin::MENU_SIZE,
+                                        &areas,
+                                        screen,
+                                        ratio,
+                                    )
+                                })
                         })
-                        .flatten();
-                    let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
-                    #[cfg(target_os = "macos")]
-                    let press_origin = ui.input(|input| input.pointer.press_origin());
-                    ui::pin::image_with_host(
-                        ui,
-                        id,
-                        &texture,
-                        cfg!(target_os = "macos"),
-                        controls,
-                        &dispatch,
-                        |command| {
-                            #[cfg(target_os = "macos")]
-                            if command == ViewportCommand::StartDrag
-                                && let Some(requests) = &native_drag
+                    })
+                    .flatten();
+                let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
+                #[cfg(target_os = "macos")]
+                let press_origin = ui.input(|input| input.pointer.press_origin());
+                ui::pin::image_with_host(
+                    ui,
+                    id,
+                    &texture,
+                    cfg!(target_os = "macos"),
+                    controls,
+                    &dispatch,
+                    |command| {
+                        #[cfg(target_os = "macos")]
+                        if command == ViewportCommand::StartDrag
+                            && let Some(requests) = &native_drag
+                        {
+                            if ctx.current_pass_index() == 0
+                                && let Some(origin) = press_origin
+                                && let Some(press) =
+                                    requests.matching(id, origin, ctx.pixels_per_point())
                             {
-                                if ctx.current_pass_index() == 0
-                                    && let Some(origin) = press_origin
-                                    && let Some(press) =
-                                        requests.matching(id, origin, ctx.pixels_per_point())
-                                {
-                                    let _ = events.send(Event::BeginPinDrag(id, press));
-                                    ctx.request_repaint_of(ViewportId::ROOT);
-                                }
-                                return;
+                                let _ = events.send(Event::BeginPinDrag(id, press));
+                                ctx.request_repaint_of(ViewportId::ROOT);
                             }
-                            ctx.send_viewport_cmd(command);
-                        },
-                    );
-                    if hovered && let Some(row) = controls {
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
-                            ui::pin::controls(ui, id, &dispatch);
-                        });
-                    }
-                    if !ready.swap(true, Ordering::AcqRel) {
-                        let _ = events.send(Event::PinReady(session, id));
-                        ui.ctx().request_repaint_of(ViewportId::ROOT);
-                    }
-                },
-            );
+                            return;
+                        }
+                        ctx.send_viewport_cmd(command);
+                    },
+                );
+                if hovered && let Some(row) = controls {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                        ui::pin::controls(ui, id, &dispatch);
+                    });
+                }
+                if !ready.swap(true, Ordering::AcqRel) {
+                    let _ = events.send(Event::PinReady(session, id));
+                    ui.ctx().request_repaint_of(ViewportId::ROOT);
+                }
+            });
         }
     }
 
