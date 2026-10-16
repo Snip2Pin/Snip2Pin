@@ -4,6 +4,7 @@ use eframe::egui::Color32;
 pub struct LauncherStyle {
     pub window: [f32; 2],
     pub margin: i8,
+    pub compact_margin: i8,
     pub brand: f32,
     pub brand_icon: f32,
     pub heading: f32,
@@ -17,11 +18,19 @@ pub struct LauncherStyle {
     pub control_width: f32,
     pub row_height: f32,
     pub footer_margin: i8,
+    pub pin_thumbnail: [f32; 2],
+    pub pin_list_height: f32,
+    pub pin_row_min_height: f32,
+    pub pin_row_padding: [f32; 2],
+    pub pin_column_gap: f32,
+    pub pin_thumbnail_padding: f32,
+    pub pin_metadata_gap: f32,
 }
 
 pub const LAUNCHER: LauncherStyle = LauncherStyle {
     window: [390.0, 480.0],
     margin: 24,
+    compact_margin: 12,
     brand: 16.0,
     brand_icon: 24.0,
     heading: 20.0,
@@ -35,6 +44,13 @@ pub const LAUNCHER: LauncherStyle = LauncherStyle {
     control_width: 140.0,
     row_height: 40.0,
     footer_margin: 12,
+    pin_thumbnail: [48.0, 40.0],
+    pin_list_height: 144.0,
+    pin_row_min_height: 64.0,
+    pin_row_padding: [12.0, 12.0],
+    pin_column_gap: 8.0,
+    pin_thumbnail_padding: 4.0,
+    pin_metadata_gap: 2.0,
 };
 
 pub struct OverlayStyle {
@@ -63,8 +79,16 @@ pub const OVERLAY: OverlayStyle = OverlayStyle {
 
 pub struct PinStyle {
     pub button_fill: Color32,
+    pub highlight: Color32,
+    pub highlight_stroke_pixels: f32,
+    pub focused_resize_inset: f32,
+    pub menu_width: f32,
 }
 
 pub const PIN: PinStyle = PinStyle {
     button_fill: Color32::from_black_alpha(160),
+    highlight: Color32::from_rgb(56, 132, 255),
+    highlight_stroke_pixels: 1.0,
+    focused_resize_inset: 24.0,
+    menu_width: 200.0,
 };

@@ -1,0 +1,280 @@
+//! Focus this process's pins while keeping the originating Home reachable.
+use snip2pin::i18n::{Message, Text};
+
+fn title(id: u64) -> String {
+    format!("Snip2Pin · 贴图 {id}")
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn find(id: u64) -> Result<objc2::rc::Retained<objc2_app_kit::NSWindow>, Message> {
+    let thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+    let title = title(id);
+    app.windows()
+        .iter()
+        .find(|window| window.title().to_string() == title)
+        .ok_or_else(|| Text::PinNotFound.into())
+}
+
+/// Called once on the UI thread for an explicit list selection.
+#[cfg(target_os = "macos")]
+pub fn activate(id: u64) -> Result<(), Message> {
+    let window = find(id)?;
+    let thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(thread);
+    let key = app.keyWindow();
+    window.makeKeyWindow();
+    if let Some(key) = key
+        && key.windowNumber() != window.windowNumber()
+        && key.level() == window.level()
+    {
+        // Keep the list receiving the second click when its pin overlaps Home.
+        window.orderWindow_relativeTo(
+            objc2_app_kit::NSWindowOrderingMode::Below,
+            key.windowNumber(),
+        );
+    } else {
+        window.orderFront(None);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub(super) fn find(id: u64) -> Result<windows_sys::Win32::Foundation::HWND, Message> {
+    use windows_sys::{
+        Win32::{
+            Foundation::{HWND, LPARAM},
+            UI::WindowsAndMessaging::{
+                EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+            },
+        },
+        core::BOOL,
+    };
+
+    struct Search {
+        title: Vec<u16>,
+        window: HWND,
+    }
+
+    unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: EnumWindows synchronously borrows the Search supplied below.
+        let search = unsafe { &mut *(data as *mut Search) };
+        let mut process = 0;
+        // SAFETY: The enumeration supplies a valid HWND and process is writable.
+        unsafe { GetWindowThreadProcessId(window, &mut process) };
+        if process != std::process::id() {
+            return 1;
+        }
+        // SAFETY: The HWND comes directly from the active enumeration.
+        let length = unsafe { GetWindowTextLengthW(window) };
+        if length <= 0 || length as usize != search.title.len() {
+            return 1;
+        }
+        let mut title = vec![0; length as usize + 1];
+        // SAFETY: title includes space for the terminator and lives for this call.
+        let written = unsafe { GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32) };
+        if written as usize == search.title.len() && title[..written as usize] == search.title {
+            search.window = window;
+            return 0;
+        }
+        1
+    }
+
+    let mut search = Search {
+        title: title(id).encode_utf16().collect(),
+        window: std::ptr::null_mut(),
+    };
+    // SAFETY: Search stays at a stable address during synchronous enumeration.
+    // Only a handle owned by this process is returned, for immediate UI-thread use.
+    unsafe { EnumWindows(Some(visit), (&mut search as *mut Search) as LPARAM) };
+    if search.window.is_null() {
+        Err(Text::PinNotFound.into())
+    } else {
+        Ok(search.window)
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub fn activate(id: u64) -> Result<(), Message> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, WS_EX_TOPMOST,
+    };
+    let window = find(id)?;
+    // SAFETY: These synchronous queries retain no pointers. Only this process's
+    // foreground topmost window can become the stacking sibling of its pin.
+    let sibling = unsafe {
+        let foreground = GetForegroundWindow();
+        let mut process = 0;
+        if !foreground.is_null() && foreground != window {
+            GetWindowThreadProcessId(foreground, &mut process);
+        }
+        if process == std::process::id()
+            && GetWindowLongW(foreground, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0
+        {
+            foreground
+        } else {
+            HWND_TOPMOST
+        }
+    };
+    // SAFETY: Pins and Home share the calling UI thread's input queue. Let the
+    // pin receive keys; only restore the relative stacking order below, not focus.
+    unsafe { SetFocus(window) };
+    // SAFETY: This reads the focus of the current UI thread without retaining data.
+    if unsafe { GetFocus() } != window {
+        return Err(std::io::Error::last_os_error().to_string().into());
+    }
+    // SAFETY: The live pin belongs to this process and this call runs on its UI
+    // thread. Preserve its geometry, topmost level, and newly acquired focus.
+    let raised = unsafe {
+        SetWindowPos(
+            window,
+            sibling,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    };
+    if raised == 0 {
+        Err(std::io::Error::last_os_error().to_string().into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn activate(id: u64) -> Result<(), Message> {
+    use x11rb::{
+        connection::Connection,
+        protocol::xproto::{
+            AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt, EventMask, StackMode,
+        },
+    };
+
+    // The app chooses X11 whenever DISPLAY exists. Native Wayland provides no
+    // equivalent request through this backend; native focus remains authoritative.
+    if std::env::var_os("DISPLAY").is_none() {
+        return Ok(());
+    }
+    let (connection, screen) = x11rb::connect(None).map_err(|error| error.to_string())?;
+    let root = connection.setup().roots[screen].root;
+    let atom = |name: &[u8]| -> Result<u32, Message> {
+        Ok(connection
+            .intern_atom(true, name)
+            .map_err(|error| error.to_string())?
+            .reply()
+            .map_err(|error| error.to_string())?
+            .atom)
+    };
+    let clients = atom(b"_NET_CLIENT_LIST")?;
+    let pid = atom(b"_NET_WM_PID")?;
+    let name = atom(b"_NET_WM_NAME")?;
+    let utf8 = atom(b"UTF8_STRING")?;
+    if [clients, pid, name, utf8].contains(&0) {
+        return Err(Text::PinNotFound.into());
+    }
+    let windows = connection
+        .get_property(false, root, clients, AtomEnum::WINDOW, 0, u32::MAX)
+        .map_err(|error| error.to_string())?
+        .reply()
+        .map_err(|error| error.to_string())?;
+    let property_value = |window, property, property_type| {
+        connection
+            .get_property(false, window, property, property_type, 0, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| reply.value32().and_then(|mut values| values.next()))
+    };
+    let active = atom(b"_NET_ACTIVE_WINDOW")?;
+    let supported_atom = atom(b"_NET_SUPPORTED")?;
+    if supported_atom == 0 {
+        return Ok(());
+    }
+    let supported = connection
+        .get_property(false, root, supported_atom, AtomEnum::ATOM, 0, u32::MAX)
+        .map_err(|error| error.to_string())?
+        .reply()
+        .map_err(|error| error.to_string())?;
+    let supports = |atom| {
+        atom != 0
+            && supported
+                .value32()
+                .is_some_and(|mut values| values.any(|value| value == atom))
+    };
+    if !supports(active) {
+        return Ok(());
+    }
+    let sibling = property_value(root, active, AtomEnum::WINDOW).filter(|window| {
+        property_value(*window, pid, AtomEnum::CARDINAL) == Some(std::process::id())
+    });
+    let title = title(id);
+    for window in windows.value32().into_iter().flatten() {
+        // A client may disappear during enumeration. Skip stale entries and
+        // match both process and fixed identity, never a user-editable pin name.
+        let process = property_value(window, pid, AtomEnum::CARDINAL);
+        if process != Some(std::process::id()) {
+            continue;
+        }
+        let named = connection
+            .get_property(false, window, name, utf8, 0, title.len().div_ceil(4) as u32)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| {
+                reply.format == 8 && reply.bytes_after == 0 && reply.value == title.as_bytes()
+            });
+        if !named {
+            continue;
+        }
+        let sibling = sibling.filter(|sibling| *sibling != window);
+        let restack = atom(b"_NET_RESTACK_WINDOW")?;
+        if sibling.is_some() && !supports(restack) {
+            // Do not cover the initiating list when its WM cannot keep it above us.
+            return Ok(());
+        }
+        let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+        connection
+            .send_event(
+                false,
+                root,
+                mask,
+                ClientMessageEvent::new(
+                    32,
+                    window,
+                    active,
+                    [1, x11rb::CURRENT_TIME, sibling.unwrap_or(0), 0, 0],
+                ),
+            )
+            .map_err(|error| error.to_string())?
+            .check()
+            .map_err(|error| error.to_string())?;
+        // The WM decides activation and stacking. Send each request once, in
+        // order, without polling or trying to override its focus policy.
+        if let Some(sibling) = sibling {
+            // Reparenting window managers make the client windows non-siblings.
+            // Ask the WM to restack them instead of a failing ConfigureWindow.
+            let event = ClientMessageEvent::new(
+                32,
+                window,
+                restack,
+                [1, sibling, u32::from(StackMode::BELOW), 0, 0],
+            );
+            connection.send_event(false, root, mask, event)
+        } else {
+            connection.configure_window(
+                window,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )
+        }
+        .map_err(|error| error.to_string())?
+        .check()
+        .map_err(|error| error.to_string())?;
+        connection.flush().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    Err(Text::PinNotFound.into())
+}

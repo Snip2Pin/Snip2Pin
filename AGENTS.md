@@ -17,19 +17,24 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
-- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边，不添加应用层最小窗口尺寸；系统自身的尺寸约束须单独验证。复制始终使用原始像素。
-- 移动和缩放优先交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算下一帧窗口位置或尺寸，不在绘制中回写主窗口几何。
+- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。截图只校验非空和源图边界，不设置额外的 2 像素或 2 点下限，原生窗口和宿主决定实际最小尺寸。高亮边框为 1 个物理像素。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边；不增加 DPI 下限换算、几何反馈或定位重试。复制始终使用原始像素。
+- 移动和缩放手势交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算手势的下一帧窗口几何。显式键盘缩放与恢复原始尺寸由事件处理器根据实际内容尺寸及目标屏幕 DPI 换算，单次请求尺寸，不改位置、不重试。
 - 缩放和初始适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。显示器、DPI 和应用缩放按统一单位换算；复制、关闭按钮仍须在可用区内。
-- 菜单栏／托盘提供打开主页、截图、关闭全部贴图和退出；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页和正常关闭行为。
+- 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
+- 主页列出当前贴图的缩略图、定位、锁定和关闭操作；定位将键盘焦点交给对应贴图。列表与图片高亮只依据真实窗口焦点，直接点击图片同样生效，失焦即取消；不保留额外选中状态或高亮计时，不新增截图历史。选中且未锁定时，列表显示橙色提示“贴图太小？按 + 放大”，不再通过图片尺寸或 DPI 增加判断。列表可折叠并限高滚动，复用已有纹理。
+- 列表采用轻量行布局，保留左右内距；缩略图在带底色、细边框与内留白的固定区域居中，完整展示，不裁切原图。名称起点对齐，长名称截断并可查看全文，重名须可区分；操作按钮弱化，不能紧贴边缘或挤压名称。行高随字体增长，覆盖窄窗、大字体、极端图片比例、空列表和长列表滚动。单击行内非操作按钮区域选中并定位，双击名称进入标准文本编辑器，清空后显示随语言变化的默认编号。主页采用普通窗口层级，不能为定位或管理贴图而永久置顶；只有等待退出确认时可临时提升，取消须恢复。定位不改变几何，不用焦点往返、定时或层级降升补偿；名称编辑不触发定位或截图，锁定不妨碍命名。名称及编辑撤销状态随贴图关闭释放，不写入设置、日志或磁盘，不改变原生窗口身份及原图。
+- 聚焦且未锁定的贴图支持方向键微调位置、`+`／`=` 放大、`-` 缩小、`0` 恢复原始显示尺寸；右键菜单同样提供恢复操作。移动步长使用系统可表达的最小单位，只从实际外框位置发出一次移动请求，不猜测 Wayland 缺失的全局坐标；边界由系统处理。键盘缩放保持当前比例，最短边放大时须实际增长，尺寸边界遵循原生系统和宿主；恢复原始尺寸不施加应用下限。文本编辑或 Ctrl／Command／Alt 组合不触发键盘移动与缩放。保持窗口与图片同尺寸，不为点击热区自动放大或增加透明外边框；非 macOS 聚焦时可加宽图内缩放热区，同时保留中心拖动区域。
+- 锁定贴图不可移动、缩放、双击／Esc／菜单关闭，关闭全部跳过锁定项；复制、定位与解锁仍可用。所有关闭和手势入口在消费事件时检查锁定，不能只禁用按钮。有锁定贴图时主动退出须确认，取消保留全部图片且取消待执行重启；确认后才释放图片并退出。
+- 退出等确认对话框优先使用系统原生界面；macOS 用异步 NSAlert sheet，Windows 原生消息框在专用线程等待，通过带请求标识的事件回传结果，不在绘制或主事件循环借用期间同步嵌套模态循环。默认取消，过期结果不得影响新请求；等待 Windows 消息框时保留其所有者窗口。无通用原生接口的平台、演示和自动测试保留轻量应用内回退，不引入第二套 GUI 运行时。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
 - 截图模式用蓝框标识鼠标所在屏幕，其他屏幕略微变暗；随鼠标切换高亮，不在后台轮询鼠标。
 - 完成或取消截图时恢复普通光标；演示和自动化测试不得修改系统光标或抢占用户焦点。
-- 贴图采用系统阴影，不为旧边框样式增加透明边距或坐标补偿。复制、关闭在图片内部悬停显示：空间足够时横排（左复制、右关闭），窄图改竖排（上关闭、下复制），仍放不下时通过右键菜单操作；所有贴图均支持右键菜单。复制使用双层照片图标。按钮点击不得触发窗口拖动或缩放。视觉样式可为更流畅的交互调整。
+- 贴图采用系统阴影，不为旧边框样式增加透明边距或坐标补偿。复制、锁定、关闭在图片内部悬停横排显示，窄图从左起逐个隐藏完整按钮，不竖排、不放大图片；列表和右键菜单保留全部操作。复制使用双层照片图标。按钮点击不得触发窗口拖动或缩放。视觉样式可为更流畅的交互调整。
 - 成功框选后自动复制图片到系统剪贴板，复制按钮可再次复制；取消、无效或过期选区不能改动剪贴板。测试只检查复制命令，不写入真实系统剪贴板。
 - 初始位置与尺寸在创建贴图时确定并保持构造参数稳定，界面缩放变化不能把用户移动或缩放后的窗口重置回原位。系统实际结果作为后续绘制依据，不因不匹配而重试或补偿。初始化期间仍须响应 Esc 和关闭。原生移动和缩放事件驱动重绘与按钮布局；静止时不得轮询鼠标或重复定位。
 - 图片移动遵守系统原生窗口约束，不借裁切模拟越界或与系统争夺位置。操作按钮根据图片与显示器可用区的交集布局，避开 Dock、菜单栏等系统界面；macOS 图片上边缘应能紧贴菜单栏下缘。不用透明留白实现换边。
 - 位置根据图片、窗口和显示器的实际边界计算，禁止硬编码屏幕坐标。尺寸、间距、颜色、时间阈值等使用有明确用途的配置或常量，避免散落数值；数学常量、格式规范、图标路径和测试样例无需机械抽象。
-- 操作按钮默认图内右上角，右侧被遮挡时向左移动，顶部被遮挡时向下移动；空间恢复后回到右上角。按钮限制在图内可见交集，不改变图片位置或尺寸，不新增常驻按钮窗口、全局鼠标监听或轮询。macOS/Windows 的右键菜单复用原生菜单后端，由系统管理定位、边缘避让、焦点和关闭；Linux 当前无通用原生菜单接口，保留独立于小图尺寸的轻量回退，不为两个菜单项引入第二套 GUI 运行时。沙箱仅模拟菜单。回退菜单仅在用户操作时创建，操作完成、Esc 或失焦后关闭，不能裁切在极小图片窗口里。极端越界不通过定位重试争夺系统窗口控制。
+- 操作按钮默认图内右上角，右侧被遮挡时向左移动，顶部被遮挡时向下移动；空间恢复后回到右上角。按钮限制在图内可见交集，不改变图片位置或尺寸，不新增常驻按钮窗口、全局鼠标监听或轮询。macOS/Windows 的右键菜单复用原生菜单后端，由系统管理定位、边缘避让、焦点和关闭；Linux 当前无通用原生菜单接口，保留独立于小图尺寸的轻量回退，不为少量菜单项引入第二套 GUI 运行时。沙箱仅模拟菜单。回退菜单仅在用户操作时创建，操作完成、Esc 或失焦后关闭，不能裁切在极小图片窗口里。极端越界不通过定位重试争夺系统窗口控制。
 - 后端不提供全局窗口位置时（例如部分 Wayland 桌面），按钮依据实际本地内容区布局，不能用初始截图位置或尺寸猜测当前窗口边界；系统负责窗口可达性。
 - 普通贴图必须置于 Dock 和菜单栏之下，不得靠提高到系统界面之上的窗口层级解决移动限制。macOS 使用原生移动接口，保留窗口类型和系统监听的生命周期；不得修改窗口运行时类型或系统共享类。框选层仅在用户主动截图时覆盖系统界面。
 - 原生内容区就是图片区域；按实际内容区绘制，接受系统原生尺寸与缩放惯例，不保留期望宿主与实际宿主相减的图片偏移。
@@ -86,6 +91,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
 - `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
+- `src/platform/pin_window.rs`: same-process native pin lookup and explicit keyboard-focus activation without geometry changes.
+- `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu and system Quit routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
+- `src/platform/quit_prompt.rs`: asynchronous native quit confirmation with an application-UI fallback.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `src/i18n.rs`: typed Chinese/English catalogue, deferred messages and locale matching.
 - `src/permission.rs`: user-driven authorization state without native calls or polling.
@@ -212,6 +220,9 @@ Keep unsafe code denied by default. A platform API that requires unsafe may have
 one narrowly scoped exception, with documented preconditions and owned memory.
 macOS Dock icons must decode PNG in Rust, avoiding AppKit PNG loading and borrowed
 pixel buffers. Updating an icon must not modify the signed application bundle.
+At startup use eframe's explicit empty-icon sentinel to preserve the bundle icon;
+omitting it selects eframe's fallback. Auto icons wait for a known system theme,
+including logic-only background startup; never briefly install a light placeholder.
 Select Finder/Launchpad bundle resources before signing during local installation.
 Do not set a custom file icon on a signed app: its Finder metadata/resource fork
 fails strict signature verification. Runtime icon choices update the Dock; document

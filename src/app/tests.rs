@@ -16,6 +16,8 @@ fn app() -> Snip2Pin {
         active_display: None,
         pins: BTreeMap::new(),
         pin_menu: None,
+        quit_confirmation: None,
+        next_quit_request: 0,
         #[cfg(target_os = "macos")]
         pin_drag: platform::macos_drag::DragEvents::default(),
         next_pin: 0,
@@ -31,6 +33,8 @@ fn app() -> Snip2Pin {
         suppress_shortcut_until: Instant::now(),
         demo: true,
         tray: None,
+        #[cfg(target_os = "macos")]
+        dock: None,
         startup: None,
         startup_enabled: false,
         exiting: false,
@@ -364,6 +368,20 @@ fn tray_home_and_quit_dispatch_root_commands_and_demo_cannot_enable_startup() {
 }
 
 #[test]
+fn opening_home_without_a_confirmation_restores_normal_window_level() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Home, ctx)
+    });
+    let commands = &output.viewport_commands[&ViewportId::ROOT];
+    assert!(commands.contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)));
+    assert!(!commands.contains(&ViewportCommand::WindowLevel(
+        egui::WindowLevel::AlwaysOnTop
+    )));
+}
+
+#[test]
 fn capture_never_switches_the_desktop_into_native_fullscreen() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -575,6 +593,18 @@ fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
             width: 1,
             height: 1,
         }),
+        Some(geometry::PixelRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 8,
+        }),
+        Some(geometry::PixelRect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 0,
+        }),
     ] {
         let ctx = egui::Context::default();
         let mut app = app();
@@ -591,6 +621,47 @@ fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
         output.textures_delta.clear();
         assert!(output.platform_output.commands.is_empty());
         assert!(app.pins.is_empty());
+    }
+}
+
+#[test]
+fn single_pixel_selections_copy_the_original_without_an_application_size_floor() {
+    for scale in [1.0_f32, 1.5, 2.0, 3.0] {
+        for valid in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            let session = app.gate.begin().expect("capture");
+            let mut snapshot = capture::demo();
+            snapshot.display.scale = scale;
+            snapshot.display.size = if cfg!(target_os = "macos") {
+                [64.0; 2]
+            } else {
+                [64.0 * scale; 2]
+            };
+            snapshot.pixels = Arc::new(ColorImage::filled(
+                [(64.0 * scale) as usize; 2],
+                egui::Color32::WHITE,
+            ));
+            let edge = u32::from(valid);
+            let rect = geometry::PixelRect {
+                x: 0,
+                y: 0,
+                width: edge,
+                height: edge,
+            };
+            app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.selection_action(session, 0, overlay::Action::Select(rect), ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert_eq!(app.pins.len(), usize::from(valid));
+            assert_eq!(output.platform_output.commands.len(), usize::from(valid));
+            if valid {
+                assert_eq!(app.pins[&1].pixels.size, [edge as usize; 2]);
+                assert!((app.pins[&1].initial.width() - scale.recip()).abs() < 0.00001);
+                assert!((app.pins[&1].initial.height() - scale.recip()).abs() < 0.00001);
+            }
+        }
     }
 }
 
@@ -873,11 +944,14 @@ fn controls_share_the_image_viewport_and_follow_hover_and_visible_image_edges() 
         let actual = egui::Rect::from_min_size(position, egui::vec2(193.0, 121.0));
         let row = pin::toolbar_geometry(actual, &[area], area, 1.0).expect("reachable buttons");
         let local_row = row.translate(-actual.min.to_vec2());
-        assert!(area.contains_rect(row));
-        assert!(actual.contains_rect(row));
+        assert!(area.contains_rect(row.bounds));
+        assert!(actual.contains_rect(row.bounds));
         for (events, hovered) in [
             (vec![egui::Event::PointerGone], false),
-            (vec![egui::Event::PointerMoved(local_row.center())], true),
+            (
+                vec![egui::Event::PointerMoved(local_row.bounds.center())],
+                true,
+            ),
             (vec![egui::Event::PointerGone], false),
         ] {
             let mut input = egui::RawInput {
@@ -914,9 +988,9 @@ fn controls_share_the_image_viewport_and_follow_hover_and_visible_image_edges() 
                     _ => None,
                 })
                 .collect();
-            assert_eq!(buttons.len(), if hovered { 2 } else { 0 });
+            assert_eq!(buttons.len(), if hovered { row.count } else { 0 });
             for button in buttons {
-                assert!(local_row.contains_rect(button));
+                assert!(local_row.bounds.contains_rect(button));
             }
             assert!(
                 output.viewport_output[&pin_id(1)]
@@ -1014,7 +1088,9 @@ fn controls_stay_inside_resized_and_zoomed_viewports_without_global_geometry() {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(buttons.len(), if hovered { 2 } else { 0 });
+                let count = pin::toolbar_geometry(bounds, &[], bounds, 1.0)
+                    .map_or(0, |toolbar| toolbar.count);
+                assert_eq!(buttons.len(), if hovered { count } else { 0 });
                 for (button, clip) in buttons {
                     assert!(
                         bounds.contains_rect(button) && clip.contains_rect(button),
@@ -1077,6 +1153,83 @@ fn pending_pin_can_be_closed_before_native_geometry_is_ready() {
     assert!(app.pins.is_empty());
     assert!(matches!(app.phase, Phase::Idle));
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+}
+
+#[test]
+fn stale_unlocked_callback_cannot_close_a_newly_locked_pin() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.applied_icon = Some(app.preferences.icon_variant(ctx.system_theme()));
+    let viewport = pin_id(1);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let paint = setup.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .expect("unlocked callback");
+    app.toggle_pin_lock(1, &ctx);
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        ..Default::default()
+    };
+    input.viewports.insert(
+        viewport,
+        egui::ViewportInfo {
+            events: vec![egui::ViewportEvent::Close],
+            ..Default::default()
+        },
+    );
+    let mut child = ctx.run_ui(input, |ui| paint(ui));
+    child.textures_delta.clear();
+    // eframe retains a child window while root logic still registers its viewport.
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+    });
+    root.textures_delta.clear();
+    assert!(app.pins[&1].locked);
+    assert!(root.viewport_output.contains_key(&viewport));
+    assert!(
+        !root.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::Close)
+    );
+}
+
+#[test]
+fn cancelling_capture_preserves_a_locked_pending_pin() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let session = app.gate.begin().expect("capture starts");
+    app.accept_capture(session, Ok(vec![capture::demo()]), None, &ctx);
+    app.selection_action(
+        session,
+        0,
+        overlay::Action::Select(geometry::PixelRect {
+            x: 96,
+            y: 0,
+            width: 192,
+            height: 120,
+        }),
+        &ctx,
+    );
+    let pixels = Arc::downgrade(&app.pins[&1].pixels);
+    app.toggle_pin_lock(1, &ctx);
+    app.cancel_capture(&ctx);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+    assert!(app.pins[&1].locked);
+    assert!(pixels.upgrade().is_some());
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    output.textures_delta.clear();
+    assert!(output.viewport_output.contains_key(&pin_id(1)));
+    app.toggle_pin_lock(1, &ctx);
+    app.close_pin(1, &ctx);
+    assert!(
+        pixels.upgrade().is_none(),
+        "unlock and close releases the original"
+    );
 }
 
 #[test]
@@ -1378,7 +1531,7 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
     assert_eq!(pin.builder.position, Some(layout.image.min));
     assert_eq!(pin.builder.inner_size, Some(layout.image.size()));
     assert_eq!(pin.builder.resizable, Some(true));
-    assert_eq!(pin.builder.min_inner_size, None);
+    assert!(pin.builder.min_inner_size.is_none());
     assert_eq!(pin.builder.has_shadow, Some(true));
     assert!(
         output.viewport_output[&ViewportId::ROOT]
@@ -1420,7 +1573,7 @@ fn narrow_capture_keeps_its_display_size_and_text_density() {
         "controls must adapt to the image, not enlarge it: selected={:?}, shown={shown:?}",
         expected.size,
     );
-    assert_eq!(builder.min_inner_size, None);
+    assert!(builder.min_inner_size.is_none());
     assert_eq!(app.pins[&1].pixels.size, [24, 240]);
 }
 
@@ -1581,7 +1734,7 @@ fn pin_builder_cancels_backend_zoom_without_enlarging_tiny_images_for_controls()
                 let position = builder.position.expect("initial position");
                 let size = builder.inner_size.expect("initial size");
                 let model = &app.pins[&1];
-                assert_eq!(builder.min_inner_size, None);
+                assert!(builder.min_inner_size.is_none());
                 assert_eq!(
                     model.pixels.size,
                     [rect.width as usize, rect.height as usize]
@@ -1644,7 +1797,7 @@ fn changing_zoom_keeps_existing_pin_builder_and_paints_only_observed_native_geom
     let builder = &changed.viewport_output[&pin_id(1)].builder;
     assert_eq!(builder.position, initial_builder.position);
     assert_eq!(builder.inner_size, initial_builder.inner_size);
-    assert_eq!(builder.min_inner_size, None);
+    assert!(builder.min_inner_size.is_none());
     let paint = changed.viewport_output[&pin_id(1)]
         .viewport_ui_cb
         .as_ref()
@@ -1709,6 +1862,1030 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
     let mut selected = ctx.run_ui(egui::RawInput::default(), |_| {});
     selected.textures_delta.clear();
     app
+}
+
+fn add_second_test_pin(app: &mut Snip2Pin) {
+    let pin = &app.pins[&1];
+    let second = Pin {
+        name: String::new(),
+        texture: pin.texture.clone(),
+        pixels: pin.pixels.clone(),
+        initial: pin.initial,
+        display_scale: pin.display_scale,
+        screen: pin.screen,
+        screen_areas: pin.screen_areas.clone(),
+        session: pin.session,
+        ready: Arc::new(AtomicBool::new(true)),
+        locked: false,
+        #[cfg(target_os = "macos")]
+        presented: Cell::new(false),
+    };
+    app.pins.insert(2, second);
+    app.pins[&1].ready.store(true, Ordering::Release);
+}
+
+#[test]
+fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    add_second_test_pin(&mut app);
+    let original = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    app.sender
+        .send(Event::ClosePin(1))
+        .expect("queued before lock");
+    let locked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.toggle_pin_lock(1, ctx)
+    });
+    assert!(app.pins[&1].locked);
+    assert!(locked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(false)));
+    let guarded = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        app.tray_action(crate::tray::Action::ClosePin(1), ctx);
+        app.close_pin(1, ctx);
+        app.tray_action(crate::tray::Action::ClosePins, ctx);
+    });
+    assert_eq!(app.pins.keys().copied().collect::<Vec<_>>(), [1]);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert_eq!(app.pins[&1].initial, initial);
+    assert!(
+        !guarded
+            .viewport_commands
+            .get(&pin_id(1))
+            .is_some_and(|commands| commands.contains(&ViewportCommand::Close))
+    );
+    assert!(guarded.viewport_commands[&pin_id(2)].contains(&ViewportCommand::Close));
+    let unlocked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.toggle_pin_lock(1, ctx)
+    });
+    assert!(!app.pins[&1].locked);
+    assert!(unlocked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(true)));
+    let closed = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_pins(ctx));
+    assert!(app.pins.is_empty());
+    assert!(closed.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Close));
+}
+
+#[test]
+fn locating_a_locked_pin_preserves_original_and_geometry() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    let texture = app.pins[&1].texture.id();
+    let selected = ctx.run_logic(&egui::RawInput::default(), |ctx| app.select_pin(1, ctx));
+    assert!(app.pins[&1].locked);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert_eq!(app.pins[&1].initial, initial);
+    assert_eq!(app.pins[&1].texture.id(), texture);
+    assert!(
+        selected
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| !matches!(
+                command,
+                ViewportCommand::Focus
+                    | ViewportCommand::Visible(_)
+                    | ViewportCommand::Minimized(_)
+                    | ViewportCommand::OuterPosition(_)
+                    | ViewportCommand::InnerSize(_)
+            )),
+        "list activation uses the platform adapter without rewriting geometry"
+    );
+    let count = app.pins.len();
+    app.select_pin(999, &ctx);
+    assert_eq!(
+        app.pins.len(),
+        count,
+        "stale list entries cannot change pins"
+    );
+}
+
+#[test]
+fn pin_highlight_tracks_only_native_focus_and_does_not_expire() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let app = tiny_pin_app(&ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let paint = setup.viewport_output[&pin_id(1)]
+        .viewport_ui_cb
+        .as_ref()
+        .expect("pin UI");
+    for (time, focused, scale) in [
+        (1.0, Some(true), 1.0),
+        (1000.0, Some(true), 2.0),
+        (1001.0, Some(false), 2.0),
+        (1002.0, None, 1.5),
+    ] {
+        let mut input = egui::RawInput {
+            viewport_id: pin_id(1),
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(100.0, 60.0),
+            )),
+            ..Default::default()
+        };
+        input.viewports.insert(
+            pin_id(1),
+            egui::ViewportInfo {
+                focused,
+                native_pixels_per_point: Some(scale),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(input, |ui| {
+            assert_eq!(pin_focused(ui.ctx(), 1), focused == Some(true));
+            assert!(!pin_focused(ui.ctx(), 999));
+            paint(ui);
+        });
+        output.textures_delta.clear();
+        let highlighted = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == ui::style::PIN.highlight && rect.stroke.width == ui::style::PIN.highlight_stroke_pixels / scale)
+        });
+        assert_eq!(highlighted, focused == Some(true));
+        assert!(
+            output
+                .viewport_output
+                .values()
+                .all(|viewport| viewport.commands.iter().all(|command| !matches!(
+                    command,
+                    ViewportCommand::InnerSize(_) | ViewportCommand::OuterPosition(_)
+                )))
+        );
+    }
+}
+
+#[test]
+fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    ctx.set_zoom_factor(2.0);
+    let mut app = tiny_pin_app(&ctx);
+    let initial = app.pins[&1].initial;
+    let pixels = app.pins[&1].pixels.clone();
+    let texture = app.pins[&1].texture.id();
+    for (command, expected) in [
+        (pin::Zoom::In, egui::vec2(125.0, 75.0)),
+        (pin::Zoom::Out, egui::vec2(80.0, 48.0)),
+        (pin::Zoom::Original, egui::vec2(0.75, 1.25)),
+    ] {
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(
+            pin_id(1),
+            egui::ViewportInfo {
+                inner_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(-100.0, 37.0),
+                    egui::vec2(100.0, 60.0),
+                )),
+                native_pixels_per_point: Some(2.0),
+                ..Default::default()
+            },
+        );
+        let output = ctx.run_logic(&input, |ctx| app.zoom_pin(1, &[command], None, ctx));
+        assert_eq!(
+            output.viewport_commands[&pin_id(1)],
+            [ViewportCommand::InnerSize(expected)]
+        );
+    }
+    assert_eq!(app.pins[&1].initial, initial);
+    assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
+    assert_eq!(app.pins[&1].texture.id(), texture);
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(
+        pin_id(1),
+        egui::ViewportInfo {
+            native_pixels_per_point: Some(2.0),
+            ..Default::default()
+        },
+    );
+    let output = ctx.run_logic(&input, |ctx| {
+        app.zoom_pin(1, &[pin::Zoom::Original], None, ctx)
+    });
+    assert_eq!(
+        output.viewport_commands[&pin_id(1)],
+        [ViewportCommand::InnerSize(egui::vec2(0.75, 1.25))]
+    );
+    let absent = ctx.run_logic(&input, |ctx| app.zoom_pin(1, &[pin::Zoom::In], None, ctx));
+    assert!(
+        !absent.viewport_commands.contains_key(&pin_id(1)),
+        "missing observed size must not fall back to initial geometry"
+    );
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.sender
+        .send(Event::ZoomPin(
+            1,
+            vec![pin::Zoom::In],
+            Some((egui::vec2(200.0, 120.0), 2.0)),
+        ))
+        .expect("queued zoom");
+    let locked = ctx.run_logic(&input, |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        app.tray_action(crate::tray::Action::RestorePin(1), ctx);
+    });
+    assert!(
+        locked
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| !matches!(
+                command,
+                ViewportCommand::InnerSize(_) | ViewportCommand::OuterPosition(_)
+            ))
+    );
+}
+
+#[test]
+fn queued_zoom_keys_accumulate_in_order_and_request_one_native_size() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let original = Arc::new(ColorImage::filled([200, 120], egui::Color32::BLACK));
+    app.pins.get_mut(&1).expect("pin").pixels = original.clone();
+    for (commands, expected) in [
+        (
+            vec![pin::Zoom::In, pin::Zoom::In],
+            egui::vec2(156.25, 93.75),
+        ),
+        (vec![pin::Zoom::In, pin::Zoom::Out], egui::vec2(100.0, 60.0)),
+        (
+            vec![pin::Zoom::Original, pin::Zoom::In],
+            egui::vec2(250.0, 150.0),
+        ),
+    ] {
+        app.sender
+            .send(Event::ZoomPin(
+                1,
+                commands,
+                Some((egui::vec2(100.0, 60.0), 1.0)),
+            ))
+            .expect("zoom keys");
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        });
+        let sizes = output.viewport_commands[&pin_id(1)]
+            .iter()
+            .filter_map(|command| match command {
+                ViewportCommand::InnerSize(size) => Some(*size),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sizes, [expected]);
+        assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+        assert!(
+            output.viewport_commands[&pin_id(1)]
+                .iter()
+                .all(|command| !matches!(command, ViewportCommand::OuterPosition(_)))
+        );
+    }
+}
+
+#[test]
+fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    ctx.set_zoom_factor(2.0);
+    let mut app = tiny_pin_app(&ctx);
+    let initial = app.pins[&1].initial;
+    let original = app.pins[&1].pixels.clone();
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(
+        pin_id(1),
+        egui::ViewportInfo {
+            outer_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(-50.0, 18.5),
+                egui::vec2(40.0, 20.0),
+            )),
+            inner_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(500.0, 500.0),
+                egui::vec2(30.0, 10.0),
+            )),
+            native_pixels_per_point: Some(2.0),
+            ..Default::default()
+        },
+    );
+    let output = ctx.run_logic(&input, |ctx| app.move_pin(1, [2, -3], None, ctx));
+    let step = if cfg!(target_os = "macos") { 1.0 } else { 0.5 };
+    assert_eq!(
+        output.viewport_commands[&pin_id(1)],
+        [ViewportCommand::OuterPosition(egui::pos2(
+            (-100.0 + 2.0 * step) / 2.0,
+            (37.0 - 3.0 * step) / 2.0
+        ))]
+    );
+    assert_eq!(app.pins[&1].initial, initial);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    input
+        .viewports
+        .get_mut(&pin_id(1))
+        .expect("viewport")
+        .outer_rect = None;
+    let absent = ctx.run_logic(&input, |ctx| app.move_pin(1, [1, 0], None, ctx));
+    assert!(
+        !absent.viewport_commands.contains_key(&pin_id(1)),
+        "do not guess a native outer origin from content or initial geometry"
+    );
+    app.sender
+        .send(Event::MovePin(
+            1,
+            [1, 0],
+            Some((egui::pos2(-100.0, 37.0), 2.0)),
+        ))
+        .expect("queued before lock");
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    let locked = ctx.run_logic(&input, |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
+    });
+    assert!(
+        locked
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| !matches!(
+                command,
+                ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+            ))
+    );
+}
+
+#[test]
+fn pin_dpi_and_ui_zoom_never_impose_an_application_minimum_size() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    ctx.set_zoom_factor(1.25);
+    let app = tiny_pin_app(&ctx);
+    let initial = app.pins[&1].initial;
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(
+            pin_id(1),
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(scale),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(input, |ui| app.show_pins(ui.ctx()));
+        output.textures_delta.clear();
+        let viewport = &output.viewport_output[&pin_id(1)];
+        assert!(viewport.builder.min_inner_size.is_none());
+        assert_eq!(viewport.builder.position, Some(initial.min));
+        assert_eq!(viewport.builder.inner_size, Some(initial.size()));
+        assert!(viewport.commands.iter().all(|command| !matches!(
+            command,
+            ViewportCommand::InnerSize(_) | ViewportCommand::OuterPosition(_)
+        )));
+    }
+}
+
+fn home_frame(
+    app: &mut Snip2Pin,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| {
+            // The native host declares live pin viewports during App::logic
+            // before painting home. Keep that lifecycle in this headless frame.
+            app.show_pins(ui.ctx());
+            eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest());
+        },
+    );
+    output.textures_delta.clear();
+    output
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn macos_background_startup_waits_for_system_theme_before_overriding_the_bundle_icon() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.update_icon(ctx));
+    assert_eq!(
+        app.applied_icon, None,
+        "unknown system theme must not briefly select the light icon"
+    );
+    assert!(app.icon_data.is_none());
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            system_theme: Some(egui::Theme::Dark),
+            ..Default::default()
+        },
+        |ui| app.update_icon(ui.ctx()),
+    );
+    output.textures_delta.clear();
+    assert_eq!(app.applied_icon, Some(Variant::Metal));
+}
+
+#[test]
+fn editing_pin_names_preserves_identity_originals_and_geometry_when_other_rows_close() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    add_second_test_pin(&mut app);
+    app.toggle_pin_lock(1, &ctx);
+    let pixels = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    let texture = app.pins[&1].texture.id();
+    let session = app.pins[&1].session;
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let output = home_frame(&mut app, &ctx, vec![]);
+    let point = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text)
+                if text.galley.text() == Text::PinLabel.with(1).render(Locale::Chinese) =>
+            {
+                Some(
+                    shape
+                        .shape
+                        .visual_bounding_rect()
+                        .intersect(shape.clip_rect)
+                        .center(),
+                )
+            }
+            _ => None,
+        })
+        .expect("editable pin name");
+    let _ = home_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+    for pressed in [true, false, true, false] {
+        let _ = home_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+    let output = home_frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::Text("参考 Reference".into())],
+    );
+    assert_eq!(app.pins[&1].name, "参考 Reference");
+    assert!(app.pins[&2].name.is_empty());
+    assert!(ctx.egui_wants_keyboard_input());
+    let editor = ctx.memory(|memory| memory.focused()).expect("name editor");
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_some());
+    assert!(output.platform_output.commands.is_empty());
+    app.close_pin(2, &ctx);
+    let _ = home_frame(&mut app, &ctx, vec![egui::Event::Text(" 2".into())]);
+    assert_eq!(app.pins[&1].name, "参考 Reference 2");
+    assert!(app.pins[&1].locked);
+    assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
+    assert_eq!(app.pins[&1].initial, initial);
+    assert_eq!(app.pins[&1].texture.id(), texture);
+    assert_eq!(app.pins[&1].session, session);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.capture_worker.is_none());
+    app.close_pin(1, &ctx);
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_some());
+    app.toggle_pin_lock(1, &ctx);
+    app.close_pin(1, &ctx);
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_none());
+    assert_ne!(ctx.memory(|memory| memory.focused()), Some(editor));
+}
+
+#[test]
+fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pin() {
+    for (confirm, close_home) in [(false, false), (true, false), (false, true), (true, true)] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        add_second_test_pin(&mut app);
+        app.toggle_pin_lock(1, &ctx);
+        // Store only a command description. This test never spawns a process.
+        *app.relaunch.lock().expect("pending relaunch") =
+            Some(std::process::Command::new("generated-relaunch-fixture"));
+        let original = Arc::downgrade(&app.pins[&1].pixels);
+        let requested = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            if close_home {
+                assert!(
+                    app.tray.is_none(),
+                    "exercise closing home without a tray backend"
+                );
+                app.close_home(ctx);
+            } else {
+                app.tray_action(crate::tray::Action::Quit, ctx);
+            }
+        });
+        assert!(app.quit_confirmation.is_some());
+        assert!(
+            matches!(
+                app.quit_confirmation
+                    .as_ref()
+                    .expect("pending quit")
+                    .presentation,
+                QuitPresentation::Fallback
+            ),
+            "demo must retain its generated GUI confirmation without opening a native dialog"
+        );
+        assert!(!app.exiting);
+        assert_eq!(app.pins.len(), 2);
+        let root_commands = &requested.viewport_commands[&ViewportId::ROOT];
+        assert_eq!(
+            root_commands.contains(&ViewportCommand::CancelClose),
+            close_home
+        );
+        assert!(
+            root_commands.contains(&ViewportCommand::WindowLevel(
+                egui::WindowLevel::AlwaysOnTop
+            )),
+            "quit confirmation must be visible above locked pins"
+        );
+        assert!(
+            requested
+                .viewport_commands
+                .values()
+                .flatten()
+                .all(|command| *command != ViewportCommand::Close)
+        );
+        let _ = home_frame(&mut app, &ctx, vec![]);
+        let output = home_frame(&mut app, &ctx, vec![]);
+        let key = if confirm {
+            Text::QuitConfirm
+        } else {
+            Text::Cancel
+        };
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == Locale::Chinese.text(key) => {
+                    Some(shape.shape.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("confirmation has an actionable button");
+        let _ = home_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+        let event = |pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = home_frame(&mut app, &ctx, vec![event(true)]);
+        let clicked = home_frame(&mut app, &ctx, vec![event(false)]);
+        assert!(app.quit_confirmation.is_none());
+        assert_eq!(app.exiting, confirm);
+        assert_eq!(
+            app.relaunch.lock().expect("pending relaunch").is_some(),
+            confirm,
+            "cancel must discard a pending restart; confirmed quit preserves it for the host"
+        );
+        if confirm {
+            assert!(app.pins.is_empty());
+            assert!(
+                original.upgrade().is_none(),
+                "confirmed quit must release all in-memory originals"
+            );
+            for id in [pin_id(1), pin_id(2), ViewportId::ROOT] {
+                assert!(
+                    clicked.viewport_output[&id]
+                        .commands
+                        .contains(&ViewportCommand::Close)
+                );
+            }
+        } else {
+            assert_eq!(app.pins.len(), 2);
+            assert!(app.pins[&1].locked);
+            assert!(original.upgrade().is_some());
+            assert!(
+                clicked.viewport_output[&ViewportId::ROOT]
+                    .commands
+                    .contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)),
+                "cancel must restore Home's normal level"
+            );
+            assert!(
+                clicked
+                    .viewport_output
+                    .values()
+                    .flat_map(|output| &output.commands)
+                    .all(|command| *command != ViewportCommand::Close)
+            );
+        }
+    }
+}
+
+#[test]
+fn closing_home_without_a_tray_or_locked_pins_quits_and_releases_images() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    add_second_test_pin(&mut app);
+    let original = Arc::downgrade(&app.pins[&1].pixels);
+    assert!(app.tray.is_none());
+    assert!(app.pins.values().all(|pin| !pin.locked));
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
+    assert!(app.exiting);
+    assert!(app.quit_confirmation.is_none());
+    assert!(app.pins.is_empty());
+    assert!(original.upgrade().is_none());
+    for id in [pin_id(1), pin_id(2), ViewportId::ROOT] {
+        assert!(output.viewport_commands[&id].contains(&ViewportCommand::Close));
+    }
+    let root_commands = &output.viewport_commands[&ViewportId::ROOT];
+    assert!(!root_commands.contains(&ViewportCommand::CancelClose));
+    assert!(!root_commands.contains(&ViewportCommand::WindowLevel(
+        egui::WindowLevel::AlwaysOnTop
+    )));
+}
+
+#[test]
+fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
+    for confirmed in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        add_second_test_pin(&mut app);
+        app.toggle_pin_lock(1, &ctx);
+        let original = Arc::downgrade(&app.pins[&1].pixels);
+        let initial = app.pins[&1].initial;
+        *app.relaunch.lock().expect("pending relaunch") =
+            Some(std::process::Command::new("generated-relaunch-fixture"));
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.tray_action(crate::tray::Action::Quit, ctx);
+        });
+        let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+        app.sender
+            .send(Event::QuitDecision(id, Ok(confirmed)))
+            .expect("asynchronous decision");
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        });
+        assert!(app.quit_confirmation.is_none());
+        assert_eq!(app.exiting, confirmed);
+        assert_eq!(
+            app.relaunch.lock().expect("pending relaunch").is_some(),
+            confirmed
+        );
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::OutputCommand::CopyImage(_))),
+            "quit decisions must not write image data to the clipboard"
+        );
+        if confirmed {
+            assert!(app.pins.is_empty());
+            assert!(original.upgrade().is_none());
+            for viewport in [pin_id(1), pin_id(2), ViewportId::ROOT] {
+                assert!(output.viewport_commands[&viewport].contains(&ViewportCommand::Close));
+            }
+        } else {
+            assert_eq!(app.pins.len(), 2);
+            assert!(app.pins[&1].locked);
+            assert_eq!(app.pins[&1].initial, initial);
+            assert!(Arc::ptr_eq(
+                &original.upgrade().expect("retained original"),
+                &app.pins[&1].pixels
+            ));
+            assert!(
+                output
+                    .viewport_commands
+                    .get(&ViewportId::ROOT)
+                    .is_some_and(|commands| commands
+                        .contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)))
+            );
+            assert!(
+                output
+                    .viewport_commands
+                    .values()
+                    .flatten()
+                    .all(|command| *command != ViewportCommand::Close)
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_quit_reuses_its_request_and_late_results_cannot_resolve_a_new_prompt() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let first = app.quit_confirmation.as_ref().expect("first prompt").id;
+    let cancelled = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(first, Ok(false), ctx)
+    });
+    assert!(app.quit_confirmation.is_none());
+    assert!(
+        cancelled
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let second = app.quit_confirmation.as_ref().expect("second prompt").id;
+    assert_ne!(first, second);
+    let next_request = app.next_quit_request;
+    let repeated = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx);
+        app.tray_action(crate::tray::Action::Quit, ctx);
+    });
+    assert_eq!(
+        app.quit_confirmation.as_ref().expect("same prompt").id,
+        second
+    );
+    assert_eq!(app.next_quit_request, next_request);
+    assert!(
+        repeated.viewport_commands.is_empty(),
+        "repeated quit must not reopen or refocus its prompt"
+    );
+    for confirmed in [true, false] {
+        app.sender
+            .send(Event::QuitDecision(first, Ok(confirmed)))
+            .expect("late decision");
+    }
+    let stale = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert_eq!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("new prompt survives")
+            .id,
+        second
+    );
+    assert!(!app.exiting);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert!(
+        stale
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+}
+
+#[test]
+fn pending_quit_keeps_its_host_after_the_last_pin_is_unlocked() {
+    for confirmed in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = tiny_pin_app(&ctx);
+        app.toggle_pin_lock(1, &ctx);
+        let original = Arc::downgrade(&app.pins[&1].pixels);
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.tray_action(crate::tray::Action::Quit, ctx);
+            app.toggle_pin_lock(1, ctx);
+        });
+        let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+        assert!(app.tray.is_none());
+        assert!(!app.pins[&1].locked);
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
+        assert!(
+            output
+                .viewport_commands
+                .get(&ViewportId::ROOT)
+                .is_some_and(|commands| { commands.contains(&ViewportCommand::CancelClose) }),
+            "a pending confirmation must retain its host even if lock state changes"
+        );
+        assert!(!app.exiting);
+        assert_eq!(app.quit_confirmation.as_ref().expect("same request").id, id);
+        assert!(original.upgrade().is_some());
+        app.quit_decision(id, Ok(confirmed), &ctx);
+        assert!(app.quit_confirmation.is_none());
+        assert_eq!(app.exiting, confirmed);
+        assert_eq!(original.upgrade().is_none(), confirmed);
+    }
+}
+
+#[test]
+fn english_quit_fallback_ignores_enter_and_escape_preserves_pins() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.preferences.language = Language::English;
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    *app.relaunch.lock().expect("pending relaunch") =
+        Some(std::process::Command::new("generated-relaunch-fixture"));
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let output = home_frame(&mut app, &ctx, vec![]);
+    for key in [
+        Text::QuitLockedTitle,
+        Text::QuitLockedHelp,
+        Text::Cancel,
+        Text::QuitConfirm,
+    ] {
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Locale::English.text(key))
+        }), "missing English confirmation text: {key:?}");
+    }
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        let _ = home_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!app.exiting);
+        assert_eq!(app.quit_confirmation.is_some(), key == egui::Key::Enter);
+        assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    }
+    assert!(app.relaunch.lock().expect("pending relaunch").is_none());
+}
+
+#[test]
+fn confirmed_quit_ignores_a_later_capture_event_in_the_same_batch() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    app.sender
+        .send(Event::QuitDecision(id, Ok(true)))
+        .expect("confirm");
+    app.sender.send(Event::Capture).expect("late shortcut");
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(app.exiting);
+    assert!(app.pins.is_empty());
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(
+        app.capture_worker.is_none(),
+        "exiting must not start capture work"
+    );
+}
+
+#[test]
+fn quitting_during_capture_discards_late_results_and_can_resume_after_cancel() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let capture = app.gate.begin().expect("pending generated capture");
+    app.phase = Phase::Capturing;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx);
+        app.accept_capture(capture, Ok(vec![capture::demo()]), None, ctx);
+        app.capture_command(ctx);
+    });
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.capture_worker.is_none());
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+    assert!(output.platform_output.commands.is_empty());
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(id, Ok(false), ctx);
+        app.capture_command(ctx);
+    });
+    assert!(!app.exiting);
+    assert!(matches!(app.phase, Phase::Capturing));
+    assert!(app.capture_worker.is_some());
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+}
+
+#[test]
+fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    // Set state before opting into the native presentation path. No native pin
+    // adapter is called, and the test frame never owns a real host window.
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.demo = false;
+    let frame = eframe::Frame::_new_kittest();
+    assert!(
+        frame.window_handle().is_err(),
+        "the test must never be able to open a native dialog"
+    );
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    assert!(matches!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("pending quit")
+            .presentation,
+        QuitPresentation::AwaitingHost
+    ));
+    for expected_ready in [true, false, false] {
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.prepare_quit_prompt(ctx, &frame)
+        });
+        let pending = app.quit_confirmation.as_ref().expect("pending quit");
+        assert_eq!(pending.id, id);
+        assert_eq!(
+            matches!(pending.presentation, QuitPresentation::Ready),
+            expected_ready
+        );
+        if !expected_ready {
+            assert!(matches!(pending.presentation, QuitPresentation::Fallback));
+        }
+        assert!(output.viewport_commands.is_empty());
+        assert!(output.platform_output.commands.is_empty());
+        assert!(
+            app.events.try_recv().is_err(),
+            "no native callback can run without a host"
+        );
+        assert!(!app.exiting);
+        assert!(app.pins.contains_key(&1));
+    }
+}
+
+#[test]
+fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.demo = false;
+    let frame = eframe::Frame::_new_kittest();
+    assert!(frame.window_handle().is_err());
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        if ui.ctx().current_pass_index() == 0 {
+            app.tray_action(crate::tray::Action::Quit, ui.ctx());
+            ui.ctx()
+                .request_discard("exercise native prompt host ordering");
+        }
+        app.prepare_quit_prompt(ui.ctx(), &frame);
+    });
+    output.textures_delta.clear();
+    assert_eq!(output.platform_output.num_completed_passes, 2);
+    assert!(
+        matches!(
+            app.quit_confirmation
+                .as_ref()
+                .expect("pending")
+                .presentation,
+            QuitPresentation::Ready
+        ),
+        "a second pass cannot start a native prompt before host commands apply"
+    );
+    let mut next = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.prepare_quit_prompt(ui.ctx(), &frame);
+    });
+    next.textures_delta.clear();
+    assert!(matches!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("fallback")
+            .presentation,
+        QuitPresentation::Fallback
+    ));
+    assert!(!app.exiting);
+    assert!(app.pins[&1].locked);
+}
+
+#[test]
+fn failed_native_quit_presentation_falls_back_without_losing_pins() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let id = app.quit_confirmation.as_ref().expect("pending").id;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(id, Err(Text::QuitDialogUnavailable.into()), ctx);
+    });
+    let pending = app
+        .quit_confirmation
+        .as_ref()
+        .expect("fallback keeps request");
+    assert_eq!(pending.id, id);
+    assert!(matches!(pending.presentation, QuitPresentation::Fallback));
+    assert!(!app.exiting);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert!(
+        output
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+    app.quit_decision(id, Ok(false), &ctx);
+    assert!(app.quit_confirmation.is_none());
+    assert!(app.pins[&1].locked);
 }
 
 #[test]
@@ -1853,9 +3030,11 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
             before.viewport_output[&pin_id(1)].builder.inner_size,
             Some(initial.size())
         );
-        assert_eq!(
-            before.viewport_output[&pin_id(1)].builder.min_inner_size,
-            None
+        assert!(
+            before.viewport_output[&pin_id(1)]
+                .builder
+                .min_inner_size
+                .is_none()
         );
         let area = app.pins[&1].screen;
         let position = egui::pos2(
@@ -2043,6 +3222,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut app = tiny_pin_app(&ctx);
+        i18n::set_locale(&ctx, app.preferences.language.resolve(app.system_locale));
         let original = app.pins[&1].pixels.clone();
         app.open_pin_menu(1, None, &ctx);
         let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pin_menu(ui.ctx()));
@@ -2051,7 +3231,34 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
             .viewport_ui_cb
             .as_ref()
             .expect("menu callback");
-        let point = egui::pos2(60.0, if close { 51.0 } else { 21.0 });
+        let mut layout_input = egui::RawInput {
+            viewport_id: pin_menu_id(),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                ui::pin::MENU_SIZE,
+            )),
+            ..Default::default()
+        };
+        layout_input
+            .viewports
+            .insert(pin_menu_id(), egui::ViewportInfo::default());
+        let mut layout = ctx.run_ui(layout_input, |ui| paint(ui));
+        layout.textures_delta.clear();
+        let label = app
+            .preferences
+            .language
+            .resolve(app.system_locale)
+            .text(if close { Text::Close } else { Text::Copy });
+        let point = layout
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .expect("menu label");
         let button = |pressed| egui::Event::PointerButton {
             pos: point,
             button: egui::PointerButton::Primary,

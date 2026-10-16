@@ -45,6 +45,8 @@ The local Rust hook calls `cargo xtask lint`, keeping format, Clippy and reposit
 metadata checks identical to CI rather than duplicating them in hook wrappers.
 Dependency advisories require network access. Full tests, builds and native
 acceptance remain PR checks.
+macOS packaging needs the full Xcode installation and its `ibtool`, as described
+in [the workflow](docs/workflow.md#本地-macos-菜单资源).
 If another tool manages `core.hooksPath`, preserve it and use its supported
 pre-commit integration instead of replacing existing hooks.
 

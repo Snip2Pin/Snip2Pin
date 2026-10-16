@@ -17,6 +17,17 @@ fn localized_frame(
     busy: bool,
     locale: Locale,
 ) -> (FullOutput, Option<Action>) {
+    frame_with_pins(ctx, size, events, busy, locale, &[])
+}
+
+fn frame_with_pins(
+    ctx: &egui::Context,
+    size: Vec2,
+    events: Vec<Event>,
+    busy: bool,
+    locale: Locale,
+    pins: &[PinEntry<'_>],
+) -> (FullOutput, Option<Action>) {
     let mut action = None;
     let mut output = ctx.run_ui(
         egui::RawInput {
@@ -29,7 +40,7 @@ fn localized_frame(
                 ui,
                 Model {
                     locale,
-                    pin_count: 1,
+                    pins,
                     message: None,
                     global_shortcut: true,
                     preferences: Preferences::default(),
@@ -116,7 +127,7 @@ fn release_link_remains_usable_in_small_windows_and_during_capture() {
 }
 
 #[test]
-fn compact_home_keeps_capture_shortcut_and_pin_actions_reachable() {
+fn empty_home_keeps_capture_shortcut_and_settings_reachable() {
     let ctx = egui::Context::default();
     let size = Vec2::from(LAUNCHER.window);
     let _ = frame(&ctx, size, vec![], false);
@@ -133,11 +144,6 @@ fn compact_home_keeps_capture_shortcut_and_pin_actions_reachable() {
     assert!(matches!(
         click(&ctx, size, shortcut, false).1,
         Some(Action::RecordShortcut)
-    ));
-    let close = visible_text(&output, "关闭全部").center();
-    assert!(matches!(
-        click(&ctx, size, close, false).1,
-        Some(Action::ClosePins)
     ));
     assert!(click(&ctx, size, capture, true).1.is_none());
 }
@@ -225,7 +231,6 @@ fn both_languages_keep_primary_actions_and_settings_reachable() {
             Text::Icon,
             Text::Language,
             Text::Startup,
-            Text::CloseAll,
             Text::Downloads,
         ] {
             let bounds = visible_text(&output, locale.text(key));
@@ -340,4 +345,1353 @@ fn language_picker_emits_a_language_action() {
         click_at(english).1,
         Some(Action::Language(Language::English))
     ));
+}
+
+#[test]
+fn pin_list_thumbnail_and_buttons_emit_actions_in_narrow_homes() {
+    for width in [210.0, 280.0, LAUNCHER.window[0]] {
+        for locale in [Locale::English, Locale::Chinese] {
+            for locked in [false, true] {
+                let ctx = egui::Context::default();
+                let size = egui::vec2(width, LAUNCHER.window[1]);
+                let texture = ctx.load_texture(
+                    "generated-list-pin",
+                    egui::ColorImage::filled([3, 5], egui::Color32::LIGHT_BLUE),
+                    egui::TextureOptions::default(),
+                );
+                let pins = [PinEntry {
+                    id: 17,
+                    name: "",
+                    texture: &texture,
+                    size: [3, 5],
+                    locked,
+                    selected: true,
+                }];
+                let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+                let _ = frame(vec![]);
+                let output = frame(vec![]).0;
+                let thumbnail = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                            Some(mesh.calc_bounds())
+                        }
+                        egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("the original image is represented by a thumbnail");
+                let mut buttons = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.size()
+                                == egui::Vec2::splat(snip2pin::pin::METRICS.button) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                buttons.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+                assert_eq!(buttons.len(), 2, "lock and close actions must be visible");
+                let viewport = Rect::from_min_size(Pos2::ZERO, size);
+                for rect in [thumbnail, buttons[0], buttons[1]] {
+                    assert!(viewport.contains_rect(rect), "{width} {locale:?}: {rect:?}");
+                }
+                let original = egui::vec2(3.0, 5.0);
+                let preview = egui::Vec2::from(LAUNCHER.pin_thumbnail)
+                    - egui::Vec2::splat(LAUNCHER.pin_thumbnail_padding * 2.0);
+                let expected = original * (preview / original).min_elem();
+                // Image::paint_at rounds both edges to physical pixels. Their
+                // independent rounding can change each painted axis by one pixel.
+                let pixel = output.pixels_per_point.recip();
+                let error = (thumbnail.size() - expected).abs();
+                assert!(
+                    error.x <= pixel && error.y <= pixel,
+                    "thumbnail must preserve proportional fitting within pixel rounding: width={width}, locale={locale:?}, locked={locked}, actual={thumbnail:?}, expected_size={expected:?}, pixels_per_point={}, error={error:?}",
+                    output.pixels_per_point
+                );
+                let click_at = |point| {
+                    let _ = frame(vec![Event::PointerMoved(point)]);
+                    let event = |pressed| Event::PointerButton {
+                        pos: point,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    };
+                    let _ = frame(vec![event(true)]);
+                    frame(vec![event(false)]).1
+                };
+                assert!(matches!(
+                    click_at(thumbnail.center()),
+                    Some(Action::SelectPin(17))
+                ));
+                assert!(
+                    matches!(
+                        click_at(buttons[0].center()),
+                        Some(Action::Pin(super::super::pin::Action::ToggleLock(17)))
+                    ),
+                    "lock control must remain clickable: width={width}, locale={locale:?}, locked={locked}, button={:?}",
+                    buttons[0]
+                );
+                let closed = click_at(buttons[1].center());
+                if locked {
+                    assert!(closed.is_none(), "locked list entries cannot close");
+                } else {
+                    assert!(matches!(
+                        closed,
+                        Some(Action::Pin(super::super::pin::Action::ClosePin(17)))
+                    ));
+                }
+                let close_all = visible_text(&output, locale.text(Text::ClosePins));
+                let closed = click_at(close_all.center());
+                if locked {
+                    assert!(closed.is_none());
+                } else {
+                    assert!(matches!(closed, Some(Action::ClosePins)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
+    for locale in [Locale::English, Locale::Chinese] {
+        let ctx = egui::Context::default();
+        let size = egui::vec2(280.0, 300.0);
+        let texture = ctx.load_texture(
+            "generated-scroll-pin",
+            egui::ColorImage::filled([3, 5], egui::Color32::LIGHT_BLUE),
+            egui::TextureOptions::default(),
+        );
+        let pins = (0..8)
+            .map(|id| PinEntry {
+                id,
+                name: "",
+                texture: &texture,
+                size: [3, 5],
+                locked: false,
+                selected: id == 0,
+            })
+            .collect::<Vec<_>>();
+        let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+        let _ = frame(vec![]);
+        let mut visible = [false; 4];
+        for _ in 0..12 {
+            let output = frame(vec![
+                Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -60.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+            ])
+            .0;
+            let footer = visible_text(&output, locale.text(Text::Downloads));
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(footer));
+            for (index, key) in [Text::Theme, Text::Icon, Text::Language, Text::Startup]
+                .into_iter()
+                .enumerate()
+            {
+                visible[index] |= output.shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == locale.text(key) => {
+                        let bounds = shape.shape.visual_bounding_rect();
+                        shape.clip_rect.contains_rect(bounds)
+                            && Rect::from_min_size(Pos2::ZERO, size).contains_rect(bounds)
+                    }
+                    _ => false,
+                });
+            }
+        }
+        assert_eq!(
+            visible, [true; 4],
+            "settings must remain reachable below populated list: {locale:?}"
+        );
+    }
+}
+
+#[test]
+fn pin_zoom_hint_follows_selected_unlocked_focus_without_checking_source_pixels() {
+    for locale in [Locale::Chinese, Locale::English] {
+        for selected in [false, true] {
+            for locked in [false, true] {
+                for pixels in [[1, 1], [4096, 4096]] {
+                    let ctx = egui::Context::default();
+                    let texture = ctx.load_texture(
+                        "generated-zoom-hint",
+                        egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                        Default::default(),
+                    );
+                    let pins = [PinEntry {
+                        id: 17,
+                        name: "",
+                        texture: &texture,
+                        size: pixels,
+                        locked,
+                        selected,
+                    }];
+                    let size = Vec2::from(LAUNCHER.window);
+                    let _ = frame_with_pins(&ctx, size, vec![], false, locale, &pins);
+                    let (output, action) =
+                        frame_with_pins(&ctx, size, vec![], false, locale, &pins);
+                    assert!(action.is_none());
+                    let hint = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == locale.text(Text::PinZoomHint) =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    });
+                    assert_eq!(hint.is_some(), selected && !locked);
+                    if let Some(hint) = hint {
+                        let warning = ctx.global_style().visuals.warn_fg_color;
+                        assert!(
+                            hint.galley
+                                .job
+                                .sections
+                                .iter()
+                                .all(|section| section.format.color == warning)
+                        );
+                        assert!(
+                            hint.pos.y
+                                >= visible_text(&output, locale.text(Text::ClosePins)).bottom()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pin_zoom_hint_wraps_and_remains_reachable_in_narrow_homes_with_large_fonts() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locale in [Locale::Chinese, Locale::English] {
+            for large in [false, true] {
+                let ctx = egui::Context::default();
+                if large {
+                    ctx.global_style_mut(|style| {
+                        for font in style.text_styles.values_mut() {
+                            font.size *= 2.0;
+                        }
+                    });
+                }
+                let texture = ctx.load_texture(
+                    "generated-wrapped-zoom-hint",
+                    egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                    Default::default(),
+                );
+                let pins = (1..=60)
+                    .map(|id| PinEntry {
+                        id,
+                        name: "Reference",
+                        texture: &texture,
+                        size: [2, 2],
+                        locked: false,
+                        selected: id == 60,
+                    })
+                    .collect::<Vec<_>>();
+                let size = egui::vec2(width, LAUNCHER.window[1]);
+                let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+                let _ = frame(vec![]);
+                let mut output = frame(vec![]).0;
+                let mut reachable = false;
+                for _ in 0..60 {
+                    if let Some((text, clip)) =
+                        output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if text.galley.text() == locale.text(Text::PinZoomHint) =>
+                            {
+                                Some((text, shape.clip_rect))
+                            }
+                            _ => None,
+                        })
+                    {
+                        let rect = Rect::from_min_size(text.pos, text.galley.size());
+                        if clip.contains_rect(rect)
+                            && Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect)
+                        {
+                            assert!(!text.galley.elided);
+                            if width == 210.0 && large {
+                                assert!(text.galley.rows.len() > 1);
+                            }
+                            reachable = true;
+                            break;
+                        }
+                    }
+                    let (next, action) = frame(vec![
+                        Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -24.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ]);
+                    assert!(action.is_none());
+                    output = next;
+                }
+                assert!(reachable, "width={width}, locale={locale:?}, large={large}");
+            }
+        }
+    }
+}
+
+#[test]
+fn lightweight_rows_keep_extreme_previews_padded_and_names_clear_of_controls() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locale in [Locale::Chinese, Locale::English] {
+            for scale in [1.0, 2.0] {
+                for pixels in [[2, 4096], [4096, 2], [2, 2]] {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    ctx.input_mut(|input| input.max_texture_side = 4096);
+                    let texture = ctx.load_texture(
+                        "generated-extreme-preview",
+                        egui::ColorImage::filled(pixels, egui::Color32::LIGHT_BLUE),
+                        Default::default(),
+                    );
+                    let size = egui::vec2(width, LAUNCHER.window[1]);
+                    let name = match locale {
+                        Locale::Chinese => "接口参考🧭：这是一条很长的名称，不能侵占操作按钮",
+                        Locale::English => {
+                            "Reference 🧭 — a very long name that must leave both actions reachable"
+                        }
+                    };
+                    let pins = [PinEntry {
+                        id: 17,
+                        name,
+                        texture: &texture,
+                        size: pixels,
+                        locked: false,
+                        selected: false,
+                    }];
+                    let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+                    let _ = frame(vec![]);
+                    let output = frame(vec![]).0;
+                    let well = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                            {
+                                Some(rect)
+                            }
+                            _ => None,
+                        })
+                        .expect("fixed thumbnail well");
+                    assert!(well.fill != egui::Color32::TRANSPARENT);
+                    assert!(well.stroke.width > 0.0);
+                    let image = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+                                Some(rect.rect)
+                            }
+                            egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                                Some(mesh.calc_bounds())
+                            }
+                            _ => None,
+                        })
+                        .expect("contained generated preview");
+                    let pixel = output.pixels_per_point.recip();
+                    assert!(
+                        well.rect
+                            .shrink(LAUNCHER.pin_thumbnail_padding)
+                            .expand(pixel / 2.0)
+                            .contains_rect(image)
+                    );
+                    assert!(image.width() * output.pixels_per_point >= 1.0 - f32::EPSILON);
+                    assert!(image.height() * output.pixels_per_point >= 1.0 - f32::EPSILON);
+                    assert!((image.center() - well.rect.center()).abs().max_elem() <= pixel);
+                    assert_eq!(
+                        texture.size(),
+                        pixels,
+                        "only the preview may change its short axis"
+                    );
+                    let (title, title_clip) = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == name => {
+                                Some((text, shape.clip_rect))
+                            }
+                            _ => None,
+                        })
+                        .expect("truncated full name");
+                    assert!(title.galley.elided);
+                    let close = visible_text(&output, "×");
+                    let lock_left = close.center().x
+                        - snip2pin::pin::METRICS.button * 1.5
+                        - snip2pin::pin::METRICS.button_gap;
+                    assert!(
+                        title_clip.right() <= lock_left,
+                        "names cannot cover either action"
+                    );
+                    let row_line = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::LineSegment { points, .. }
+                                if (points[0].x - well.rect.left()).abs() <= pixel
+                                    && points[0].y > well.rect.bottom() =>
+                            {
+                                Some(points)
+                            }
+                            _ => None,
+                        })
+                        .expect("light row separator");
+                    assert!(
+                        row_line[0].y - well.rect.center().y >= LAUNCHER.pin_row_min_height / 2.0
+                    );
+                    assert!(
+                        row_line[1].x - close.center().x
+                            >= snip2pin::pin::METRICS.button / 2.0 - pixel
+                    );
+                    assert!(
+                        width - close.center().x - snip2pin::pin::METRICS.button / 2.0
+                            >= LAUNCHER.pin_row_padding[0]
+                    );
+                    let point = Rect::from_min_size(title.pos, title.galley.size())
+                        .intersect(title_clip)
+                        .center();
+                    let _ = frame(vec![Event::PointerMoved(point)]);
+                    let mut tooltip_seen = false;
+                    for _ in 0..90 {
+                        tooltip_seen |= frame(vec![]).0.shapes.iter().any(|shape| matches!(
+                            &shape.shape, egui::Shape::Text(text) if text.galley.text() == name && !text.galley.elided
+                        ));
+                    }
+                    assert!(tooltip_seen, "an elided name must remain readable on hover");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lightweight_rows_use_focus_fill_and_distinguish_duplicate_names() {
+    for dark in [false, true] {
+        for selected in [false, true] {
+            for locked in [false, true] {
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let texture = ctx.load_texture(
+                    "generated-light-row",
+                    egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                    Default::default(),
+                );
+                let pins = [17, 18].map(|id| PinEntry {
+                    id,
+                    name: "Reference",
+                    texture: &texture,
+                    size: [2, 2],
+                    locked,
+                    selected: selected && id == 17,
+                });
+                let size = Vec2::from(LAUNCHER.window);
+                let _ = frame_with_pins(&ctx, size, vec![], false, Locale::English, &pins);
+                let output = frame_with_pins(&ctx, size, vec![], false, Locale::English, &pins).0;
+                let row_fills = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.height() >= LAUNCHER.pin_row_min_height
+                                && rect.rect.height() < LAUNCHER.pin_list_height
+                                && rect.fill != egui::Color32::TRANSPARENT =>
+                        {
+                            Some(rect.fill)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if selected {
+                    assert_eq!(row_fills, [ctx.global_style().visuals.selection.bg_fill]);
+                } else {
+                    assert!(
+                        row_fills
+                            .iter()
+                            .all(|fill| *fill == egui::Color32::TRANSPARENT),
+                        "ordinary rows are transparent in either theme: {row_fills:?}"
+                    );
+                }
+                for id in [17, 18] {
+                    visible_text(&output, &format!("#{id} · 2 × 2"));
+                }
+                let point = visible_text(&output, "×").center();
+                let frame =
+                    |events| frame_with_pins(&ctx, size, events, false, Locale::English, &pins);
+                let _ = frame(vec![Event::PointerMoved(point)]);
+                let pointer = |pressed| Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                let _ = frame(vec![pointer(true)]);
+                let action = frame(vec![pointer(false)]).1;
+                if locked {
+                    assert!(action.is_none());
+                } else {
+                    assert!(matches!(
+                        action,
+                        Some(Action::Pin(super::super::pin::Action::ClosePin(17)))
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lightweight_rows_disambiguate_default_names_in_both_languages() {
+    let ctx = egui::Context::default();
+    let texture = ctx.load_texture(
+        "generated-default-name-collision",
+        egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+        Default::default(),
+    );
+    let size = Vec2::from(LAUNCHER.window);
+    for locale in [Locale::Chinese, Locale::English] {
+        let name = Text::PinLabel.with(17).render(locale);
+        let pins = [
+            PinEntry {
+                id: 17,
+                name: "",
+                texture: &texture,
+                size: [2, 2],
+                locked: false,
+                selected: false,
+            },
+            PinEntry {
+                id: 18,
+                name: &name,
+                texture: &texture,
+                size: [2, 2],
+                locked: true,
+                selected: false,
+            },
+        ];
+        let _ = frame_with_pins(&ctx, size, vec![], false, locale, &pins);
+        let output = frame_with_pins(&ctx, size, vec![], false, locale, &pins).0;
+        for id in [17, 18] {
+            visible_text(&output, &format!("#{id} · 2 × 2"));
+        }
+    }
+}
+
+#[test]
+fn lightweight_narrow_rows_with_large_fonts_keep_duplicate_ids_and_actions_reachable() {
+    for width in [210.0, 280.0] {
+        for locale in [Locale::Chinese, Locale::English] {
+            let ctx = egui::Context::default();
+            ctx.global_style_mut(|style| {
+                for font in style.text_styles.values_mut() {
+                    font.size *= 2.0;
+                }
+            });
+            let texture = ctx.load_texture(
+                "generated-large-narrow-row",
+                egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let name = if locale == Locale::Chinese {
+                "接口参考🧭：用于检查放大文字和窄窗口的重复名称"
+            } else {
+                "Reference 🧭 — duplicate long names at two hundred percent font size"
+            };
+            let pins = [17, 18].map(|id| PinEntry {
+                id,
+                name,
+                texture: &texture,
+                size: [2, 2],
+                locked: false,
+                selected: false,
+            });
+            let size = egui::vec2(width, 900.0);
+            let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+            let _ = frame(vec![]);
+            let output = frame(vec![]).0;
+            let title = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == name => {
+                        Some((text, shape.clip_rect))
+                    }
+                    _ => None,
+                })
+                .expect("a name remains reachable with large fonts");
+            assert!(title.1.width() > 0.0);
+            let number = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with("#17") => {
+                        Some((text, shape.clip_rect))
+                    }
+                    _ => None,
+                })
+                .expect("a duplicate's full number takes priority over dimensions");
+            assert!(!number.0.galley.elided);
+            assert!(
+                number
+                    .1
+                    .contains_rect(Rect::from_min_size(number.0.pos, number.0.galley.size())),
+                "width={width}, locale={locale:?}, number={:?}, clip={:?}",
+                Rect::from_min_size(number.0.pos, number.0.galley.size()),
+                number.1
+            );
+            let close = visible_text(&output, "×").center();
+            let lock = close
+                - egui::vec2(
+                    snip2pin::pin::METRICS.button + snip2pin::pin::METRICS.button_gap,
+                    0.0,
+                );
+            assert!(title.1.right() < lock.x - snip2pin::pin::METRICS.button / 2.0);
+            let well = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(well.right() < title.1.left());
+            let point = Rect::from_min_size(title.0.pos, title.0.galley.size())
+                .intersect(title.1)
+                .center();
+            let _ = frame(vec![Event::PointerMoved(point)]);
+            let mut full_name_seen = false;
+            for _ in 0..90 {
+                full_name_seen |= frame(vec![]).0.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == name && !text.galley.elided)
+                });
+            }
+            assert!(full_name_seen);
+            for (point, expected) in [
+                (lock, super::super::pin::Action::ToggleLock(17)),
+                (close, super::super::pin::Action::ClosePin(17)),
+            ] {
+                let _ = frame(vec![Event::PointerMoved(point)]);
+                for pressed in [true, false] {
+                    let action = frame(vec![Event::PointerButton {
+                        pos: point,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }])
+                    .1;
+                    if pressed {
+                        assert!(action.is_none());
+                    } else {
+                        assert!(matches!(action, Some(Action::Pin(actual)) if actual == expected));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lightweight_inner_list_reaches_the_sixtieth_pin_and_outer_settings() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locale in [Locale::Chinese, Locale::English] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "generated-sixty-row-scroll",
+                egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let pins = (1..=60)
+                .map(|id| PinEntry {
+                    id,
+                    name: "",
+                    texture: &texture,
+                    size: [2, 2],
+                    locked: false,
+                    selected: false,
+                })
+                .collect::<Vec<_>>();
+            let size = egui::vec2(width, LAUNCHER.window[1]);
+            let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+            let _ = frame(vec![]);
+            let mut output = frame(vec![]).0;
+            let point = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                    {
+                        Some(rect.rect.center())
+                    }
+                    _ => None,
+                })
+                .expect("inner list preview");
+            let last_name = Text::PinLabel.with(60).render(locale);
+            let mut last_title = None;
+            for _ in 0..80 {
+                output = frame(vec![
+                    Event::PointerMoved(point),
+                    Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -240.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Modifiers::NONE,
+                    },
+                ])
+                .0;
+                last_title = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == last_name => {
+                        let rect = Rect::from_min_size(text.pos, text.galley.size());
+                        shape.clip_rect.contains_rect(rect).then_some(rect)
+                    }
+                    _ => None,
+                });
+                if last_title.is_some() {
+                    break;
+                }
+            }
+            assert!(
+                last_title.is_some(),
+                "the sixtieth pin can be reached inside the bounded list"
+            );
+            for _ in 0..30 {
+                output = frame(vec![]).0;
+            }
+            let last_title = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == last_name => {
+                        Some(Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .expect("last row after scrolling settles");
+            let close = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "×" => {
+                        let rect = Rect::from_min_size(text.pos, text.galley.size());
+                        shape.clip_rect.contains_rect(rect).then_some(rect.center())
+                    }
+                    _ => None,
+                })
+                .max_by(|a, b| a.y.total_cmp(&b.y))
+                .unwrap();
+            let lock = close
+                - egui::vec2(
+                    snip2pin::pin::METRICS.button + snip2pin::pin::METRICS.button_gap,
+                    0.0,
+                );
+            for (point, expected) in [
+                (last_title.center(), Action::SelectPin(60)),
+                (lock, Action::Pin(super::super::pin::Action::ToggleLock(60))),
+                (close, Action::Pin(super::super::pin::Action::ClosePin(60))),
+            ] {
+                let _ = frame(vec![Event::PointerMoved(point)]);
+                let pointer = |pressed| Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                assert!(frame(vec![pointer(true)]).1.is_none());
+                let action = frame(vec![pointer(false)]).1;
+                match (action, expected) {
+                    (Some(Action::SelectPin(actual)), Action::SelectPin(expected)) => {
+                        assert_eq!(actual, expected)
+                    }
+                    (Some(Action::Pin(actual)), Action::Pin(expected)) => {
+                        assert_eq!(actual, expected)
+                    }
+                    _ => panic!("the last row's independent action must remain usable"),
+                }
+            }
+            let mut reachable = [false; 4];
+            for _ in 0..24 {
+                let output = frame(vec![
+                    Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
+                    Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -60.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Modifiers::NONE,
+                    },
+                ])
+                .0;
+                for (index, key) in [Text::Theme, Text::Icon, Text::Language, Text::Startup]
+                    .into_iter()
+                    .enumerate()
+                {
+                    reachable[index] |= output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == locale.text(key)
+                            && shape.clip_rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size()))));
+                }
+            }
+            assert_eq!(reachable, [true; 4]);
+        }
+    }
+}
+
+#[test]
+fn lightweight_rows_grow_for_large_fonts_and_long_lists_stay_bounded() {
+    for large in [false, true] {
+        let ctx = egui::Context::default();
+        if large {
+            ctx.global_style_mut(|style| {
+                for font in style.text_styles.values_mut() {
+                    font.size *= 2.0;
+                }
+            });
+        }
+        let texture = ctx.load_texture(
+            "generated-long-list",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            Default::default(),
+        );
+        let pins = (0..60)
+            .map(|id| PinEntry {
+                id,
+                name: "Reference 🧭",
+                texture: &texture,
+                size: [2, 2],
+                locked: true,
+                selected: false,
+            })
+            .collect::<Vec<_>>();
+        let size = egui::vec2(LAUNCHER.window[0], 700.0);
+        let frame = |events, pins: &[PinEntry<'_>]| {
+            frame_with_pins(&ctx, size, events, false, Locale::English, pins)
+        };
+        let _ = frame(vec![], &pins[..1]);
+        let one = frame(vec![], &pins[..1]).0;
+        let _ = frame(vec![], &pins);
+        let many = frame(vec![], &pins).0;
+        let theme_one = visible_text(&one, "Theme");
+        let theme_many = visible_text(&many, "Theme");
+        assert!(theme_many.min.y - theme_one.min.y <= LAUNCHER.pin_list_height);
+        let well = one
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("thumbnail well");
+        let row_height = one
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, .. }
+                    if (points[0].x - well.left()).abs() <= 1.0 && points[0].y > well.bottom() =>
+                {
+                    Some((points[0].y - well.center().y) * 2.0)
+                }
+                _ => None,
+            })
+            .expect("row boundary");
+        if large {
+            assert!(row_height > LAUNCHER.pin_row_min_height);
+        } else {
+            assert!((row_height - LAUNCHER.pin_row_min_height).abs() <= 1.0);
+        }
+        let downloads = visible_text(&many, Locale::English.text(Text::Downloads));
+        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(downloads));
+        let close_all = visible_text(&many, Locale::English.text(Text::ClosePins)).center();
+        let _ = frame(vec![Event::PointerMoved(close_all)], &pins);
+        for pressed in [true, false] {
+            assert!(
+                frame(
+                    vec![Event::PointerButton {
+                        pos: close_all,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE
+                    }],
+                    &pins
+                )
+                .1
+                .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn pin_rows_center_different_aspect_ratios_in_one_thumbnail_column() {
+    let ctx = egui::Context::default();
+    let size = Vec2::from(LAUNCHER.window);
+    let sizes = [[120, 30], [30, 120], [60, 60]];
+    let textures = sizes.map(|size| {
+        ctx.load_texture(
+            format!("generated-column-{size:?}"),
+            egui::ColorImage::filled(size, egui::Color32::LIGHT_BLUE),
+            Default::default(),
+        )
+    });
+    let names = ["Wide", "Tall", "Square"];
+    let pins = std::array::from_fn::<_, 3, _>(|index| PinEntry {
+        id: index as u64,
+        name: names[index],
+        texture: &textures[index],
+        size: sizes[index],
+        locked: false,
+        selected: false,
+    });
+    let mut images = Vec::new();
+    let mut titles = Vec::new();
+    let mut pixel = 1.0;
+    for index in 0..3 {
+        let _ = frame_with_pins(
+            &ctx,
+            size,
+            vec![],
+            false,
+            Locale::English,
+            &pins[index..=index],
+        );
+        let output = frame_with_pins(
+            &ctx,
+            size,
+            vec![],
+            false,
+            Locale::English,
+            &pins[index..=index],
+        )
+        .0;
+        pixel = output.pixels_per_point.recip();
+        images.push(
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill_texture_id() == textures[index].id() => {
+                        Some(rect.rect)
+                    }
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == textures[index].id() => {
+                        Some(mesh.calc_bounds())
+                    }
+                    _ => None,
+                })
+                .expect("generated thumbnail"),
+        );
+        titles.push(
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == names[index] => {
+                        Some(Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .expect("row title"),
+        );
+    }
+    for index in 0..3 {
+        assert!((images[index].center().x - images[0].center().x).abs() <= pixel);
+        assert!((titles[index].min.x - titles[0].min.x).abs() <= pixel);
+        assert!(
+            ((images[index].center().y - titles[index].center().y)
+                - (images[0].center().y - titles[0].center().y))
+                .abs()
+                <= pixel,
+            "thumbnail and title blocks must share the same vertical alignment"
+        );
+        let original = Vec2::new(sizes[index][0] as f32, sizes[index][1] as f32);
+        let preview =
+            Vec2::from(LAUNCHER.pin_thumbnail) - Vec2::splat(LAUNCHER.pin_thumbnail_padding * 2.0);
+        let fitted = original * (preview / original).min_elem();
+        assert!((images[index].size() - fitted).abs().max_elem() <= pixel);
+    }
+}
+
+#[test]
+fn pin_row_background_thumbnail_and_name_select_without_entering_edit_mode() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locked in [false, true] {
+            for target in ["background", "thumbnail", "name", "lock", "close"] {
+                let ctx = egui::Context::default();
+                let size = egui::vec2(width, LAUNCHER.window[1]);
+                let texture = ctx.load_texture(
+                    "generated-row-clicks",
+                    egui::ColorImage::filled([100, 30], egui::Color32::WHITE),
+                    Default::default(),
+                );
+                let pins = [PinEntry {
+                    id: 41,
+                    name: "Name",
+                    texture: &texture,
+                    size: [100, 30],
+                    locked,
+                    selected: false,
+                }];
+                let frame =
+                    |events| frame_with_pins(&ctx, size, events, false, Locale::English, &pins);
+                let _ = frame(vec![]);
+                let output = frame(vec![]).0;
+                let title = visible_text(&output, "Name");
+                let mut buttons = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.size() == Vec2::splat(snip2pin::pin::METRICS.button) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                buttons.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+                assert_eq!(buttons.len(), 2);
+                let thumbnail = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+                            Some(rect.rect)
+                        }
+                        egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                            Some(mesh.calc_bounds())
+                        }
+                        _ => None,
+                    })
+                    .expect("generated thumbnail");
+                let point = match target {
+                    "background" => {
+                        egui::pos2((title.max.x + buttons[0].min.x) / 2.0, title.center().y)
+                    }
+                    "thumbnail" => thumbnail.center(),
+                    "name" => title.center(),
+                    "lock" => buttons[0].center(),
+                    "close" => buttons[1].center(),
+                    _ => unreachable!(),
+                };
+                let _ = frame(vec![Event::PointerMoved(point)]);
+                let pointer = |pressed| Event::PointerButton {
+                    pos: point,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                assert!(frame(vec![pointer(true)]).1.is_none());
+                let action = frame(vec![pointer(false)]).1;
+                match target {
+                    "lock" => assert!(matches!(
+                        action,
+                        Some(Action::Pin(super::super::pin::Action::ToggleLock(41)))
+                    )),
+                    "close" if locked => assert!(action.is_none()),
+                    "close" => assert!(matches!(
+                        action,
+                        Some(Action::Pin(super::super::pin::Action::ClosePin(41)))
+                    )),
+                    _ => assert!(matches!(action, Some(Action::SelectPin(41)))),
+                }
+                assert!(!ctx.egui_wants_keyboard_input(), "single click: {target}");
+                assert!(
+                    frame(vec![Event::Text("must not rename".into())])
+                        .1
+                        .is_none()
+                );
+                if matches!(target, "background" | "thumbnail") {
+                    assert!(frame(vec![pointer(true)]).1.is_none());
+                    assert!(matches!(
+                        frame(vec![pointer(false)]).1,
+                        Some(Action::SelectPin(41))
+                    ));
+                    assert!(
+                        !ctx.egui_wants_keyboard_input(),
+                        "only a name double click can enter editing: {target}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn duplicate_pin_names_double_click_and_edit_by_identity() {
+    let ctx = egui::Context::default();
+    let size = Vec2::from(LAUNCHER.window);
+    let texture = ctx.load_texture(
+        "generated-duplicate-names",
+        egui::ColorImage::filled([30, 30], egui::Color32::WHITE),
+        Default::default(),
+    );
+    let frame = |events, names: &[String; 2]| {
+        let pins = std::array::from_fn::<_, 2, _>(|index| PinEntry {
+            id: 17 + index as u64,
+            name: &names[index],
+            texture: &texture,
+            size: [30, 30],
+            locked: index == 1,
+            selected: false,
+        });
+        frame_with_pins(&ctx, size, events, false, Locale::English, &pins)
+    };
+    let mut names = ["Same name".to_owned(), "Same name".to_owned()];
+    for index in 0..2 {
+        let _ = frame(vec![], &names);
+        let output = frame(vec![], &names).0;
+        let mut titles = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == names[index] => Some(
+                    shape
+                        .shape
+                        .visual_bounding_rect()
+                        .intersect(shape.clip_rect),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        titles.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+        let point = titles[if index == 0 { 0 } else { titles.len() - 1 }].center();
+        let _ = frame(vec![Event::PointerMoved(point)], &names);
+        for click in 0..2 {
+            for pressed in [true, false] {
+                let action = frame(
+                    vec![Event::PointerButton {
+                        pos: point,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                    &names,
+                )
+                .1;
+                if !pressed && click == 0 {
+                    assert!(
+                        matches!(action, Some(Action::SelectPin(id)) if id == 17 + index as u64)
+                    );
+                } else {
+                    assert!(
+                        action.is_none(),
+                        "double click must not select again: row={index}, click={click}, pressed={pressed}"
+                    );
+                }
+            }
+        }
+        let _ = frame(vec![], &names);
+        assert!(ctx.egui_wants_keyboard_input());
+        let _ = frame(
+            vec![Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Modifiers::NONE
+                },
+            }],
+            &names,
+        );
+        let replacement = format!("Renamed {}", 17 + index);
+        assert!(matches!(
+            frame(vec![Event::Text(replacement.clone())], &names).1,
+            Some(Action::RenamePin(id, value)) if id == 17 + index as u64 && value == replacement
+        ));
+        names[index] = replacement;
+        let _ = frame(
+            vec![Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            &names,
+        );
+        assert!(!ctx.egui_wants_keyboard_input());
+        assert_eq!(
+            names[1 - index],
+            if index == 0 {
+                "Same name"
+            } else {
+                "Renamed 17"
+            }
+        );
+        // Separate the two editing gestures beyond egui's triple-click window.
+        for _ in 0..40 {
+            let _ = frame(vec![], &names);
+        }
+    }
+}
+
+#[test]
+fn pin_names_double_click_to_edit_and_keep_spaces_and_unicode() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locale in [Locale::English, Locale::Chinese] {
+            let ctx = egui::Context::default();
+            let size = egui::vec2(width, LAUNCHER.window[1]);
+            let texture = ctx.load_texture(
+                "generated-name-pin",
+                egui::ColorImage::filled([3, 5], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let frame = |events, name: &str| {
+                frame_with_pins(
+                    &ctx,
+                    size,
+                    events,
+                    false,
+                    locale,
+                    &[PinEntry {
+                        id: 17,
+                        name,
+                        texture: &texture,
+                        size: [3, 5],
+                        locked: true,
+                        selected: false,
+                    }],
+                )
+            };
+            let _ = frame(vec![], "");
+            let output = frame(vec![], "").0;
+            let point = visible_text(&output, &Text::PinLabel.with(17).render(locale)).center();
+            let _ = frame(vec![Event::PointerMoved(point)], "");
+            for click in 0..2 {
+                for pressed in [true, false] {
+                    let action = frame(
+                        vec![Event::PointerButton {
+                            pos: point,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        "",
+                    )
+                    .1;
+                    if pressed || click == 1 {
+                        assert!(
+                            action.is_none(),
+                            "double click must enter editing without locating again"
+                        );
+                    } else {
+                        assert!(matches!(action, Some(Action::SelectPin(17))));
+                    }
+                }
+            }
+            let _ = frame(vec![], "");
+            let mut name = String::new();
+            for text in ["接口", " ", "Reference very long screenshot name"] {
+                let action = frame(vec![Event::Text(text.into())], &name).1;
+                name.push_str(text);
+                assert!(matches!(action, Some(Action::RenamePin(17, value)) if value == name));
+            }
+            assert!(
+                frame(vec![], &name).1.is_none(),
+                "idle fields must not emit updates"
+            );
+            let modifiers = Modifiers {
+                ctrl: true,
+                command: true,
+                ..Modifiers::NONE
+            };
+            let _ = frame(
+                vec![Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                &name,
+            );
+            let cleared = frame(
+                vec![Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                &name,
+            )
+            .1;
+            assert!(matches!(cleared, Some(Action::RenamePin(17, value)) if value.is_empty()));
+            let output = frame(vec![], "").0;
+            assert!(visible_text(&output, &Text::PinLabel.with(17).render(locale)).is_positive());
+        }
+    }
+}
+
+#[test]
+fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
+    let ctx = egui::Context::default();
+    let size = Vec2::from(LAUNCHER.window);
+    let texture = ctx.load_texture(
+        "generated-list-identity",
+        egui::ColorImage::filled([3, 5], egui::Color32::WHITE),
+        egui::TextureOptions::default(),
+    );
+    let pins = [17, 18].map(|id| PinEntry {
+        id,
+        name: "",
+        texture: &texture,
+        size: [3, 5],
+        locked: false,
+        selected: false,
+    });
+    let frame = |events, pins: &[PinEntry<'_>]| {
+        frame_with_pins(&ctx, size, events, false, Locale::English, pins)
+    };
+    let _ = frame(vec![], &pins);
+    let output = frame(vec![], &pins).0;
+    let close = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "×" => {
+                Some(shape.shape.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("first row close button")
+        .center();
+    let _ = frame(vec![Event::PointerMoved(close)], &pins);
+    let pointer = |pressed| Event::PointerButton {
+        pos: close,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let _ = frame(vec![pointer(true)], &pins);
+    assert!(
+        frame(vec![pointer(false)], &pins[1..]).1.is_none(),
+        "releasing an old row's press must not close a different pin"
+    );
 }
