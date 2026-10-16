@@ -14,11 +14,13 @@ pub enum Action {
     OpenCaptureSettings,
     Restart,
     SelectPin(u64),
+    RenamePin(u64, String),
     Pin(super::pin::Action),
 }
 
 pub struct PinEntry<'a> {
     pub id: u64,
+    pub name: &'a str,
     pub texture: &'a egui::TextureHandle,
     pub size: [usize; 2],
     pub locked: bool,
@@ -243,6 +245,17 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
     action
 }
 
+fn pin_name_id(id: u64) -> egui::Id {
+    egui::Id::new(("pin-name", id))
+}
+
+/// Release the closed pin's editor, including its in-memory undo history.
+pub fn forget_pin_name(ctx: &egui::Context, id: u64) {
+    let editor = pin_name_id(id);
+    ctx.data_mut(|data| data.remove::<egui::text_edit::TextEditState>(editor));
+    ctx.memory_mut(|memory| memory.surrender_focus(editor));
+}
+
 fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Action> {
     let mut action = None;
     let fill = if pin.selected {
@@ -317,14 +330,16 @@ fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Acti
                                 Text::LocatePin.with(pin.id).render(locale),
                             )
                         });
-                        let label = ui.add(
-                            egui::Button::selectable(
-                                pin.selected,
-                                Text::PinLabel.with(pin.id).render(locale),
-                            )
-                            .truncate(),
+                        let mut name = pin.name.to_owned();
+                        let name_field = ui.add_sized(
+                            [ui.available_width().max(0.0), ui.spacing().interact_size.y],
+                            egui::TextEdit::singleline(&mut name)
+                                .id(pin_name_id(pin.id))
+                                .hint_text(Text::PinLabel.with(pin.id).render(locale)),
                         );
-                        if thumbnail.clicked() || label.clicked() {
+                        if name_field.changed() {
+                            action = Some(Action::RenamePin(pin.id, name));
+                        } else if thumbnail.clicked() {
                             action = Some(Action::SelectPin(pin.id));
                         }
                     });

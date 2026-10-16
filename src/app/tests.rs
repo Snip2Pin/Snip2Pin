@@ -1801,6 +1801,7 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
 fn add_second_test_pin(app: &mut Snip2Pin) {
     let pin = &app.pins[&1];
     let second = Pin {
+        name: String::new(),
         texture: pin.texture.clone(),
         pixels: pin.pixels.clone(),
         initial: pin.initial,
@@ -1903,7 +1904,7 @@ fn selecting_a_locked_pin_restores_focus_and_highlight_without_changing_original
     );
 }
 
-fn quit_dialog_frame(
+fn home_frame(
     app: &mut Snip2Pin,
     ctx: &egui::Context,
     events: Vec<egui::Event>,
@@ -1926,6 +1927,80 @@ fn quit_dialog_frame(
     );
     output.textures_delta.clear();
     output
+}
+
+#[test]
+fn editing_pin_names_preserves_identity_originals_and_geometry_when_other_rows_close() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    add_second_test_pin(&mut app);
+    app.toggle_pin_lock(1, &ctx);
+    let pixels = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    let texture = app.pins[&1].texture.id();
+    let session = app.pins[&1].session;
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let output = home_frame(&mut app, &ctx, vec![]);
+    let point = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text)
+                if text.galley.text() == Text::PinLabel.with(1).render(Locale::Chinese) =>
+            {
+                Some(
+                    shape
+                        .shape
+                        .visual_bounding_rect()
+                        .intersect(shape.clip_rect)
+                        .center(),
+                )
+            }
+            _ => None,
+        })
+        .expect("editable pin name");
+    let _ = home_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+    for pressed in [true, false] {
+        let _ = home_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+    let output = home_frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::Text("参考 Reference".into())],
+    );
+    assert_eq!(app.pins[&1].name, "参考 Reference");
+    assert!(app.pins[&2].name.is_empty());
+    assert!(ctx.egui_wants_keyboard_input());
+    let editor = ctx.memory(|memory| memory.focused()).expect("name editor");
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_some());
+    assert_eq!(app.selected_pin, None);
+    assert!(output.platform_output.commands.is_empty());
+    app.close_pin(2, &ctx);
+    let _ = home_frame(&mut app, &ctx, vec![egui::Event::Text(" 2".into())]);
+    assert_eq!(app.pins[&1].name, "参考 Reference 2");
+    assert!(app.pins[&1].locked);
+    assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
+    assert_eq!(app.pins[&1].initial, initial);
+    assert_eq!(app.pins[&1].texture.id(), texture);
+    assert_eq!(app.pins[&1].session, session);
+    assert!(app.pins[&1].highlight_until.is_none());
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.capture_worker.is_none());
+    app.close_pin(1, &ctx);
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_some());
+    app.toggle_pin_lock(1, &ctx);
+    app.close_pin(1, &ctx);
+    assert!(egui::text_edit::TextEditState::load(&ctx, editor).is_none());
+    assert_ne!(ctx.memory(|memory| memory.focused()), Some(editor));
 }
 
 #[test]
@@ -1983,8 +2058,8 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
                 .flatten()
                 .all(|command| *command != ViewportCommand::Close)
         );
-        let _ = quit_dialog_frame(&mut app, &ctx, vec![]);
-        let output = quit_dialog_frame(&mut app, &ctx, vec![]);
+        let _ = home_frame(&mut app, &ctx, vec![]);
+        let output = home_frame(&mut app, &ctx, vec![]);
         let key = if confirm {
             Text::QuitConfirm
         } else {
@@ -2000,15 +2075,15 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
                 _ => None,
             })
             .expect("confirmation has an actionable button");
-        let _ = quit_dialog_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+        let _ = home_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
         let event = |pressed| egui::Event::PointerButton {
             pos: point,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        let _ = quit_dialog_frame(&mut app, &ctx, vec![event(true)]);
-        let clicked = quit_dialog_frame(&mut app, &ctx, vec![event(false)]);
+        let _ = home_frame(&mut app, &ctx, vec![event(true)]);
+        let clicked = home_frame(&mut app, &ctx, vec![event(false)]);
         assert!(app.quit_confirmation.is_none());
         assert_eq!(app.exiting, confirm);
         assert_eq!(
@@ -2255,8 +2330,8 @@ fn english_quit_fallback_ignores_enter_and_escape_preserves_pins() {
     *app.relaunch.lock().expect("pending relaunch") =
         Some(std::process::Command::new("generated-relaunch-fixture"));
     app.tray_action(crate::tray::Action::Quit, &ctx);
-    let _ = quit_dialog_frame(&mut app, &ctx, vec![]);
-    let output = quit_dialog_frame(&mut app, &ctx, vec![]);
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let output = home_frame(&mut app, &ctx, vec![]);
     for key in [
         Text::QuitLockedTitle,
         Text::QuitLockedHelp,
@@ -2268,7 +2343,7 @@ fn english_quit_fallback_ignores_enter_and_escape_preserves_pins() {
         }), "missing English confirmation text: {key:?}");
     }
     for key in [egui::Key::Enter, egui::Key::Escape] {
-        let _ = quit_dialog_frame(
+        let _ = home_frame(
             &mut app,
             &ctx,
             vec![egui::Event::Key {

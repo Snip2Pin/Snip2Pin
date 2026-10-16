@@ -89,6 +89,7 @@ struct Layer {
 }
 
 struct Pin {
+    name: String,
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
     initial: egui::Rect,
@@ -734,6 +735,7 @@ impl Snip2Pin {
             self.pins.insert(
                 self.next_pin,
                 Pin {
+                    name: String::new(),
                     texture,
                     pixels,
                     initial: {
@@ -810,10 +812,11 @@ impl Snip2Pin {
         if self.pin_menu.as_ref().is_some_and(|menu| menu.pin_id == id) {
             self.close_pin_menu(ctx);
         }
-        if let Some(pin) = self.pins.remove(&id)
-            && pin.ready.load(Ordering::Acquire)
-        {
-            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+        if let Some(pin) = self.pins.remove(&id) {
+            launcher::forget_pin_name(ctx, id);
+            if pin.ready.load(Ordering::Acquire) {
+                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+            }
         }
         if self.selected_pin == Some(id) {
             self.selected_pin = None;
@@ -875,6 +878,7 @@ impl Snip2Pin {
         }
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
+            launcher::forget_pin_name(ctx, id);
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
             }
@@ -1515,6 +1519,7 @@ impl eframe::App for Snip2Pin {
             .filter(|(_, pin)| pin.ready.load(Ordering::Acquire))
             .map(|(&id, pin)| launcher::PinEntry {
                 id,
+                name: &pin.name,
                 texture: &pin.texture,
                 size: pin.pixels.size,
                 locked: pin.locked,
@@ -1561,6 +1566,11 @@ impl eframe::App for Snip2Pin {
             }
             Some(launcher::Action::Restart) => self.restart(&ctx),
             Some(launcher::Action::SelectPin(id)) => self.select_pin(id, &ctx),
+            Some(launcher::Action::RenamePin(id, name)) => {
+                if let Some(pin) = self.pins.get_mut(&id) {
+                    pin.name = name;
+                }
+            }
             Some(launcher::Action::Pin(action)) => dispatch_pin(action, &self.sender, &ctx, None),
             None => {}
         }
@@ -1591,6 +1601,7 @@ impl eframe::App for Snip2Pin {
             self.record_key(ui);
         } else if idle
             && self.quit_confirmation.is_none()
+            && !ctx.egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events

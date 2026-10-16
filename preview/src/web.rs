@@ -15,6 +15,7 @@ use wasm_bindgen::{JsCast, prelude::*};
 
 struct Pin {
     id: u64,
+    name: String,
     texture: TextureHandle,
     image: Rect,
     gesture: Option<Gesture>,
@@ -132,6 +133,9 @@ impl Sandbox {
     fn pin_action(&mut self, action: pin_view::Action, ui: &egui::Ui, bounds: Rect) {
         match action {
             pin_view::Action::ClosePin(id) => {
+                if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
+                    launcher::forget_pin_name(ui.ctx(), id);
+                }
                 self.pins.retain(|pin| pin.id != id || pin.locked);
                 if !self
                     .pins
@@ -195,6 +199,7 @@ impl eframe::App for Sandbox {
                 }
             }
         } else if self.selection.is_none()
+            && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events
@@ -231,6 +236,7 @@ impl eframe::App for Sandbox {
                         );
                         self.pins.push(Pin {
                             id: self.next_id,
+                            name: String::new(),
                             texture: ui.ctx().load_texture(
                                 format!("pin-{}", self.next_id),
                                 pixels,
@@ -266,6 +272,7 @@ impl eframe::App for Sandbox {
             .rev()
             .map(|pin| launcher::PinEntry {
                 id: pin.id,
+                name: &pin.name,
                 texture: &pin.texture,
                 size: pin.texture.size(),
                 locked: pin.locked,
@@ -297,8 +304,18 @@ impl eframe::App for Sandbox {
                 );
             });
         match action {
+            Some(launcher::Action::RenamePin(id, name)) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
+                    pin.name = name;
+                }
+            }
             Some(launcher::Action::Capture) => self.capture(),
-            Some(launcher::Action::ClosePins) => self.pins.retain(|pin| pin.locked),
+            Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
+                if !pin.locked {
+                    launcher::forget_pin_name(ui.ctx(), pin.id);
+                }
+                pin.locked
+            }),
             Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
             Some(launcher::Action::SelectPin(id)) => {
                 if let Some(index) = self.pins.iter().position(|pin| pin.id == id) {

@@ -361,6 +361,7 @@ fn pin_list_thumbnail_and_buttons_emit_actions_in_narrow_homes() {
                 );
                 let pins = [PinEntry {
                     id: 17,
+                    name: "",
                     texture: &texture,
                     size: [3, 5],
                     locked,
@@ -470,6 +471,7 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
         let pins = (0..8)
             .map(|id| PinEntry {
                 id,
+                name: "",
                 texture: &texture,
                 size: [3, 5],
                 locked: false,
@@ -514,6 +516,97 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
 }
 
 #[test]
+fn pin_names_edit_inline_without_selecting_and_keep_spaces_and_unicode() {
+    for width in [210.0, LAUNCHER.window[0]] {
+        for locale in [Locale::English, Locale::Chinese] {
+            let ctx = egui::Context::default();
+            let size = egui::vec2(width, LAUNCHER.window[1]);
+            let texture = ctx.load_texture(
+                "generated-name-pin",
+                egui::ColorImage::filled([3, 5], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let frame = |events, name: &str| {
+                frame_with_pins(
+                    &ctx,
+                    size,
+                    events,
+                    false,
+                    locale,
+                    &[PinEntry {
+                        id: 17,
+                        name,
+                        texture: &texture,
+                        size: [3, 5],
+                        locked: true,
+                        selected: false,
+                    }],
+                )
+            };
+            let _ = frame(vec![], "");
+            let output = frame(vec![], "").0;
+            let point = visible_text(&output, &Text::PinLabel.with(17).render(locale)).center();
+            let _ = frame(vec![Event::PointerMoved(point)], "");
+            for pressed in [true, false] {
+                assert!(
+                    frame(
+                        vec![Event::PointerButton {
+                            pos: point,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        ""
+                    )
+                    .1
+                    .is_none(),
+                    "editing must not locate the pin"
+                );
+            }
+            let mut name = String::new();
+            for text in ["接口", " ", "Reference very long screenshot name"] {
+                let action = frame(vec![Event::Text(text.into())], &name).1;
+                name.push_str(text);
+                assert!(matches!(action, Some(Action::RenamePin(17, value)) if value == name));
+            }
+            assert!(
+                frame(vec![], &name).1.is_none(),
+                "idle fields must not emit updates"
+            );
+            let modifiers = Modifiers {
+                ctrl: true,
+                command: true,
+                ..Modifiers::NONE
+            };
+            let _ = frame(
+                vec![Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                &name,
+            );
+            let cleared = frame(
+                vec![Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                &name,
+            )
+            .1;
+            assert!(matches!(cleared, Some(Action::RenamePin(17, value)) if value.is_empty()));
+            let output = frame(vec![], "").0;
+            assert!(visible_text(&output, &Text::PinLabel.with(17).render(locale)).is_positive());
+        }
+    }
+}
+
+#[test]
 fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
     let ctx = egui::Context::default();
     let size = Vec2::from(LAUNCHER.window);
@@ -524,6 +617,7 @@ fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
     );
     let pins = [17, 18].map(|id| PinEntry {
         id,
+        name: "",
         texture: &texture,
         size: [3, 5],
         locked: false,
