@@ -471,10 +471,14 @@ impl Snip2Pin {
         match action {
             Action::Home => {
                 self.home_visible = true;
-                // Keep pin management reachable above this app's floating images.
+                // Only a pending confirmation needs to stay above locked pins.
                 ctx.send_viewport_cmd_to(
                     ViewportId::ROOT,
-                    ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop),
+                    ViewportCommand::WindowLevel(if self.quit_confirmation.is_some() {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    }),
                 );
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Decorations(true));
                 ctx.send_viewport_cmd_to(
@@ -969,7 +973,7 @@ impl Snip2Pin {
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
     }
 
-    fn cancel_quit(&mut self) {
+    fn cancel_quit(&mut self, ctx: &egui::Context) {
         // Invalidate the request before dropping a sheet: dismissal may deliver
         // its completion synchronously, but that queued result is now stale.
         let _ = self.quit_confirmation.take();
@@ -977,6 +981,10 @@ impl Snip2Pin {
         if let Some(dock) = &self.dock {
             dock.resolve_quit(false);
         }
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            ViewportCommand::WindowLevel(egui::WindowLevel::Normal),
+        );
         if let Ok(mut command) = self.relaunch.lock() {
             command.take();
         }
@@ -993,7 +1001,7 @@ impl Snip2Pin {
             return;
         }
         if self.tray.is_some() {
-            self.cancel_quit();
+            self.cancel_quit(ctx);
             self.home_visible = false;
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
@@ -1014,7 +1022,7 @@ impl Snip2Pin {
         }
         match result {
             Ok(true) => self.quit(ctx),
-            Ok(false) => self.cancel_quit(),
+            Ok(false) => self.cancel_quit(ctx),
             Err(error) => {
                 pending.presentation = QuitPresentation::Fallback;
                 self.message = Some(error);
@@ -1692,7 +1700,7 @@ impl eframe::App for Snip2Pin {
                 let mut confirm = false;
                 ui.horizontal(|ui| {
                     if ui.button(locale.text(Text::Cancel)).clicked() {
-                        self.cancel_quit();
+                        self.cancel_quit(&ctx);
                     }
                     if ui.button(locale.text(Text::QuitConfirm)).clicked() {
                         confirm = true;
@@ -1703,7 +1711,7 @@ impl eframe::App for Snip2Pin {
             if response.inner {
                 self.quit(&ctx);
             } else if response.should_close() {
-                self.cancel_quit();
+                self.cancel_quit(&ctx);
             }
         }
         if self.recording && self.quit_confirmation.is_none() {

@@ -66,24 +66,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let background = action.as_deref() == Some("--background");
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title(snip2pin::APP_NAME)
-            .with_app_id(snip2pin::APP_ID)
-            .with_inner_size(ui::style::LAUNCHER.window)
-            .with_window_level(eframe::egui::WindowLevel::AlwaysOnTop)
-            .with_transparent(true)
-            // Bootstrap transparent capture viewports before hiding the root;
-            // eframe cannot create child windows in a logic-only hidden pass.
-            .with_decorations(!background)
-            .with_has_shadow(!background)
-            .with_active(!background)
-            .with_mouse_passthrough(background)
-            .with_icon(startup_window_icon()?)
-            .with_resizable(false),
-        centered: true,
-        ..Default::default()
-    };
+    let options = startup_options(background)?;
     let relaunch = Arc::new(Mutex::new(None));
     let relaunch_request = relaunch.clone();
     eframe::run_native(
@@ -99,6 +82,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         command.spawn()?;
     }
     Ok(())
+}
+
+fn startup_options(background: bool) -> Result<eframe::NativeOptions, snip2pin::i18n::Message> {
+    Ok(eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title(snip2pin::APP_NAME)
+            .with_app_id(snip2pin::APP_ID)
+            .with_inner_size(ui::style::LAUNCHER.window)
+            .with_window_level(eframe::egui::WindowLevel::Normal)
+            .with_transparent(true)
+            // Bootstrap transparent capture viewports before hiding the root;
+            // eframe cannot create child windows in a logic-only hidden pass.
+            .with_decorations(!background)
+            .with_has_shadow(!background)
+            .with_active(!background)
+            .with_mouse_passthrough(background)
+            .with_icon(startup_window_icon()?)
+            .with_resizable(false),
+        centered: true,
+        ..Default::default()
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -118,8 +122,22 @@ fn startup_window_icon() -> Result<eframe::egui::IconData, snip2pin::i18n::Messa
     })
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn home_startup_uses_normal_window_level() {
+        for background in [false, true] {
+            assert_eq!(
+                super::startup_options(background)
+                    .expect("native options")
+                    .viewport
+                    .window_level,
+                Some(eframe::egui::WindowLevel::Normal)
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn macos_startup_preserves_the_bundle_icon_until_the_native_preference_update() {
         let icon = super::startup_window_icon().expect("startup icon");

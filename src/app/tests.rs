@@ -368,6 +368,20 @@ fn tray_home_and_quit_dispatch_root_commands_and_demo_cannot_enable_startup() {
 }
 
 #[test]
+fn opening_home_without_a_confirmation_restores_normal_window_level() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Home, ctx)
+    });
+    let commands = &output.viewport_commands[&ViewportId::ROOT];
+    assert!(commands.contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)));
+    assert!(!commands.contains(&ViewportCommand::WindowLevel(
+        egui::WindowLevel::AlwaysOnTop
+    )));
+}
+
+#[test]
 fn capture_never_switches_the_desktop_into_native_fullscreen() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -2416,10 +2430,10 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
             assert!(app.pins[&1].locked);
             assert!(original.upgrade().is_some());
             assert!(
-                !clicked.viewport_output[&ViewportId::ROOT]
+                clicked.viewport_output[&ViewportId::ROOT]
                     .commands
                     .contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)),
-                "cancel must preserve Home's floating level"
+                "cancel must restore Home's normal level"
             );
             assert!(
                 clicked
@@ -2510,7 +2524,7 @@ fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
                 output
                     .viewport_commands
                     .get(&ViewportId::ROOT)
-                    .is_none_or(|commands| !commands
+                    .is_some_and(|commands| commands
                         .contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal)))
             );
             assert!(
