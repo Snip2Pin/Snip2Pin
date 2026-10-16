@@ -628,8 +628,14 @@ fn menu_item(output: &FullOutput, label: &str) -> Pos2 {
 
 #[test]
 fn independent_menu_dispatches_copy_and_close_inside_its_own_bounds() {
-    for (label, expected) in [("复制", Action::CopyPin(7)), ("关闭", Action::ClosePin(7))] {
+    for (locale, label, expected) in [
+        (crate::i18n::Locale::Chinese, "复制", Action::CopyPin(7)),
+        (crate::i18n::Locale::Chinese, "关闭", Action::ClosePin(7)),
+        (crate::i18n::Locale::English, "Copy", Action::CopyPin(7)),
+        (crate::i18n::Locale::English, "Close", Action::ClosePin(7)),
+    ] {
         let ctx = egui::Context::default();
+        crate::i18n::set_locale(&ctx, locale);
         let bounds = Rect::from_min_size(Pos2::ZERO, MENU_SIZE);
         let actions = RefCell::new(Vec::new());
         let paint = |events| {

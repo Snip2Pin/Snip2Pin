@@ -6,6 +6,7 @@ use eframe::egui::{
 use snip2pin::{
     capture,
     geometry::Placement,
+    i18n::{self, Locale, Message, Text},
     pin,
     settings::{Binding, Preferences},
     ui::{launcher, overlay, pin as pin_view},
@@ -61,7 +62,8 @@ struct Sandbox {
     preferences: Preferences,
     recording: bool,
     startup: bool,
-    message: Option<String>,
+    message: Option<Message>,
+    system_locale: Locale,
     source: Arc<ColorImage>,
     texture: TextureHandle,
     icon: TextureHandle,
@@ -90,6 +92,7 @@ impl Sandbox {
             recording: false,
             startup: false,
             message: None,
+            system_locale: Locale::system(),
             texture: cc.egui_ctx.load_texture(
                 "generated-desktop",
                 source.clone(),
@@ -125,6 +128,8 @@ impl Sandbox {
 
 impl eframe::App for Sandbox {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let locale = self.preferences.language.resolve(self.system_locale);
+        i18n::set_locale(ui.ctx(), locale);
         let bounds = ui.max_rect();
         if self.recording {
             for event in ui.input(|input| input.events.clone()) {
@@ -196,7 +201,7 @@ impl eframe::App for Sandbox {
                             image: layout.image,
                             gesture: None,
                         });
-                        self.message = Some("已复制并置顶（沙箱仅模拟复制）。".into());
+                        self.message = Some(Text::DemoPinned.into());
                     }
                     self.selection = None;
                 }
@@ -209,11 +214,12 @@ impl eframe::App for Sandbox {
         ui.painter().text(
             bounds.right_bottom() - Vec2::splat(20.0),
             egui::Align2::RIGHT_BOTTOM,
-            "本地 UI 沙箱 · 生成图片 · 拖动/自由缩放为模拟 · 不访问桌面/剪贴板",
+            locale.text(Text::Sandbox),
             egui::FontId::proportional(13.0),
             ui.visuals().weak_text_color(),
         );
         let mut action = None;
+        let message = self.message.as_ref().map(|message| message.render(locale));
         egui::Window::new("Snip2Pin")
             .id(egui::Id::new("home"))
             .title_bar(false)
@@ -223,8 +229,9 @@ impl eframe::App for Sandbox {
                 action = launcher::show(
                     ui,
                     launcher::Model {
+                        locale,
                         pin_count: self.pins.len(),
-                        message: self.message.as_deref(),
+                        message: message.as_deref(),
                         global_shortcut: false,
                         preferences: self.preferences,
                         icon_texture: Some(&self.icon),
@@ -256,6 +263,7 @@ impl eframe::App for Sandbox {
                 }
             }
             Some(launcher::Action::Startup(enabled)) => self.startup = enabled,
+            Some(launcher::Action::Language(language)) => self.preferences.language = language,
             _ => {}
         }
         if self.menu.is_some()
@@ -326,7 +334,7 @@ impl eframe::App for Sandbox {
                     self.menu = None;
                 }
                 pin_view::Action::CopyPin(_) => {
-                    self.message = Some("已复制（沙箱仅模拟，不写系统剪贴板）。".into());
+                    self.message = Some(Text::DemoCopied.into());
                     self.menu = None;
                 }
                 pin_view::Action::MenuPin(id) => {
@@ -369,7 +377,7 @@ impl eframe::App for Sandbox {
                     self.menu = None;
                     match action {
                         pin_view::Action::CopyPin(_) => {
-                            self.message = Some("已复制（沙箱仅模拟，不写系统剪贴板）。".into());
+                            self.message = Some(Text::DemoCopied.into());
                         }
                         pin_view::Action::ClosePin(id) => self.pins.retain(|pin| pin.id != id),
                         pin_view::Action::MenuPin(_) => {}

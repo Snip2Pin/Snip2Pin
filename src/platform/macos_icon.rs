@@ -1,12 +1,13 @@
 //! macOS Dock icons use owned pixels; bundle icons are selected before signing.
+use snip2pin::i18n::{Message, Text};
 #[allow(unsafe_code)]
-pub fn update(variant: snip2pin::icon::Variant) -> Result<(), String> {
+pub fn update(variant: snip2pin::icon::Variant) -> Result<(), Message> {
     use objc2::AnyThread;
     use objc2_app_kit::{
         NSApplication, NSBitmapFormat, NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage,
     };
     use objc2_foundation::NSSize;
-    let main_thread = objc2::MainThreadMarker::new().ok_or("图标必须在 UI 线程更新。")?;
+    let main_thread = objc2::MainThreadMarker::new().ok_or(Text::UiThread)?;
     const RGBA_CHANNELS: usize = 4;
     const BITS_PER_CHANNEL: isize = u8::BITS as isize;
     let pixels = snip2pin::icon::render(variant, snip2pin::icon::DOCK_SIZE)?;
@@ -19,11 +20,11 @@ pub fn update(variant: snip2pin::icon::Variant) -> Result<(), String> {
             BITS_PER_CHANNEL, RGBA_CHANNELS as isize, true, false,
             NSDeviceRGBColorSpace, NSBitmapFormat::AlphaNonpremultiplied, row_len as isize, BITS_PER_CHANNEL * RGBA_CHANNELS as isize,
         )
-    }.ok_or("无法分配 Dock 图标。")?;
-    let stride = usize::try_from(bitmap.bytesPerRow()).map_err(|_| "无效图标行长度。")?;
+    }.ok_or(Text::AllocateIcon)?;
+    let stride = usize::try_from(bitmap.bytesPerRow()).map_err(|_| Text::IconStride)?;
     let destination = bitmap.bitmapData();
     if destination.is_null() || stride < row_len {
-        return Err("无效图标缓冲区。".into());
+        return Err(Text::IconBuffer.into());
     }
     for (y, row) in pixels.as_raw().chunks_exact(row_len).enumerate() {
         // SAFETY: The validated native stride covers every RGBA row. The bitmap
@@ -46,9 +47,9 @@ pub fn update(variant: snip2pin::icon::Variant) -> Result<(), String> {
 }
 
 /// Packaging reads saved preferences without showing or activating an app.
-pub fn selected_variant() -> Result<snip2pin::icon::Variant, String> {
+pub fn selected_variant() -> Result<snip2pin::icon::Variant, Message> {
     use objc2_foundation::{NSString, NSUserDefaults};
-    let settings = snip2pin::settings::path().ok_or("无法找到设置目录。")?;
+    let settings = snip2pin::settings::path().ok_or(Text::NoConfigDirectory)?;
     let preferences = snip2pin::settings::Preferences::load(&settings)?;
     let style = NSUserDefaults::standardUserDefaults()
         .stringForKey(&NSString::from_str("AppleInterfaceStyle"));

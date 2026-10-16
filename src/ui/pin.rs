@@ -104,6 +104,7 @@ pub fn image_with_host(
 }
 
 pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+    let locale = crate::i18n::locale(ui.ctx());
     let bounds = ui.max_rect();
     let first = Rect::from_min_size(bounds.min, egui::Vec2::splat(METRICS.button));
     let step = METRICS.button + METRICS.button_gap;
@@ -114,7 +115,11 @@ pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
     };
     let copy = ui.put(copy_rect, egui::Button::new("").fill(PIN.button_fill));
     copy.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "复制")
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            locale.text(crate::i18n::Text::Copy),
+        )
     });
     paint_copy_icon(ui, copy.rect);
     if copy.clicked() {
@@ -126,7 +131,11 @@ pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
         egui::Button::new(egui::RichText::new("×").color(Color32::WHITE)).fill(PIN.button_fill),
     );
     close.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "关闭")
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            locale.text(crate::i18n::Text::Close),
+        )
     });
     if close.clicked() {
         events(Action::ClosePin(id));
@@ -135,11 +144,12 @@ pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
 }
 
 pub fn menu(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+    let locale = crate::i18n::locale(ui.ctx());
     let bounds = ui.max_rect().shrink(MENU_PADDING);
     let height = (bounds.height() - METRICS.button_gap) / 2.0;
     for (index, (label, action)) in [
-        ("复制", Action::CopyPin(id)),
-        ("关闭", Action::ClosePin(id)),
+        (locale.text(crate::i18n::Text::Copy), Action::CopyPin(id)),
+        (locale.text(crate::i18n::Text::Close), Action::ClosePin(id)),
     ]
     .into_iter()
     .enumerate()

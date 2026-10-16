@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Snip2Pin
 Comment=Capture a region and keep it floating on screen
+Comment[zh_CN]=框选截图并置顶显示
 Exec=snip2pin
 Icon=io.github.Snip2Pin.Snip2Pin
 Terminal=false

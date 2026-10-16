@@ -1,4 +1,5 @@
 //! Current-user login startup. Construction/read never enables startup.
+use snip2pin::i18n::{Message, Text};
 #[cfg(not(target_os = "windows"))]
 use std::io::Write;
 #[cfg(not(target_os = "windows"))]
@@ -14,19 +15,19 @@ pub struct Startup {
 }
 
 impl Startup {
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, Message> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        let executable_text = executable.to_str().ok_or("应用路径不是有效 Unicode。")?;
+        let executable_text = executable.to_str().ok_or(Text::InvalidAppPath)?;
         #[cfg(target_os = "macos")]
         if !executable
             .ancestors()
             .any(|path| path.extension().is_some_and(|ext| ext == "app"))
         {
-            return Err("请先安装应用，再开启开机自启。".into());
+            return Err(Text::InstallFirst.into());
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let dirs = directories::BaseDirs::new().ok_or("无法找到用户配置目录。")?;
+            let dirs = directories::BaseDirs::new().ok_or(Text::NoConfigDirectory)?;
             #[cfg(target_os = "macos")]
             let path = dirs
                 .home_dir()
@@ -45,25 +46,28 @@ impl Startup {
         })
     }
 
-    pub fn enabled(&self) -> Result<bool, String> {
+    pub fn enabled(&self) -> Result<bool, Message> {
         #[cfg(not(target_os = "windows"))]
-        return self.path.try_exists().map_err(|error| error.to_string());
+        return self
+            .path
+            .try_exists()
+            .map_err(|error| error.to_string().into());
         #[cfg(target_os = "windows")]
         {
             let key = match windows_registry::CURRENT_USER.open(RUN_KEY) {
                 Ok(key) => key,
                 Err(error) if missing(&error) => return Ok(false),
-                Err(error) => return Err(error.to_string()),
+                Err(error) => return Err(error.to_string().into()),
             };
             match key.get_string("Snip2Pin") {
                 Ok(_) => Ok(true),
                 Err(error) if missing(&error) => Ok(false),
-                Err(error) => Err(error.to_string()),
+                Err(error) => Err(error.to_string().into()),
             }
         }
     }
 
-    pub fn set_enabled(&self, enabled: bool) -> Result<bool, String> {
+    pub fn set_enabled(&self, enabled: bool) -> Result<bool, Message> {
         #[cfg(not(target_os = "windows"))]
         write_entry(&self.path, &self.data, enabled)?;
         #[cfg(target_os = "windows")]
@@ -82,7 +86,7 @@ impl Startup {
                 {
                     Ok(()) => {}
                     Err(error) if missing(&error) => {}
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => return Err(error.to_string().into()),
                 }
             }
         }
@@ -115,10 +119,10 @@ mod windows_tests {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn write_entry(path: &Path, data: &[u8], enabled: bool) -> Result<(), String> {
+fn write_entry(path: &Path, data: &[u8], enabled: bool) -> Result<(), Message> {
     let result = || -> Result<(), Box<dyn std::error::Error>> {
         if enabled {
-            let parent = path.parent().ok_or("自启配置没有父目录。")?;
+            let parent = path.parent().ok_or(Message::from(Text::StartupParent))?;
             std::fs::create_dir_all(parent)?;
             let mut file = tempfile::NamedTempFile::new_in(parent)?;
             file.write_all(data)?;
@@ -133,11 +137,11 @@ fn write_entry(path: &Path, data: &[u8], enabled: bool) -> Result<(), String> {
         }
         Ok(())
     };
-    result().map_err(|error| format!("修改开机自启失败：{error}"))
+    result().map_err(|error| Text::WriteStartup.with(error))
 }
 
 #[cfg(target_os = "macos")]
-fn entry(executable: &str) -> Result<Vec<u8>, String> {
+fn entry(executable: &str) -> Result<Vec<u8>, Message> {
     let mut fields = plist::Dictionary::new();
     fields.insert("Label".into(), snip2pin::APP_ID.into());
     fields.insert(
@@ -158,9 +162,9 @@ fn entry(executable: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn entry(executable: &str) -> Result<Vec<u8>, String> {
+fn entry(executable: &str) -> Result<Vec<u8>, Message> {
     if executable.contains(['\n', '\r', '=']) {
-        return Err("此路径不能用于桌面自启入口。".into());
+        return Err(Text::InvalidStartupPath.into());
     }
     let mut escaped = String::new();
     for character in executable.chars() {

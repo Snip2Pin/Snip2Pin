@@ -5,6 +5,7 @@ use std::sync::{
 
 use eframe::egui;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use snip2pin::i18n::{Message, Text};
 use snip2pin::settings::Binding;
 
 #[path = "platform/pin_menu.rs"]
@@ -76,16 +77,16 @@ pub fn request_capture_permission() -> bool {
     true
 }
 
-pub fn open_capture_settings() -> Result<(), String> {
+pub fn open_capture_settings() -> Result<(), Message> {
     #[cfg(target_os = "macos")]
     return macos_access::open_settings();
     #[cfg(not(target_os = "macos"))]
-    Err("当前平台没有统一的屏幕录制授权设置入口。".into())
+    Err(Text::NoSettingsEntry.into())
 }
 
 /// Prepare a user-requested relaunch; the caller runs it after the app has
 /// dropped all native windows and global shortcuts. No waiting or polling.
-pub fn relaunch_command() -> Result<std::process::Command, String> {
+pub fn relaunch_command() -> Result<std::process::Command, Message> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     if let Some(bundle) = executable
@@ -171,7 +172,7 @@ pub fn set_app_icon(
     ctx: &egui::Context,
     variant: snip2pin::icon::Variant,
     data: Arc<egui::IconData>,
-) -> Result<(), String> {
+) -> Result<(), Message> {
     let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
     for viewport in viewports {
         ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Icon(Some(data.clone())));
@@ -185,7 +186,7 @@ pub fn set_app_icon(
 
 /// Selection windows can cover the menu bar and fullscreen applications without
 /// asking macOS to create a Space. All calls stay on the verified main thread.
-pub fn prepare_floating_windows() -> Result<(), String> {
+pub fn prepare_floating_windows() -> Result<(), Message> {
     #[cfg(target_os = "macos")]
     if let Some(main_thread) = objc2::MainThreadMarker::new() {
         use objc2_app_kit::{NSApplication, NSWindowCollectionBehavior};
@@ -287,9 +288,9 @@ impl Shortcut {
     pub fn register(
         binding: Binding,
         action: impl Fn() + Send + Sync + 'static,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Message> {
         if !global_shortcuts_supported() {
-            return Err("Wayland 下请从应用窗口截图，或在桌面设置里配置启动快捷键。".into());
+            return Err(Text::WaylandShortcut.into());
         }
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
         let key = binding.0;
@@ -309,7 +310,7 @@ impl Shortcut {
         })
     }
 
-    pub fn replace(&mut self, binding: Binding) -> Result<(), String> {
+    pub fn replace(&mut self, binding: Binding) -> Result<(), Message> {
         let key = binding.0;
         if key == self.key {
             return Ok(());
@@ -317,10 +318,10 @@ impl Shortcut {
         // Register first so a conflict leaves the existing shortcut working.
         self.manager
             .register(key)
-            .map_err(|error| format!("快捷键不可用，请换一个组合：{error}"))?;
+            .map_err(|error| Text::ShortcutError.with(error))?;
         if let Err(error) = self.manager.unregister(self.key) {
             let _ = self.manager.unregister(key);
-            return Err(format!("更新快捷键失败：{error}"));
+            return Err(Text::UpdateShortcutError.with(error));
         }
         self.key = key;
         self.active_id.store(key.id(), Ordering::Release);

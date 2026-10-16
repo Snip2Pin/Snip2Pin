@@ -120,6 +120,7 @@ fn shortcut_preference_survives_restart_and_invalid_files_are_reported() {
         binding: first,
         theme: Theme::Dark,
         icon: Icon::Line,
+        ..Default::default()
     };
     preferences.save(&path).expect("save");
     assert_eq!(
@@ -244,4 +245,28 @@ fn invalid_preferences_are_reported_and_missing_fields_use_defaults() {
     assert_eq!(preferences.theme, Theme::Dark);
     assert_eq!(preferences.icon, Icon::Auto);
     assert_eq!(preferences.binding, Binding::default());
+}
+
+#[test]
+fn language_defaults_migrates_and_round_trips_without_changing_other_preferences() {
+    use snip2pin::i18n::Language;
+    let directory = tempfile::tempdir().expect("isolated language preferences");
+    let path = directory.path().join("preferences.toml");
+    std::fs::write(
+        &path,
+        "theme = 'dark'\nicon = 'metal'\nbinding = 'Ctrl+Alt+K'\n",
+    )
+    .expect("previous version");
+    let original = Preferences::load(&path).expect("migrate missing language");
+    assert_eq!(original.language, Language::System);
+    for language in [Language::English, Language::Chinese, Language::System] {
+        let preferences = Preferences {
+            language,
+            ..original
+        };
+        preferences.save(&path).expect("save language");
+        assert_eq!(Preferences::load(&path).expect("restart"), preferences);
+    }
+    std::fs::write(&path, "language = 'unknown'\n").expect("invalid language");
+    assert!(Preferences::load(&path).is_err());
 }

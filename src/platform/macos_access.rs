@@ -1,4 +1,5 @@
 //! Public AppKit APIs only: no TCC edits, resets, activation, or cache hacks.
+use snip2pin::i18n::{Message, Text};
 use std::path::Path;
 
 use objc2::MainThreadMarker;
@@ -9,43 +10,43 @@ pub fn request() -> bool {
     MainThreadMarker::new().is_some() && objc2_core_graphics::CGRequestScreenCaptureAccess()
 }
 
-pub fn open_settings() -> Result<(), String> {
-    let _thread = MainThreadMarker::new().ok_or("授权设置必须从应用主线程打开。")?;
+pub fn open_settings() -> Result<(), Message> {
+    let _thread = MainThreadMarker::new().ok_or(Text::UiThread)?;
     let url = NSURL::URLWithString(&NSString::from_str(
         "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
     ))
-    .ok_or("无法创建授权设置地址。")?;
+    .ok_or(Text::SettingsUrl)?;
     NSWorkspace::sharedWorkspace()
         .openURL(&url)
         .then_some(())
-        .ok_or("无法打开系统授权设置。".into())
+        .ok_or(Text::OpenSettingsError.into())
 }
 
-pub fn check_installation() -> Result<(), String> {
-    let _thread = MainThreadMarker::new().ok_or("应用登记检查必须在主线程运行。")?;
+pub fn check_installation() -> Result<(), Message> {
+    let _thread = MainThreadMarker::new().ok_or(Text::UiThread)?;
     let bundle = NSBundle::mainBundle();
     if bundle
         .bundleIdentifier()
         .is_none_or(|id| id.to_string() != snip2pin::APP_ID)
     {
-        return Err("应用元数据与编译标识不一致。".into());
+        return Err(Text::AppIdentity.into());
     }
-    let expected = bundle.bundleURL().path().ok_or("无法读取应用路径。")?;
+    let expected = bundle.bundleURL().path().ok_or(Text::AppPath)?;
     let registered = NSWorkspace::sharedWorkspace()
         .URLForApplicationWithBundleIdentifier(&NSString::from_str(snip2pin::APP_ID))
         .and_then(|url| url.path())
-        .ok_or("系统未登记当前应用标识。".to_owned())?;
+        .ok_or(Text::AppUnregistered)?;
     let canonical = |path: &NSString| {
         std::fs::canonicalize(path.to_string()).map_err(|error| error.to_string())
     };
     if canonical(&expected)? != canonical(&registered)? {
-        return Err("系统登记指向了另一份应用，安装未完成。".into());
+        return Err(Text::AppRegistration.into());
     }
     Ok(())
 }
 
-pub fn check_identity_migration(target: &Path) -> Result<(), String> {
-    let _thread = MainThreadMarker::new().ok_or("身份迁移检查必须在主线程运行。")?;
+pub fn check_identity_migration(target: &Path) -> Result<(), Message> {
+    let _thread = MainThreadMarker::new().ok_or(Text::UiThread)?;
     let target = target.canonicalize().map_err(|error| error.to_string())?;
     for app in NSWorkspace::sharedWorkspace().runningApplications() {
         if app.isTerminated() {
@@ -55,7 +56,7 @@ pub fn check_identity_migration(target: &Path) -> Result<(), String> {
             .bundleIdentifier()
             .is_some_and(|id| id.to_string() == "com.apple.systempreferences")
         {
-            return Err("请先完全退出系统设置，再迁移应用标识，避免授权页缓存旧身份。日常更新不需要此步骤。".into());
+            return Err(Text::QuitSettings.into());
         }
         if app
             .bundleURL()
@@ -64,7 +65,7 @@ pub fn check_identity_migration(target: &Path) -> Result<(), String> {
                 std::fs::canonicalize(path.to_string()).is_ok_and(|path| path == target)
             })
         {
-            return Err("请先从菜单栏退出 Snip2Pin，再迁移应用标识。".into());
+            return Err(Text::QuitApp.into());
         }
     }
     Ok(())

@@ -20,6 +20,7 @@ fn app() -> Snip2Pin {
         pin_drag: platform::macos_drag::DragEvents::default(),
         next_pin: 0,
         message: None,
+        system_locale: Locale::Chinese,
         shortcut: None,
         preferences: Preferences::default(),
         applied_icon: None,
@@ -38,6 +39,73 @@ fn app() -> Snip2Pin {
         permission: ScreenPermission::default(),
         relaunch: Arc::new(Mutex::new(None)),
     }
+}
+
+#[test]
+fn language_changes_preserve_pins_preferences_and_retranslate_existing_messages() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let directory = tempfile::tempdir().expect("isolated settings");
+    app.config_path = Some(directory.path().join("preferences.toml"));
+    app.preferences.theme = settings::Theme::Dark;
+    app.preferences.icon = settings::Icon::Metal;
+    let original = app.preferences;
+    let pixels = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    app.message = Some(Text::ShortcutError.context(Text::ShortcutModifiers.into()));
+    for (language, locale) in [
+        (Language::English, Locale::English),
+        (Language::Chinese, Locale::Chinese),
+        (Language::System, Locale::Chinese),
+    ] {
+        app.change_language(language, &ctx);
+        assert_eq!(i18n::locale(&ctx), locale);
+        assert_eq!(
+            app.preferences,
+            Preferences {
+                language,
+                ..original
+            }
+        );
+        assert_eq!(
+            Preferences::load(app.config_path.as_ref().expect("path")).expect("saved"),
+            app.preferences
+        );
+        assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
+        assert_eq!(app.pins[&1].initial, initial);
+        let message = app
+            .message
+            .as_ref()
+            .expect("existing message")
+            .render(locale);
+        assert!(message.contains(locale.text(Text::ShortcutModifiers)));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        output.textures_delta.clear();
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .flat_map(|viewport| &viewport.commands)
+                .any(|command| matches!(
+                    command,
+                    ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                ))
+        );
+    }
+}
+
+#[test]
+fn failed_language_save_keeps_the_previous_language() {
+    let ctx = egui::Context::default();
+    i18n::set_locale(&ctx, Locale::Chinese);
+    let mut app = app();
+    let directory = tempfile::tempdir().expect("isolated directory");
+    app.config_path = Some(directory.path().to_owned());
+    app.change_language(Language::English, &ctx);
+    assert_eq!(app.preferences.language, Language::System);
+    assert_eq!(i18n::locale(&ctx), Locale::Chinese);
+    assert!(app.message.is_some());
 }
 
 #[test]
@@ -80,7 +148,13 @@ fn capture_failure_is_visible_even_if_home_was_closed() {
     let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         app.accept_capture(id, Err("generated backend failure".into()), None, ctx);
     });
-    assert_eq!(app.message.as_deref(), Some("generated backend failure"));
+    assert_eq!(
+        app.message
+            .as_ref()
+            .map(|message| message.render(Locale::English))
+            .as_deref(),
+        Some("generated backend failure")
+    );
     assert!(app.home_visible);
     assert!(matches!(app.phase, Phase::Idle));
     assert!(output.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(true)));
@@ -131,8 +205,8 @@ fn oversized_capture_shows_an_error_without_uploading_or_crashing() {
     assert!(app.layers.is_empty());
     assert!(
         app.message
-            .as_deref()
-            .is_some_and(|message| message.contains("128"))
+            .as_ref()
+            .is_some_and(|message| message.render(Locale::English).contains("128"))
     );
     assert!(app.home_visible);
 }

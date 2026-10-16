@@ -1,4 +1,5 @@
 use super::Snapshot;
+use crate::i18n::{Message, Text};
 use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -25,11 +26,11 @@ pub struct Worker {
 
 impl Worker {
     pub fn new(
-        mut capture: impl FnMut(Option<[f32; 2]>, &AtomicBool) -> Result<Vec<Snapshot>, String>
+        mut capture: impl FnMut(Option<[f32; 2]>, &AtomicBool) -> Result<Vec<Snapshot>, Message>
         + Send
         + 'static,
-        deliver: impl Fn(u64, Result<Vec<Snapshot>, String>) + Send + 'static,
-    ) -> Result<Self, String> {
+        deliver: impl Fn(u64, Result<Vec<Snapshot>, Message>) + Send + 'static,
+    ) -> Result<Self, Message> {
         let shared = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         let thread_state = shared.clone();
         std::thread::Builder::new()
@@ -56,7 +57,7 @@ impl Worker {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             capture(job.origin, &job.cancelled)
                         }))
-                        .unwrap_or_else(|_| Err("截图后端异常结束。".into()));
+                        .unwrap_or_else(|_| Err(Text::CaptureBackendCrashed.into()));
                         if !job.cancelled.load(Ordering::Acquire) {
                             deliver(job.id, result);
                         }
@@ -70,9 +71,9 @@ impl Worker {
         Ok(Self { shared })
     }
 
-    pub fn request(&self, id: u64, origin: Option<[f32; 2]>) -> Result<(), String> {
+    pub fn request(&self, id: u64, origin: Option<[f32; 2]>) -> Result<(), Message> {
         let (queue, ready) = &*self.shared;
-        let mut state = queue.lock().map_err(|_| "截图任务状态不可用。")?;
+        let mut state = queue.lock().map_err(|_| Text::CaptureQueueError)?;
         state.pending = Some(Job {
             id,
             origin,

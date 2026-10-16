@@ -105,8 +105,8 @@ pub struct DragEvents {
 
 impl DragEvents {
     #[allow(unsafe_code)]
-    pub fn install() -> Result<Self, String> {
-        let main = MainThreadMarker::new().ok_or("原生拖动必须在主线程初始化。")?;
+    pub fn install() -> Result<Self, snip2pin::i18n::Message> {
+        let main = MainThreadMarker::new().ok_or(snip2pin::i18n::Text::UiThread)?;
         let mut events = Self::default();
         let pending = events.pending.clone();
         let handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
@@ -126,7 +126,7 @@ impl DragEvents {
                     &handler,
                 )
             }
-            .ok_or("无法为贴图初始化原生拖动。")?,
+            .ok_or(snip2pin::i18n::Text::NativeDragError)?,
         );
         Ok(events)
     }

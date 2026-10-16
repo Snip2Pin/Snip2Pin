@@ -1,3 +1,4 @@
+use snip2pin::i18n::{Locale, Message, Text};
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -16,12 +17,17 @@ pub enum Action {
 pub struct Tray {
     _icon: TrayIcon,
     capture: MenuItem,
+    home: MenuItem,
     close_pins: MenuItem,
-    state: Option<(bool, bool, bool)>,
+    quit: MenuItem,
+    state: Option<(Locale, bool, bool, bool)>,
 }
 
 impl Tray {
-    pub fn new(callback: impl Fn(Action) + Send + Sync + 'static) -> Result<Self, String> {
+    pub fn new(
+        locale: Locale,
+        callback: impl Fn(Action) + Send + Sync + 'static,
+    ) -> Result<Self, Message> {
         // Pin menus share this route even when the desktop has no tray host.
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if let Some(action) = action(event.id.as_ref()) {
@@ -48,14 +54,14 @@ impl Tray {
                 .name_has_owner(name)
                 .map_err(|error| error.to_string())?
             {
-                return Err("桌面未提供 StatusNotifier 托盘，应用将保留主页。".into());
+                return Err(Text::NoTrayHost.into());
             }
         }
         let menu = Menu::new();
-        let home = MenuItem::with_id("home", "打开主页", true, None);
-        let capture = MenuItem::with_id("capture", "截图并置顶", true, None);
-        let close_pins = MenuItem::with_id("close-pins", "关闭全部贴图", false, None);
-        let quit = MenuItem::with_id("quit", "退出 Snip2Pin", true, None);
+        let home = MenuItem::with_id("home", locale.text(Text::Home), true, None);
+        let capture = MenuItem::with_id("capture", locale.text(Text::Capture), true, None);
+        let close_pins = MenuItem::with_id("close-pins", locale.text(Text::ClosePins), false, None);
+        let quit = MenuItem::with_id("quit", locale.text(Text::Quit), true, None);
         menu.append_items(&[
             &home,
             &capture,
@@ -83,23 +89,28 @@ impl Tray {
         Ok(Self {
             _icon: icon,
             capture,
+            home,
             close_pins,
+            quit,
             state: None,
         })
     }
 
-    pub fn update(&mut self, capture: bool, has_pins: bool, capturing: bool) {
-        if self.state == Some((capture, has_pins, capturing)) {
+    pub fn update(&mut self, locale: Locale, capture: bool, has_pins: bool, capturing: bool) {
+        if self.state == Some((locale, capture, has_pins, capturing)) {
             return;
         }
         self.capture.set_enabled(capture);
-        self.capture.set_text(if capturing {
-            "取消截图"
+        self.home.set_text(locale.text(Text::Home));
+        self.close_pins.set_text(locale.text(Text::ClosePins));
+        self.quit.set_text(locale.text(Text::Quit));
+        self.capture.set_text(locale.text(if capturing {
+            Text::CancelCapture
         } else {
-            "截图并置顶"
-        });
+            Text::Capture
+        }));
         self.close_pins.set_enabled(has_pins);
-        self.state = Some((capture, has_pins, capturing));
+        self.state = Some((locale, capture, has_pins, capturing));
     }
 }
 

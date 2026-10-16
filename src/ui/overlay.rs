@@ -95,24 +95,32 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
             return selected.map(Action::Select);
         }
     }
-    let hint_size = egui::Vec2::from(OVERLAY.hint_size);
-    let hint = Rect::from_center_size(
-        Pos2::new(
-            bounds.center().x,
-            bounds.min.y + OVERLAY.hint_top + hint_size.y / 2.0,
-        ),
-        hint_size,
-    );
     if active && selection.start.is_none() {
-        ui.painter()
-            .rect_filled(hint, OVERLAY.hint_radius, OVERLAY.hint_fill);
-        ui.painter().text(
-            hint.center(),
-            egui::Align2::CENTER_CENTER,
-            "拖动框选区域，松手置顶 · Esc 取消",
+        let padding = egui::Vec2::from(OVERLAY.hint_padding);
+        let width = OVERLAY.hint_size[0].min(bounds.width());
+        let galley = ui.painter().layout(
+            crate::i18n::locale(ui.ctx())
+                .text(crate::i18n::Text::SelectionHelp)
+                .into(),
             egui::FontId::proportional(OVERLAY.hint_font),
             Color32::WHITE,
+            (width - padding.x * 2.0).max(1.0),
         );
+        let hint_size = egui::vec2(
+            width,
+            (galley.size().y + padding.y * 2.0).max(OVERLAY.hint_size[1]),
+        );
+        let hint = Rect::from_min_size(
+            Pos2::new(
+                bounds.center().x - width / 2.0,
+                bounds.min.y + OVERLAY.hint_top,
+            ),
+            hint_size,
+        );
+        ui.painter()
+            .rect_filled(hint, OVERLAY.hint_radius, OVERLAY.hint_fill);
+        ui.painter()
+            .galley(hint.center() - galley.size() / 2.0, galley, Color32::WHITE);
     }
     activate.then_some(Action::Activate)
 }
@@ -120,6 +128,50 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translated_selection_hint_wraps_inside_narrow_screens() {
+        for locale in [crate::i18n::Locale::English, crate::i18n::Locale::Chinese] {
+            for width in [180.0, 340.0, 1000.0] {
+                let ctx = egui::Context::default();
+                crate::i18n::set_locale(&ctx, locale);
+                let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 600.0));
+                let mut selection = Selection {
+                    texture: ctx.load_texture(
+                        "generated",
+                        egui::ColorImage::filled([2, 2], Color32::BLACK),
+                        Default::default(),
+                    ),
+                    pixels: [2, 2],
+                    pixel_step: [1, 1],
+                    start: None,
+                    focus_requested: true,
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(ui, &mut selection, true);
+                    },
+                );
+                output.textures_delta.clear();
+                let shape = output.shapes.iter().find(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == locale.text(crate::i18n::Text::SelectionHelp))).expect("complete translated hint");
+                assert!(
+                    bounds
+                        .expand(1.0)
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+                assert!(
+                    shape
+                        .clip_rect
+                        .expand(1.0)
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+            }
+        }
+    }
 
     #[test]
     fn preview_outline_and_released_crop_share_the_native_pixel_grid() {

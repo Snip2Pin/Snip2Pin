@@ -1,3 +1,5 @@
+use crate::i18n::{Message, Text};
+
 pub const WINDOW_SIZE: u32 = 64;
 pub const DOCK_SIZE: u32 = 256;
 pub const EXPORT_SIZE: u32 = 1024;
@@ -26,12 +28,12 @@ impl Variant {
 }
 
 /// Load the LFS-managed PNG used by the application.
-pub fn render(variant: Variant, size: u32) -> Result<image::RgbaImage, String> {
+pub fn render(variant: Variant, size: u32) -> Result<image::RgbaImage, Message> {
     if size == 0 {
         return Err("Invalid icon size".into());
     }
     let image = image::load_from_memory(variant.png())
-        .map_err(|error| format!("图标资源无效，请先运行 git lfs pull：{error}"))?
+        .map_err(|error| Text::InvalidIcon.with(error))?
         .to_rgba8();
     if image.width() == size && image.height() == size {
         return Ok(image);
@@ -45,15 +47,15 @@ pub fn render(variant: Variant, size: u32) -> Result<image::RgbaImage, String> {
 }
 
 /// Regenerate PNG assets from their editable SVG sources.
-pub fn render_vector(variant: Variant, size: u32) -> Result<image::RgbaImage, String> {
+pub fn render_vector(variant: Variant, size: u32) -> Result<image::RgbaImage, Message> {
     render_svg(variant.svg(), size)
 }
 
-pub fn status() -> Result<image::RgbaImage, String> {
+pub fn status() -> Result<image::RgbaImage, Message> {
     render_svg(include_str!("../assets/icons/status.svg"), STATUS_SIZE)
 }
 
-fn render_svg(svg: &str, size: u32) -> Result<image::RgbaImage, String> {
+fn render_svg(svg: &str, size: u32) -> Result<image::RgbaImage, Message> {
     let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
         .map_err(|error| error.to_string())?;
     let mut pixmap =
@@ -74,5 +76,5 @@ fn render_svg(svg: &str, size: u32) -> Result<image::RgbaImage, String> {
             [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
         })
         .collect();
-    image::RgbaImage::from_raw(size, size, rgba).ok_or_else(|| "Invalid icon pixels".to_owned())
+    image::RgbaImage::from_raw(size, size, rgba).ok_or_else(|| "Invalid icon pixels".into())
 }
