@@ -51,6 +51,29 @@ fn dispatch_pin(
         ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
         ui::pin::Action::MenuPin(id) => Event::MenuPin(id, menu_position),
         ui::pin::Action::ToggleLock(id) => Event::ToggleLock(id),
+        ui::pin::Action::Zoom(id, commands) => {
+            let observed = (ctx.viewport_id() == pin_id(id))
+                .then(|| {
+                    ctx.native_pixels_per_point()
+                        .map(|scale| (ctx.content_rect().size() * ctx.zoom_factor(), scale))
+                })
+                .flatten();
+            Event::ZoomPin(id, commands, observed)
+        }
+        ui::pin::Action::Move(id, steps) => {
+            let observed = (ctx.viewport_id() == pin_id(id))
+                .then(|| {
+                    ctx.input(|input| {
+                        input
+                            .viewport()
+                            .outer_rect
+                            .zip(input.viewport().native_pixels_per_point)
+                    })
+                    .map(|(rect, scale)| (rect.min * ctx.zoom_factor(), scale))
+                })
+                .flatten();
+            Event::MovePin(id, steps, observed)
+        }
     };
     let _ = events.send(event);
     ctx.request_repaint_of(ViewportId::ROOT);
@@ -66,6 +89,8 @@ pub enum Event {
     CopyPin(u64),
     ClosePin(u64),
     ToggleLock(u64),
+    ZoomPin(u64, Vec<pin::Zoom>, Option<(egui::Vec2, f32)>),
+    MovePin(u64, [i32; 2], Option<(egui::Pos2, f32)>),
     MenuPin(u64, Option<egui::Pos2>),
     ClosePinMenu,
     Tray(crate::tray::Action),
@@ -99,7 +124,6 @@ struct Pin {
     session: u64,
     ready: Arc<AtomicBool>,
     locked: bool,
-    highlight_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     presented: Cell<bool>,
 }
@@ -132,7 +156,6 @@ pub struct Snip2Pin {
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
     pin_menu: Option<PinMenu>,
-    selected_pin: Option<u64>,
     quit_confirmation: Option<QuitConfirmation>,
     next_quit_request: u64,
     #[cfg(target_os = "macos")]
@@ -305,7 +328,6 @@ impl Snip2Pin {
             active_display: None,
             pins: BTreeMap::new(),
             pin_menu: None,
-            selected_pin: None,
             quit_confirmation: None,
             next_quit_request: 0,
             #[cfg(target_os = "macos")]
@@ -466,6 +488,7 @@ impl Snip2Pin {
             Action::CopyPin(id) => self.copy_pin(id, ctx),
             Action::ClosePin(id) => self.close_pin(id, ctx),
             Action::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
+            Action::RestorePin(id) => self.zoom_pin(id, &[pin::Zoom::Original], None, ctx),
             Action::ClosePins => {
                 self.close_pins(ctx);
                 if matches!(
@@ -501,10 +524,6 @@ impl Snip2Pin {
                             QuitPresentation::AwaitingHost
                         },
                     });
-                    ctx.send_viewport_cmd_to(
-                        ViewportId::ROOT,
-                        ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop),
-                    );
                     self.tray_action(Action::Home, ctx);
                 } else {
                     self.quit(ctx);
@@ -684,6 +703,8 @@ impl Snip2Pin {
             return;
         }
         if let overlay::Action::Select(rect) = action
+            && rect.width >= geometry::MIN_IMAGE_PIXELS
+            && rect.height >= geometry::MIN_IMAGE_PIXELS
             && let Some(snapshot) = snapshots.iter().find(|shot| shot.display.id == display_id)
             && let Some(pixels) = capture::crop(&snapshot.pixels, rect)
         {
@@ -753,7 +774,6 @@ impl Snip2Pin {
                     session: id,
                     ready: Arc::new(AtomicBool::new(false)),
                     locked: false,
-                    highlight_until: None,
                     #[cfg(target_os = "macos")]
                     presented: Cell::new(false),
                 },
@@ -818,9 +838,6 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
             }
         }
-        if self.selected_pin == Some(id) {
-            self.selected_pin = None;
-        }
         if matches!(&self.phase, Phase::Selecting { pending_pin: Some(pending), .. } if *pending == id)
         {
             self.restore(ctx);
@@ -852,21 +869,87 @@ impl Snip2Pin {
     }
 
     fn select_pin(&mut self, id: u64, ctx: &egui::Context) {
-        let Some(pin) = self.pins.get_mut(&id) else {
+        if !self.pins.contains_key(&id) {
             return;
-        };
-        self.selected_pin = Some(id);
-        pin.highlight_until = Some(Instant::now() + ui::style::PIN.highlight_duration);
-        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Minimized(false));
-        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Focus);
-        #[cfg(target_os = "macos")]
+        }
         if !self.demo
-            && let Err(error) = platform::focus_pin(id)
+            && let Err(error) = platform::pin_window::activate(id)
         {
             self.message = Some(error);
         }
         ctx.request_repaint_of(pin_id(id));
+    }
+
+    fn zoom_pin(
+        &mut self,
+        id: u64,
+        commands: &[pin::Zoom],
+        observed: Option<(egui::Vec2, f32)>,
+        ctx: &egui::Context,
+    ) {
+        let Some(pin) = self
+            .pins
+            .get(&id)
+            .filter(|pin| !pin.locked && !commands.is_empty())
+        else {
+            return;
+        };
+        let zoom = ctx.zoom_factor();
+        let geometry = observed.or_else(|| {
+            ctx.input(|input| {
+                let viewport = input.raw.viewports.get(&pin_id(id))?;
+                let scale = viewport.native_pixels_per_point?;
+                let current = match viewport.inner_rect {
+                    Some(rect) => rect.size() * zoom,
+                    // Restoring source size does not need a global position.
+                    None if commands.first() == Some(&pin::Zoom::Original) => {
+                        egui::vec2(pin.pixels.size[0] as f32, pin.pixels.size[1] as f32) / scale
+                    }
+                    None => return None,
+                };
+                Some((current, scale))
+            })
+        });
+        if let Some((current, scale)) = geometry
+            && let Some(size) = commands.iter().try_fold(current, |size, &command| {
+                pin::zoom_size(size, pin.pixels.size, scale, command)
+            })
+        {
+            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::InnerSize(size / zoom));
+        }
+        self.close_pin_menu(ctx);
+    }
+
+    fn move_pin(
+        &self,
+        id: u64,
+        steps: [i32; 2],
+        observed: Option<(egui::Pos2, f32)>,
+        ctx: &egui::Context,
+    ) {
+        if !self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+            return;
+        }
+        let zoom = ctx.zoom_factor();
+        let geometry = observed.or_else(|| {
+            ctx.input(|input| {
+                let viewport = input.raw.viewports.get(&pin_id(id))?;
+                Some((
+                    viewport.outer_rect?.min * zoom,
+                    viewport.native_pixels_per_point?,
+                ))
+            })
+        });
+        if let Some((position, scale)) = geometry
+            && position.is_finite()
+            && let Some(delta) = pin::movement_delta(steps, scale)
+            && (position + delta).is_finite()
+        {
+            ctx.send_viewport_cmd_to(
+                pin_id(id),
+                ViewportCommand::OuterPosition((position + delta) / zoom),
+            );
+        }
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
@@ -883,11 +966,10 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
             }
         }
-        self.selected_pin = None;
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
     }
 
-    fn cancel_quit(&mut self, ctx: &egui::Context) {
+    fn cancel_quit(&mut self) {
         // Invalidate the request before dropping a sheet: dismissal may deliver
         // its completion synchronously, but that queued result is now stale.
         let _ = self.quit_confirmation.take();
@@ -895,10 +977,6 @@ impl Snip2Pin {
         if let Some(dock) = &self.dock {
             dock.resolve_quit(false);
         }
-        ctx.send_viewport_cmd_to(
-            ViewportId::ROOT,
-            ViewportCommand::WindowLevel(egui::WindowLevel::Normal),
-        );
         if let Ok(mut command) = self.relaunch.lock() {
             command.take();
         }
@@ -915,7 +993,7 @@ impl Snip2Pin {
             return;
         }
         if self.tray.is_some() {
-            self.cancel_quit(ctx);
+            self.cancel_quit();
             self.home_visible = false;
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
@@ -936,7 +1014,7 @@ impl Snip2Pin {
         }
         match result {
             Ok(true) => self.quit(ctx),
-            Ok(false) => self.cancel_quit(ctx),
+            Ok(false) => self.cancel_quit(),
             Err(error) => {
                 pending.presentation = QuitPresentation::Fallback;
                 self.message = Some(error);
@@ -1107,6 +1185,15 @@ impl Snip2Pin {
     }
 
     fn update_icon(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        if self.preferences.icon == settings::Icon::Auto
+            && self.preferences.theme == settings::Theme::System
+            && ctx.system_theme().is_none()
+        {
+            // A logic-only startup pass has no theme yet. Keep the bundle icon
+            // until the normal theme event supplies an authoritative choice.
+            return;
+        }
         let variant = self.preferences.icon_variant(ctx.system_theme());
         if self.applied_icon == Some(variant) {
             return;
@@ -1249,7 +1336,15 @@ impl Snip2Pin {
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
             let locked = pin.locked;
-            let highlight_until = pin.highlight_until;
+            let native_scale = ctx
+                .input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&pin_id(id))
+                        .and_then(|viewport| viewport.native_pixels_per_point)
+                })
+                .unwrap_or(display_scale);
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
@@ -1260,6 +1355,11 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
+                .with_min_inner_size(
+                    pin::minimum_size(native_scale)
+                        .unwrap_or(egui::Vec2::splat(geometry::MIN_IMAGE_PIXELS as f32))
+                        / ctx.zoom_factor(),
+                )
                 .with_resizable(!locked)
                 .with_always_on_top()
                 .with_active(false)
@@ -1351,19 +1451,24 @@ impl Snip2Pin {
                         ctx.send_viewport_cmd(command);
                     },
                 );
-                if let Some(remaining) =
-                    highlight_until.and_then(|until| until.checked_duration_since(Instant::now()))
-                {
+                if pin_focused(&ctx, id) {
                     ui.painter().rect_stroke(
                         ui.max_rect(),
                         0,
                         egui::Stroke::new(
-                            ui::style::PIN.highlight_stroke,
+                            ui::style::PIN.highlight_stroke_pixels / ctx.pixels_per_point(),
                             ui::style::PIN.highlight,
                         ),
                         egui::StrokeKind::Inside,
                     );
-                    ctx.request_repaint_after_for(remaining, pin_id(id));
+                }
+                if ui.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::WindowFocused(_)))
+                }) {
+                    ctx.request_repaint_of(ViewportId::ROOT);
                 }
                 if hovered && let Some(row) = controls {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
@@ -1467,7 +1572,11 @@ impl eframe::App for Snip2Pin {
                 }
                 Event::ClosePin(id) => self.close_pin(id, ctx),
                 Event::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
+                Event::ZoomPin(id, commands, observed) => {
+                    self.zoom_pin(id, &commands, observed, ctx)
+                }
                 Event::MenuPin(id, anchor) => self.open_pin_menu(id, anchor, ctx),
+                Event::MovePin(id, steps, observed) => self.move_pin(id, steps, observed, ctx),
                 Event::ClosePinMenu => self.close_pin_menu(ctx),
                 Event::Tray(action) => self.tray_action(action, ctx),
                 Event::QuitDecision(id, outcome) => self.quit_decision(id, outcome, ctx),
@@ -1523,7 +1632,7 @@ impl eframe::App for Snip2Pin {
                 texture: &pin.texture,
                 size: pin.pixels.size,
                 locked: pin.locked,
-                selected: self.selected_pin == Some(id),
+                selected: pin_focused(&ctx, id),
             })
             .collect::<Vec<_>>();
         let action = ui
@@ -1583,7 +1692,7 @@ impl eframe::App for Snip2Pin {
                 let mut confirm = false;
                 ui.horizontal(|ui| {
                     if ui.button(locale.text(Text::Cancel)).clicked() {
-                        self.cancel_quit(&ctx);
+                        self.cancel_quit();
                     }
                     if ui.button(locale.text(Text::QuitConfirm)).clicked() {
                         confirm = true;
@@ -1594,7 +1703,7 @@ impl eframe::App for Snip2Pin {
             if response.inner {
                 self.quit(&ctx);
             } else if response.should_close() {
-                self.cancel_quit(&ctx);
+                self.cancel_quit();
             }
         }
         if self.recording && self.quit_confirmation.is_none() {
@@ -1616,6 +1725,17 @@ impl eframe::App for Snip2Pin {
 
 fn layer_id(display_id: u32) -> ViewportId {
     ViewportId::from_hash_of(("selection", display_id))
+}
+
+fn pin_focused(ctx: &egui::Context, id: u64) -> bool {
+    ctx.input(|input| {
+        input
+            .raw
+            .viewports
+            .get(&pin_id(id))
+            .and_then(|viewport| viewport.focused)
+            == Some(true)
+    })
 }
 
 fn texture(ctx: &egui::Context, name: &str, pixels: &image::RgbaImage) -> TextureHandle {

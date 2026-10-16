@@ -71,6 +71,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .with_title(snip2pin::APP_NAME)
             .with_app_id(snip2pin::APP_ID)
             .with_inner_size(ui::style::LAUNCHER.window)
+            .with_window_level(eframe::egui::WindowLevel::AlwaysOnTop)
             .with_transparent(true)
             // Bootstrap transparent capture viewports before hiding the root;
             // eframe cannot create child windows in a logic-only hidden pass.
@@ -78,15 +79,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .with_has_shadow(!background)
             .with_active(!background)
             .with_mouse_passthrough(background)
-            .with_icon(eframe::egui::IconData {
-                rgba: snip2pin::icon::render(
-                    snip2pin::icon::Variant::Line,
-                    snip2pin::icon::WINDOW_SIZE,
-                )?
-                .into_raw(),
-                width: snip2pin::icon::WINDOW_SIZE,
-                height: snip2pin::icon::WINDOW_SIZE,
-            })
+            .with_icon(startup_window_icon()?)
             .with_resizable(false),
         centered: true,
         ..Default::default()
@@ -106,4 +99,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         command.spawn()?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn startup_window_icon() -> Result<eframe::egui::IconData, snip2pin::i18n::Message> {
+    // eframe treats Some(empty) as "keep the bundle icon". None would install
+    // its own fallback. Runtime choices use our owned-buffer AppKit adapter.
+    Ok(eframe::egui::IconData::default())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn startup_window_icon() -> Result<eframe::egui::IconData, snip2pin::i18n::Message> {
+    Ok(eframe::egui::IconData {
+        rgba: snip2pin::icon::render(snip2pin::icon::Variant::Line, snip2pin::icon::WINDOW_SIZE)?
+            .into_raw(),
+        width: snip2pin::icon::WINDOW_SIZE,
+        height: snip2pin::icon::WINDOW_SIZE,
+    })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    fn macos_startup_preserves_the_bundle_icon_until_the_native_preference_update() {
+        let icon = super::startup_window_icon().expect("startup icon");
+        assert_eq!(
+            icon,
+            eframe::egui::IconData::default(),
+            "a nonempty startup icon schedules an eframe Dock override before preferences apply"
+        );
+    }
 }

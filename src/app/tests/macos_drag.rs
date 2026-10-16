@@ -43,7 +43,6 @@ impl Fixture {
             session: pin.session,
             ready: Arc::new(AtomicBool::new(false)),
             locked: false,
-            highlight_until: None,
             presented: Cell::new(false),
         };
         app.pins.insert(2, second);

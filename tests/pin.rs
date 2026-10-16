@@ -1,7 +1,10 @@
 use eframe::egui::{self, Rect};
 use snip2pin::{
-    geometry::Placement,
-    pin::{Control, METRICS, coordinate_ratio, frame_geometry, toolbar_geometry},
+    geometry::{MIN_IMAGE_PIXELS, Placement},
+    pin::{
+        Control, METRICS, Zoom, coordinate_ratio, frame_geometry, minimum_size, movement_delta,
+        toolbar_geometry, zoom_size,
+    },
 };
 
 fn area() -> Rect {
@@ -234,7 +237,7 @@ fn full_controls_on_another_display_take_priority_over_a_nearer_partial_row() {
 fn initial_fitting_never_enlarges_small_images_to_make_room_for_controls() {
     let screen = area();
     for (size, count) in [
-        ([1.0, 1.0], 0),
+        ([2.0, 2.0], 0),
         ([12.0, 120.0], 0),
         ([26.0, 72.0], 1),
         ([56.0, 26.0], 2),
@@ -262,4 +265,140 @@ fn viewport_coordinate_conversion_keeps_native_and_capture_units_distinct() {
         2.0 / 3.0
     };
     assert_eq!(ratio, expected);
+}
+
+#[test]
+fn keyboard_zoom_preserves_aspect_and_enforces_the_physical_pixel_minimum() {
+    for scale in [1.0_f32, 1.25, 1.5, 2.0, 3.0] {
+        for pixels in [
+            [1, 1],
+            [1, 120],
+            [120, 1],
+            [2, 2],
+            [2, 120],
+            [3, 7],
+            [400, 300],
+        ] {
+            let original = egui::vec2(pixels[0] as f32, pixels[1] as f32);
+            let step = if cfg!(target_os = "macos") {
+                1.0
+            } else {
+                scale.recip()
+            };
+            let minimum = (MIN_IMAGE_PIXELS as f32 / scale).max(step);
+            let current = original / scale;
+            let grown = zoom_size(current, pixels, scale, Zoom::In).expect("valid zoom in");
+            assert!(grown.min_elem() + f32::EPSILON >= current.min_elem() + step);
+            assert!(grown.min_elem() * scale + f32::EPSILON >= MIN_IMAGE_PIXELS as f32);
+            let factors = grown / current;
+            assert!((factors.x - factors.y).abs() <= f32::EPSILON * factors.max_elem());
+            let shrunk = zoom_size(current, pixels, scale, Zoom::Out).expect("valid zoom out");
+            assert!(shrunk.min_elem() + f32::EPSILON >= minimum);
+            let factors = shrunk / current;
+            assert!((factors.x - factors.y).abs() <= f32::EPSILON * factors.max_elem());
+            assert_eq!(
+                zoom_size(grown, pixels, scale, Zoom::Original),
+                Some(original / scale * (MIN_IMAGE_PIXELS as f32 / original.min_elem()).max(1.0))
+            );
+            let mut repeatedly_shrunk = grown;
+            for _ in 0..60 {
+                repeatedly_shrunk = zoom_size(repeatedly_shrunk, pixels, scale, Zoom::Out)
+                    .expect("repeated shrink stays finite");
+            }
+            assert!(repeatedly_shrunk.min_elem() + f32::EPSILON >= minimum);
+        }
+    }
+}
+
+#[test]
+fn keyboard_zoom_uses_the_native_size_quantum_on_a_retina_display() {
+    let current = egui::vec2(1.0, 80.0);
+    let grown = zoom_size(current, [2, 160], 2.0, Zoom::In).expect("retina zoom in");
+    let expected_short_edge = if cfg!(target_os = "macos") { 2.0 } else { 1.5 };
+    assert!(grown.x >= expected_short_edge);
+    assert_eq!(grown.y / grown.x, current.y / current.x);
+    assert_eq!(
+        zoom_size(current, [1, 120], 2.0, Zoom::Original),
+        Some(egui::vec2(1.0, 120.0)),
+        "an undersized original must grow both axes together to two physical pixels"
+    );
+}
+
+#[test]
+fn keyboard_zoom_rejects_invalid_or_overflowing_geometry() {
+    for command in [Zoom::In, Zoom::Out, Zoom::Original] {
+        for current in [
+            egui::vec2(0.0, 1.0),
+            egui::vec2(-1.0, 2.0),
+            egui::vec2(f32::NAN, 1.0),
+            egui::vec2(1.0, f32::INFINITY),
+        ] {
+            assert_eq!(zoom_size(current, [1, 1], 1.0, command), None);
+        }
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                zoom_size(egui::Vec2::splat(1.0), [1, 1], scale, command),
+                None
+            );
+        }
+        for pixels in [[0, 1], [1, 0]] {
+            assert_eq!(
+                zoom_size(egui::Vec2::splat(1.0), pixels, 1.0, command),
+                None
+            );
+        }
+    }
+    assert_eq!(
+        zoom_size(egui::Vec2::splat(f32::MAX), [1, 1], 1.0, Zoom::In),
+        None
+    );
+}
+
+#[test]
+fn keyboard_movement_steps_use_native_units_at_each_display_scale() {
+    for scale in [1.0_f32, 1.25, 1.5, 2.0, 3.0] {
+        let step = if cfg!(target_os = "macos") {
+            1.0
+        } else {
+            scale.recip()
+        };
+        for steps in [[-1, 0], [1, 0], [0, -1], [0, 1], [-3, 2]] {
+            let expected = egui::vec2(steps[0] as f32, steps[1] as f32) * step;
+            assert_eq!(movement_delta(steps, scale), Some(expected));
+        }
+        assert_eq!(movement_delta([0, 0], scale), None);
+    }
+}
+
+#[test]
+fn keyboard_movement_rejects_invalid_scales_without_an_origin_guess() {
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(movement_delta([1, -1], scale), None);
+    }
+}
+
+#[test]
+fn minimum_window_size_tracks_two_physical_pixels_at_each_dpi() {
+    assert_eq!(MIN_IMAGE_PIXELS, 2);
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let minimum = minimum_size(scale).expect("valid native scale");
+        assert_eq!(minimum, egui::Vec2::splat(MIN_IMAGE_PIXELS as f32 / scale));
+        assert!((minimum.x * scale - MIN_IMAGE_PIXELS as f32).abs() <= f32::EPSILON);
+    }
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::MIN_POSITIVE / 4.0] {
+        assert_eq!(minimum_size(scale), None);
+    }
+}
+
+#[test]
+fn restoring_legal_originals_preserves_one_to_one_pixels_and_aspect() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        for pixels in [[2, 2], [2, 120], [120, 2], [640, 480]] {
+            let expected = egui::vec2(pixels[0] as f32, pixels[1] as f32) / scale;
+            assert_eq!(
+                zoom_size(egui::vec2(300.0, 180.0), pixels, scale, Zoom::Original),
+                Some(expected)
+            );
+        }
+    }
 }

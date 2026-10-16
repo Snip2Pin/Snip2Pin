@@ -20,7 +20,6 @@ struct Pin {
     image: Rect,
     gesture: Option<Gesture>,
     locked: bool,
-    highlight_until: Option<f64>,
 }
 
 /// Browser-only stand-in for a desktop window manager. Native builds never use
@@ -38,7 +37,7 @@ impl Gesture {
             return self.image.translate(delta);
         };
         use ResizeDirection::*;
-        let minimum = Vec2::splat(pixels_per_point.recip());
+        let minimum = Vec2::splat(snip2pin::geometry::MIN_IMAGE_PIXELS as f32 / pixels_per_point);
         let maximum = maximum.max(minimum);
         let mut image = self.image;
         if matches!(direction, West | NorthWest | SouthWest) {
@@ -74,7 +73,8 @@ struct Sandbox {
     pins: Vec<Pin>,
     menu: Option<(u64, Pos2)>,
     next_id: u64,
-    selected_pin: Option<u64>,
+    // Simulated native focus; browser Areas do not have OS window focus.
+    focused_pin: Option<u64>,
 }
 
 impl Sandbox {
@@ -114,7 +114,7 @@ impl Sandbox {
             pins: Vec::new(),
             menu: None,
             next_id: 0,
-            selected_pin: None,
+            focused_pin: None,
         }
     }
 
@@ -137,12 +137,8 @@ impl Sandbox {
                     launcher::forget_pin_name(ui.ctx(), id);
                 }
                 self.pins.retain(|pin| pin.id != id || pin.locked);
-                if !self
-                    .pins
-                    .iter()
-                    .any(|pin| Some(pin.id) == self.selected_pin)
-                {
-                    self.selected_pin = None;
+                if !self.pins.iter().any(|pin| Some(pin.id) == self.focused_pin) {
+                    self.focused_pin = None;
                 }
                 self.menu = None;
             }
@@ -164,6 +160,34 @@ impl Sandbox {
                 );
                 self.menu = Some((id, position));
             }
+            pin_view::Action::Move(id, steps) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
+                    && let Some(delta) = pin::movement_delta(
+                        steps,
+                        ui.ctx().native_pixels_per_point().unwrap_or(1.0),
+                    )
+                {
+                    pin.image = pin.image.translate(delta / ui.ctx().zoom_factor());
+                }
+            }
+            pin_view::Action::Zoom(id, commands) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
+                    && let Some(size) = commands.iter().try_fold(
+                        pin.image.size() * ui.ctx().zoom_factor(),
+                        |size, &command| {
+                            pin::zoom_size(
+                                size,
+                                pin.texture.size(),
+                                ui.ctx().native_pixels_per_point().unwrap_or(1.0),
+                                command,
+                            )
+                        },
+                    )
+                {
+                    pin.image = Rect::from_min_size(pin.image.min, size / ui.ctx().zoom_factor());
+                }
+                self.menu = None;
+            }
         }
     }
 }
@@ -173,6 +197,24 @@ impl eframe::App for Sandbox {
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         let bounds = ui.max_rect();
+        if !ui.input(|input| input.focused) {
+            self.focused_pin = None;
+        } else if self.menu.is_none() && ui.input(|input| input.pointer.any_pressed()) {
+            self.focused_pin = ui.ctx().pointer_latest_pos().and_then(|point| {
+                self.pins
+                    .iter()
+                    .rev()
+                    .find(|pin| {
+                        pin.image.contains(point)
+                            && ui.ctx().layer_id_at(point)
+                                == Some(egui::LayerId::new(
+                                    egui::Order::Foreground,
+                                    egui::Id::new(("pin", pin.id)),
+                                ))
+                    })
+                    .map(|pin| pin.id)
+            });
+        }
         if self.recording {
             for event in ui.input(|input| input.events.clone()) {
                 if let egui::Event::Key {
@@ -245,7 +287,6 @@ impl eframe::App for Sandbox {
                             image: layout.image,
                             gesture: None,
                             locked: false,
-                            highlight_until: None,
                         });
                         self.message = Some(Text::DemoPinned.into());
                     }
@@ -276,7 +317,7 @@ impl eframe::App for Sandbox {
                 texture: &pin.texture,
                 size: pin.texture.size(),
                 locked: pin.locked,
-                selected: self.selected_pin == Some(pin.id),
+                selected: self.focused_pin == Some(pin.id),
             })
             .collect::<Vec<_>>();
         egui::Window::new("Snip2Pin")
@@ -319,13 +360,9 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
             Some(launcher::Action::SelectPin(id)) => {
                 if let Some(index) = self.pins.iter().position(|pin| pin.id == id) {
-                    let mut pin = self.pins.remove(index);
-                    pin.highlight_until = Some(
-                        ui.input(|input| input.time)
-                            + snip2pin::ui::style::PIN.highlight_duration.as_secs_f64(),
-                    );
+                    let pin = self.pins.remove(index);
                     self.pins.push(pin);
-                    self.selected_pin = Some(id);
+                    self.focused_pin = Some(id);
                     ui.ctx().move_to_top(egui::LayerId::new(
                         egui::Order::Foreground,
                         egui::Id::new(("pin", id)),
@@ -350,6 +387,9 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::Startup(enabled)) => self.startup = enabled,
             Some(launcher::Action::Language(language)) => self.preferences.language = language,
             _ => {}
+        }
+        if ui.ctx().text_edit_focused() {
+            self.focused_pin = None;
         }
         if self.menu.is_some()
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -387,24 +427,21 @@ impl eframe::App for Sandbox {
                             locked: pin.locked,
                             excluded: controls.map(|toolbar| toolbar.bounds),
                         },
-                        &|action| events.borrow_mut().push(action),
+                        &|action| {
+                            if !matches!(action, pin_view::Action::Zoom(id, _) | pin_view::Action::Move(id, _) if self.focused_pin != Some(id)) {
+                                events.borrow_mut().push(action);
+                            }
+                        },
                         |command| requested = Some(command),
                     );
-                    if let Some(until) = pin.highlight_until {
-                        let remaining = until - ui.input(|input| input.time);
-                        if remaining > 0.0 {
+                    if self.focused_pin == Some(pin.id) {
                             let style = &snip2pin::ui::style::PIN;
                             ui.painter().rect_stroke(
                                 ui.max_rect(),
                                 0,
-                                egui::Stroke::new(style.highlight_stroke, style.highlight),
+                                egui::Stroke::new(style.highlight_stroke_pixels / ui.ctx().pixels_per_point(), style.highlight),
                                 egui::StrokeKind::Inside,
                             );
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_secs_f64(
-                                    remaining,
-                                ));
-                        }
                     }
                     if hovered && let Some(row) = controls {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {

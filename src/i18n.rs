@@ -127,6 +127,7 @@ catalogue! {
     ClosePins => ("Close unlocked pins", "关闭未锁定贴图"),
     Quit => ("Quit Snip2Pin", "退出 Snip2Pin"),
     Copy => ("Copy", "复制"),
+    RestoreSize => ("Restore original size", "恢复原始尺寸"),
     Close => ("Close", "关闭"),
     Lock => ("Lock", "锁定"),
     Unlock => ("Unlock", "解锁"),

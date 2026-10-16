@@ -258,6 +258,7 @@ pub fn forget_pin_name(ctx: &egui::Context, id: u64) {
 
 fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Action> {
     let mut action = None;
+    let mut buttons = [egui::Rect::NOTHING; 2];
     let fill = if pin.selected {
         ui.visuals().selection.bg_fill
     } else {
@@ -267,8 +268,25 @@ fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Acti
         .fill(fill)
         .corner_radius(4)
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let height = LAUNCHER.pin_thumbnail[1]
+                .max(snip2pin::pin::METRICS.button)
+                .max(ui.spacing().interact_size.y);
+            let (row, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), height),
+                egui::Sense::click(),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    Text::LocatePin.with(pin.id).render(locale),
+                )
+            });
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(row)
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                |ui| {
                     let close = ui
                         .add_enabled(
                             !pin.locked,
@@ -312,39 +330,57 @@ fn pin_row(ui: &mut egui::Ui, pin: &PinEntry<'_>, locale: Locale) -> Option<Acti
                     if lock.clicked() {
                         action = Some(Action::Pin(super::pin::Action::ToggleLock(pin.id)));
                     }
+                    buttons = [lock.rect, close.rect];
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
                         let available = egui::Vec2::from(LAUNCHER.pin_thumbnail);
                         let size = egui::vec2(pin.size[0] as f32, pin.size[1] as f32);
                         let fitted = size * (available / size).min_elem();
-                        let thumbnail = ui
-                            .add(
-                                egui::Button::image(egui::Image::new((pin.texture.id(), fitted)))
-                                    .frame(false),
-                            )
-                            .on_hover_text(Text::LocatePin.with(pin.id).render(locale));
-                        thumbnail.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
-                                ui.is_enabled(),
-                                Text::LocatePin.with(pin.id).render(locale),
-                            )
-                        });
-                        let mut name = pin.name.to_owned();
-                        let name_field = ui.add_sized(
-                            [ui.available_width().max(0.0), ui.spacing().interact_size.y],
-                            egui::TextEdit::singleline(&mut name)
-                                .id(pin_name_id(pin.id))
-                                .hint_text(Text::PinLabel.with(pin.id).render(locale)),
-                        );
-                        if name_field.changed() {
-                            action = Some(Action::RenamePin(pin.id, name));
-                        } else if thumbnail.clicked() {
-                            action = Some(Action::SelectPin(pin.id));
+                        let (thumbnail, _) =
+                            ui.allocate_exact_size(available, egui::Sense::hover());
+                        egui::Image::new((pin.texture.id(), fitted))
+                            .paint_at(ui, egui::Rect::from_center_size(thumbnail.center(), fitted));
+                        let editor = pin_name_id(pin.id);
+                        if ui.memory(|memory| memory.has_focus(editor)) {
+                            let mut name = pin.name.to_owned();
+                            let field = ui.add_sized(
+                                [ui.available_width().max(0.0), ui.spacing().interact_size.y],
+                                egui::TextEdit::singleline(&mut name)
+                                    .id(editor)
+                                    .hint_text(Text::PinLabel.with(pin.id).render(locale)),
+                            );
+                            if field.changed() {
+                                action = Some(Action::RenamePin(pin.id, name));
+                            }
+                        } else {
+                            let name = if pin.name.is_empty() {
+                                Text::PinLabel.with(pin.id).render(locale)
+                            } else {
+                                pin.name.to_owned()
+                            };
+                            let label = ui.add(
+                                egui::Label::new(name)
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            );
+                            if label.double_clicked() {
+                                ui.memory_mut(|memory| memory.request_focus(editor));
+                                ui.ctx().request_repaint();
+                            } else if label.clicked() {
+                                action = Some(Action::SelectPin(pin.id));
+                            }
                         }
                     });
-                });
-            });
+                },
+            );
+            if action.is_none()
+                && response.clicked()
+                && response
+                    .interact_pointer_pos()
+                    .is_some_and(|point| buttons.iter().all(|button| !button.contains(point)))
+            {
+                action = Some(Action::SelectPin(pin.id));
+            }
         });
     action
 }

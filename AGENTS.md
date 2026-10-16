@@ -17,12 +17,13 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
-- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边，不添加应用层最小窗口尺寸；系统自身的尺寸约束须单独验证。复制始终使用原始像素。
-- 移动和缩放优先交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算下一帧窗口位置或尺寸，不在绘制中回写主窗口几何。
+- 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。截图与显示尺寸的宽高至少 2 个物理像素，高亮边框为 1 个物理像素；选区、键盘缩放和系统窗口最小尺寸共用限制，按当前屏幕 DPI 与界面缩放换算。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边；系统自身的尺寸约束须单独验证。复制始终使用原始像素。
+- 移动和缩放手势交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算手势的下一帧窗口几何。显式键盘缩放与恢复原始尺寸由事件处理器根据实际内容尺寸及目标屏幕 DPI 换算，单次请求尺寸，不改位置、不重试。
 - 缩放和初始适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。显示器、DPI 和应用缩放按统一单位换算；复制、关闭按钮仍须在可用区内。
 - 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
-- 主页列出当前贴图的缩略图、定位、锁定和关闭操作；选中时将对应窗口置前并短暂高亮，不移动或缩放图片，不新增截图历史。列表可折叠并限高滚动，复用已有纹理。
-- 贴图名称在列表中直接编辑，清空后显示随语言变化的默认编号；名称只存在于该贴图的内存生命周期，不写入设置、日志或磁盘，不改变原生窗口身份、原图及几何。编辑名称不触发定位或截图，锁定不妨碍命名。
+- 主页列出当前贴图的缩略图、定位、锁定和关闭操作；定位将键盘焦点交给对应贴图。列表与图片高亮只依据真实窗口焦点，直接点击图片同样生效，失焦即取消；不保留额外选中状态或高亮计时，不新增截图历史。列表可折叠并限高滚动，复用已有纹理。
+- 列表缩略图在固定尺寸区域居中，文字起点保持对齐；单击行内非操作按钮区域选中并定位，双击名称进入标准文本编辑器，清空后显示随语言变化的默认编号。定位不改变几何，不用焦点往返、定时或层级降升补偿；同层级时保持主页可点击，名称编辑不触发定位或截图，锁定不妨碍命名。名称及编辑撤销状态随贴图关闭释放，不写入设置、日志或磁盘，不改变原生窗口身份及原图。
+- 聚焦且未锁定的贴图支持方向键微调位置、`+`／`=` 放大、`-` 缩小、`0` 恢复原始显示尺寸；右键菜单同样提供恢复操作。移动步长使用系统可表达的最小单位，只从实际外框位置发出一次移动请求，不猜测 Wayland 缺失的全局坐标；边界由系统处理。键盘缩放保持当前比例，最短边必须有实际增长，覆盖极小图片与平台尺寸量化；文本编辑或 Ctrl／Command／Alt 组合不触发键盘移动与缩放。保持窗口与图片同尺寸，不为点击热区自动放大或增加透明外边框；非 macOS 聚焦时可加宽图内缩放热区，同时保留中心拖动区域。
 - 锁定贴图不可移动、缩放、双击／Esc／菜单关闭，关闭全部跳过锁定项；复制、定位与解锁仍可用。所有关闭和手势入口在消费事件时检查锁定，不能只禁用按钮。有锁定贴图时主动退出须确认，取消保留全部图片且取消待执行重启；确认后才释放图片并退出。
 - 退出等确认对话框优先使用系统原生界面；macOS 用异步 NSAlert sheet，Windows 原生消息框在专用线程等待，通过带请求标识的事件回传结果，不在绘制或主事件循环借用期间同步嵌套模态循环。默认取消，过期结果不得影响新请求；等待 Windows 消息框时保留其所有者窗口。无通用原生接口的平台、演示和自动测试保留轻量应用内回退，不引入第二套 GUI 运行时。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
@@ -90,6 +91,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
 - `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
+- `src/platform/pin_window.rs`: same-process native pin lookup and explicit keyboard-focus activation without geometry changes.
 - `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu and system Quit routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
 - `src/platform/quit_prompt.rs`: asynchronous native quit confirmation with an application-UI fallback.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
@@ -218,6 +220,9 @@ Keep unsafe code denied by default. A platform API that requires unsafe may have
 one narrowly scoped exception, with documented preconditions and owned memory.
 macOS Dock icons must decode PNG in Rust, avoiding AppKit PNG loading and borrowed
 pixel buffers. Updating an icon must not modify the signed application bundle.
+At startup use eframe's explicit empty-icon sentinel to preserve the bundle icon;
+omitting it selects eframe's fallback. Auto icons wait for a known system theme,
+including logic-only background startup; never briefly install a light placeholder.
 Select Finder/Launchpad bundle resources before signing during local installation.
 Do not set a custom file icon on a signed app: its Finder metadata/resource fork
 fails strict signature verification. Runtime icon choices update the Dock; document

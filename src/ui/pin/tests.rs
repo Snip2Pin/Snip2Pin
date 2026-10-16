@@ -438,7 +438,7 @@ fn image_controls_follow_hover_and_keep_button_presses_out_of_native_gestures() 
                 assert_eq!(image_mesh(&output, &texture), bounds);
                 actions.extend(emitted);
             }
-            assert_eq!(actions, [expected]);
+            assert_eq!(actions.as_slice(), std::slice::from_ref(&expected));
             let (_, actions, visible) = paint_composite(
                 &ctx,
                 &texture,
@@ -627,7 +627,7 @@ fn narrow_controls_preserve_the_rightmost_horizontal_actions_without_native_gest
                 )));
                 actions.extend(emitted);
             }
-            assert_eq!(actions, [expected]);
+            assert_eq!(actions.as_slice(), std::slice::from_ref(&expected));
         }
     }
 }
@@ -663,6 +663,16 @@ fn independent_menu_dispatches_copy_lock_and_close_inside_its_own_bounds() {
         (crate::i18n::Locale::English, "Copy", Action::CopyPin(7)),
         (crate::i18n::Locale::English, "Lock", Action::ToggleLock(7)),
         (crate::i18n::Locale::English, "Close", Action::ClosePin(7)),
+        (
+            crate::i18n::Locale::Chinese,
+            crate::i18n::Locale::Chinese.text(crate::i18n::Text::RestoreSize),
+            Action::Zoom(7, vec![Zoom::Original]),
+        ),
+        (
+            crate::i18n::Locale::English,
+            crate::i18n::Locale::English.text(crate::i18n::Text::RestoreSize),
+            Action::Zoom(7, vec![Zoom::Original]),
+        ),
     ] {
         let ctx = egui::Context::default();
         crate::i18n::set_locale(&ctx, locale);
@@ -681,6 +691,16 @@ fn independent_menu_dispatches_copy_lock_and_close_inside_its_own_bounds() {
             output
         };
         let output = paint(vec![]);
+        for shape in &output.shapes {
+            if let egui::Shape::Text(_) = &shape.shape {
+                assert!(bounds.contains_rect(shape.shape.visual_bounding_rect()));
+                assert!(
+                    shape
+                        .clip_rect
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+            }
+        }
         let point = menu_item(&output, label);
         assert!(bounds.contains(point));
         for events in [
@@ -698,6 +718,418 @@ fn independent_menu_dispatches_copy_lock_and_close_inside_its_own_bounds() {
             )));
         }
         assert_eq!(actions.into_inner(), [expected]);
+    }
+}
+
+#[test]
+fn restore_original_size_menu_is_disabled_while_locked() {
+    for locale in [crate::i18n::Locale::Chinese, crate::i18n::Locale::English] {
+        let ctx = egui::Context::default();
+        crate::i18n::set_locale(&ctx, locale);
+        let actions = RefCell::new(Vec::new());
+        let paint = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, MENU_SIZE)),
+                    events,
+                    ..Default::default()
+                },
+                |ui| menu(ui, 7, true, &|action| actions.borrow_mut().push(action)),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let point = menu_item(&paint(vec![]), locale.text(crate::i18n::Text::RestoreSize));
+        for events in [
+            vec![Event::PointerMoved(point)],
+            vec![pointer(point, true)],
+            vec![pointer(point, false)],
+        ] {
+            assert_no_geometry(&paint(events));
+        }
+        assert!(actions.into_inner().is_empty());
+    }
+}
+
+#[test]
+fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
+    for native_edges in [false, true] {
+        for unlock_control in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            let toolbar = snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0).unwrap();
+            let point = if unlock_control {
+                toolbar.bounds.min
+                    + egui::vec2(
+                        METRICS.button + METRICS.button_gap + METRICS.button / 2.0,
+                        METRICS.button / 2.0,
+                    )
+            } else {
+                bounds.center()
+            };
+            let paint = |events, locked, time| {
+                let actions = RefCell::new(Vec::new());
+                let mut input = egui::RawInput {
+                    screen_rect: Some(bounds),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .get_mut(&egui::ViewportId::ROOT)
+                    .unwrap()
+                    .focused = Some(true);
+                let mut output = ctx.run_ui(input, |ui| {
+                    image_with_host(
+                        ui,
+                        7,
+                        &texture,
+                        Interaction {
+                            native_edges,
+                            locked,
+                            excluded: Some(toolbar.bounds),
+                        },
+                        &|action| actions.borrow_mut().push(action),
+                        |command| ctx.send_viewport_cmd(command),
+                    );
+                    super::controls(ui, 7, locked, toolbar, &|action| {
+                        actions.borrow_mut().push(action)
+                    });
+                });
+                output.textures_delta.clear();
+                assert_no_geometry(&output);
+                assert_eq!(image_mesh(&output, &texture), bounds);
+                actions.into_inner()
+            };
+            assert!(paint(vec![Event::PointerMoved(point)], unlock_control, 0.0).is_empty());
+            assert!(paint(vec![pointer(point, true)], unlock_control, 0.1).is_empty());
+            assert_eq!(
+                paint(vec![pointer(point, false)], unlock_control, 0.2),
+                if unlock_control {
+                    vec![Action::ToggleLock(7)]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(!ctx.text_edit_focused());
+            for keyboard_focus in [false, true] {
+                if keyboard_focus {
+                    // Pointer clicks need not take egui focus. Tab does, and
+                    // focusing an image or button must keep pin keys usable.
+                    assert!(
+                        paint(
+                            [true, false]
+                                .map(|pressed| Event::Key {
+                                    key: egui::Key::Tab,
+                                    physical_key: None,
+                                    pressed,
+                                    repeat: false,
+                                    modifiers: Modifiers::NONE,
+                                })
+                                .into(),
+                            false,
+                            5.0,
+                        )
+                        .is_empty()
+                    );
+                    assert!(ctx.egui_wants_keyboard_input());
+                    assert!(!ctx.text_edit_focused());
+                }
+                for (index, (key, expected)) in [
+                    (egui::Key::Plus, Action::Zoom(7, vec![Zoom::In])),
+                    (egui::Key::ArrowRight, Action::Move(7, [1, 0])),
+                    (egui::Key::Num0, Action::Zoom(7, vec![Zoom::Original])),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let events = [true, false].map(|pressed| Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    });
+                    let time = if keyboard_focus { 6.0 } else { 1.0 } + index as f64;
+                    assert_eq!(paint(events.into(), false, time), [expected]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
+    for focused in [None, Some(false), Some(true)] {
+        for locked in [false, true] {
+            for native_edges in [false, true] {
+                for (key, expected) in [
+                    (egui::Key::Plus, Action::Zoom(7, vec![Zoom::In])),
+                    (egui::Key::Equals, Action::Zoom(7, vec![Zoom::In])),
+                    (egui::Key::Minus, Action::Zoom(7, vec![Zoom::Out])),
+                    (egui::Key::Num0, Action::Zoom(7, vec![Zoom::Original])),
+                    (egui::Key::ArrowLeft, Action::Move(7, [-1, 0])),
+                    (egui::Key::ArrowRight, Action::Move(7, [1, 0])),
+                    (egui::Key::ArrowUp, Action::Move(7, [0, -1])),
+                    (egui::Key::ArrowDown, Action::Move(7, [0, 1])),
+                ] {
+                    let ctx = egui::Context::default();
+                    let texture = texture(&ctx);
+                    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(1.0, 120.0));
+                    let actions = RefCell::new(Vec::new());
+                    let mut input = egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events: vec![Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    };
+                    input
+                        .viewports
+                        .get_mut(&egui::ViewportId::ROOT)
+                        .unwrap()
+                        .focused = focused;
+                    let mut output = ctx.run_ui(input, |ui| {
+                        image_with_host(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                native_edges,
+                                locked,
+                                excluded: None,
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |command| ctx.send_viewport_cmd(command),
+                        );
+                        if ui.ctx().current_pass_index() == 0 {
+                            ui.ctx()
+                                .request_discard("keyboard actions must dispatch once");
+                        }
+                    });
+                    output.textures_delta.clear();
+                    assert_no_geometry(&output);
+                    assert_eq!(image_mesh(&output, &texture), bounds);
+                    assert_eq!(texture.size(), [2, 2]);
+                    assert_eq!(
+                        actions.into_inner(),
+                        if focused == Some(true) && !locked {
+                            vec![expected]
+                        } else {
+                            vec![]
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn keyboard_commands_batch_in_order_and_cancel_movement_once_across_passes() {
+    for (keys, expected) in [
+        (
+            [egui::Key::Plus, egui::Key::Plus],
+            vec![Action::Zoom(7, vec![Zoom::In, Zoom::In])],
+        ),
+        (
+            [egui::Key::Num0, egui::Key::Plus],
+            vec![Action::Zoom(7, vec![Zoom::Original, Zoom::In])],
+        ),
+        (
+            [egui::Key::ArrowRight, egui::Key::ArrowRight],
+            vec![Action::Move(7, [2, 0])],
+        ),
+        (
+            [egui::Key::ArrowLeft, egui::Key::ArrowDown],
+            vec![Action::Move(7, [-1, 1])],
+        ),
+        ([egui::Key::ArrowLeft, egui::Key::ArrowRight], vec![]),
+        ([egui::Key::ArrowUp, egui::Key::ArrowDown], vec![]),
+        (
+            [egui::Key::Num0, egui::Key::ArrowRight],
+            vec![
+                Action::Zoom(7, vec![Zoom::Original]),
+                Action::Move(7, [1, 0]),
+            ],
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        let texture = texture(&ctx);
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(1.0, 120.0));
+        let actions = RefCell::new(Vec::new());
+        let events = keys
+            .into_iter()
+            .flat_map(|key| {
+                [true, false].map(|pressed| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                })
+            })
+            .collect();
+        let mut input = egui::RawInput {
+            screen_rect: Some(bounds),
+            events,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .focused = Some(true);
+        let mut output = ctx.run_ui(input, |ui| {
+            image_with_host(
+                ui,
+                7,
+                &texture,
+                Interaction::default(),
+                &|action| actions.borrow_mut().push(action),
+                |command| ctx.send_viewport_cmd(command),
+            );
+            if ui.ctx().current_pass_index() == 0 {
+                ui.ctx()
+                    .request_discard("batched keyboard commands must dispatch once");
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(output.platform_output.num_completed_passes, 2);
+        assert_no_geometry(&output);
+        assert_eq!(image_mesh(&output, &texture), bounds);
+        assert_eq!(actions.into_inner(), expected);
+    }
+}
+
+#[test]
+fn keyboard_zoom_and_movement_leave_text_editing_and_command_shortcuts_alone() {
+    for editing in [false, true] {
+        for modifiers in [
+            Modifiers::NONE,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                command: true,
+                mac_cmd: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                alt: true,
+                ..Modifiers::NONE
+            },
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            },
+        ] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            let actions = RefCell::new(Vec::new());
+            let mut name = "Reference".to_owned();
+            for pressed in [false, true] {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(bounds),
+                    events: [egui::Key::Plus, egui::Key::ArrowLeft]
+                        .into_iter()
+                        .map(|key| Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat: pressed,
+                            modifiers,
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .get_mut(&egui::ViewportId::ROOT)
+                    .unwrap()
+                    .focused = Some(true);
+                let mut output = ctx.run_ui(input, |ui| {
+                    if editing {
+                        ui.add(egui::TextEdit::singleline(&mut name))
+                            .request_focus();
+                    }
+                    image_with_host(
+                        ui,
+                        7,
+                        &texture,
+                        Interaction::default(),
+                        &|action| actions.borrow_mut().push(action),
+                        |command| ctx.send_viewport_cmd(command),
+                    );
+                });
+                output.textures_delta.clear();
+                assert_no_geometry(&output);
+            }
+            assert_eq!(
+                actions.into_inner(),
+                if !editing && (modifiers == Modifiers::NONE || modifiers.shift) {
+                    vec![Action::Zoom(7, vec![Zoom::In]), Action::Move(7, [-1, 0])]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn focused_resize_zone_expands_inward_but_preserves_center_dragging() {
+    for focused in [false, true] {
+        for native_edges in [false, true] {
+            for size in [egui::vec2(240.0, 160.0), egui::vec2(3.0, 3.0)] {
+                let bounds = Rect::from_min_size(Pos2::ZERO, size);
+                let edge = egui::pos2(
+                    ((METRICS.inset + PIN.focused_resize_inset) / 2.0).min(size.x / 6.0),
+                    size.y / 2.0,
+                );
+                for point in [edge, bounds.center()] {
+                    let ctx = egui::Context::default();
+                    let texture = texture(&ctx);
+                    let mut last_output = None;
+                    for events in [vec![Event::PointerMoved(point)], vec![pointer(point, true)]] {
+                        let mut input = egui::RawInput {
+                            screen_rect: Some(bounds),
+                            events,
+                            ..Default::default()
+                        };
+                        input
+                            .viewports
+                            .get_mut(&egui::ViewportId::ROOT)
+                            .unwrap()
+                            .focused = Some(focused);
+                        let mut output = ctx.run_ui(input, |ui| {
+                            image(ui, 7, &texture, native_edges, None, &|_| {});
+                        });
+                        output.textures_delta.clear();
+                        assert_no_geometry(&output);
+                        assert_eq!(image_mesh(&output, &texture), bounds);
+                        last_output = Some(output);
+                    }
+                    let expected = if !native_edges
+                        && point == edge
+                        && (focused || size.x < METRICS.inset * 3.0)
+                    {
+                        ViewportCommand::BeginResize(ResizeDirection::West)
+                    } else {
+                        ViewportCommand::StartDrag
+                    };
+                    assert_eq!(commands(&last_output.unwrap()), &[expected]);
+                }
+            }
+        }
     }
 }
 

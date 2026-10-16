@@ -1,23 +1,31 @@
 use eframe::egui::{
     self, Color32, Pos2, Rect, ResizeDirection, Sense, TextureHandle, ViewportCommand,
 };
-use snip2pin::pin::{Control, METRICS, Toolbar};
+use snip2pin::pin::{Control, METRICS, Toolbar, Zoom};
 
 use super::{
     icons::{paint_copy_icon, paint_lock_icon},
     style::PIN,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     CopyPin(u64),
     ClosePin(u64),
     MenuPin(u64),
     ToggleLock(u64),
+    Zoom(u64, Vec<Zoom>),
+    Move(u64, [i32; 2]),
 }
 
 const MENU_PADDING: f32 = 8.0;
-pub const MENU_SIZE: egui::Vec2 = egui::vec2(140.0, 104.0);
+const MENU_ROWS: usize = 4;
+pub const MENU_SIZE: egui::Vec2 = egui::vec2(
+    PIN.menu_width,
+    MENU_PADDING * 2.0
+        + METRICS.button * MENU_ROWS as f32
+        + METRICS.button_gap * (MENU_ROWS - 1) as f32,
+);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Interaction {
@@ -42,6 +50,51 @@ pub fn image_with_host(
         excluded,
     } = interaction;
     let bounds = ui.max_rect();
+    let focused = ui.input(|input| input.viewport().focused == Some(true));
+    if !locked && focused && !ui.ctx().text_edit_focused() && ui.ctx().current_pass_index() == 0 {
+        let (zooms, movement) = ui.input(|input| {
+            let mut zooms = Vec::new();
+            let mut movement = [0, 0];
+            for event in &input.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && !modifiers.ctrl
+                    && !modifiers.command
+                    && !modifiers.mac_cmd
+                    && !modifiers.alt
+                {
+                    match key {
+                        egui::Key::Plus | egui::Key::Equals => zooms.push(Zoom::In),
+                        egui::Key::Minus => zooms.push(Zoom::Out),
+                        egui::Key::Num0 => zooms.push(Zoom::Original),
+                        egui::Key::ArrowLeft => movement[0] -= 1,
+                        egui::Key::ArrowRight => movement[0] += 1,
+                        egui::Key::ArrowUp => movement[1] -= 1,
+                        egui::Key::ArrowDown => movement[1] += 1,
+                        _ => {}
+                    }
+                }
+            }
+            (zooms, movement)
+        });
+        if !zooms.is_empty() {
+            events(Action::Zoom(id, zooms));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+        if movement != [0, 0] {
+            events(Action::Move(id, movement));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+    }
+    let resize_inset = if focused {
+        PIN.focused_resize_inset
+    } else {
+        METRICS.inset
+    };
     let response = ui.interact(
         bounds,
         ui.id().with(("pin-image", id)),
@@ -64,7 +117,7 @@ pub fn image_with_host(
         .then(|| ui.input(|input| input.pointer.interact_pos()))
         .flatten()
         .filter(|point| !excluded.is_some_and(|rect| rect.contains(*point)))
-        .and_then(|point| resize_direction(bounds, point));
+        .and_then(|point| resize_direction(bounds, point, resize_inset));
     if response.hovered()
         && !native_edges
         && !locked
@@ -98,7 +151,7 @@ pub fn image_with_host(
         let pressed_edge = (!native_edges)
             .then_some(pressed)
             .flatten()
-            .and_then(|point| resize_direction(bounds, point));
+            .and_then(|point| resize_direction(bounds, point, resize_inset));
         match pressed_edge {
             Some(direction) => host(ViewportCommand::BeginResize(direction)),
             None => host(ViewportCommand::StartDrag),
@@ -196,7 +249,7 @@ pub fn controls(
 pub fn menu(ui: &mut egui::Ui, id: u64, locked: bool, events: &dyn Fn(Action)) {
     let locale = crate::i18n::locale(ui.ctx());
     let bounds = ui.max_rect().shrink(MENU_PADDING);
-    let height = (bounds.height() - METRICS.button_gap * 2.0) / 3.0;
+    let height = (bounds.height() - METRICS.button_gap * (MENU_ROWS - 1) as f32) / MENU_ROWS as f32;
     for (index, (label, action, enabled)) in [
         (
             locale.text(crate::i18n::Text::Copy),
@@ -211,6 +264,11 @@ pub fn menu(ui: &mut egui::Ui, id: u64, locked: bool, events: &dyn Fn(Action)) {
             }),
             Action::ToggleLock(id),
             true,
+        ),
+        (
+            locale.text(crate::i18n::Text::RestoreSize),
+            Action::Zoom(id, vec![Zoom::Original]),
+            !locked,
         ),
         (
             locale.text(crate::i18n::Text::Close),
@@ -240,13 +298,13 @@ fn close_requested(ui: &egui::Ui) -> bool {
     ui.input(|input| input.viewport().close_requested() || input.key_pressed(egui::Key::Escape))
 }
 
-fn resize_direction(bounds: Rect, point: Pos2) -> Option<ResizeDirection> {
+fn resize_direction(bounds: Rect, point: Pos2, inset: f32) -> Option<ResizeDirection> {
     if !bounds.contains(point) {
         return None;
     }
     let hit = egui::vec2(
-        METRICS.inset.min(bounds.width() / 3.0),
-        METRICS.inset.min(bounds.height() / 3.0),
+        inset.min(bounds.width() / 3.0),
+        inset.min(bounds.height() / 3.0),
     );
     let horizontal = if point.x < bounds.min.x + hit.x {
         -1

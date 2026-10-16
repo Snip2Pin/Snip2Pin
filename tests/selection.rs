@@ -117,6 +117,48 @@ fn invalid_and_empty_selections_are_rejected() {
 }
 
 #[test]
+fn screenshot_minimum_is_two_physical_pixels_on_both_axes() {
+    for (start, end, expected) in [
+        ([10.0, 10.0], [11.0, 20.0], None),
+        ([10.0, 10.0], [20.0, 11.0], None),
+        (
+            [10.0, 10.0],
+            [12.0, 12.0],
+            Some(PixelRect {
+                x: 10,
+                y: 10,
+                width: 2,
+                height: 2,
+            }),
+        ),
+        (
+            [12.0, 12.0],
+            [10.0, 10.0],
+            Some(PixelRect {
+                x: 10,
+                y: 10,
+                width: 2,
+                height: 2,
+            }),
+        ),
+    ] {
+        assert_eq!(
+            geometry::selection(start, end, [100.0, 100.0], [100, 100]),
+            expected
+        );
+    }
+    assert_eq!(
+        geometry::selection([10.0, 10.0], [11.0, 11.0], [100.0, 100.0], [200, 200]),
+        Some(PixelRect {
+            x: 20,
+            y: 20,
+            width: 2,
+            height: 2
+        })
+    );
+}
+
+#[test]
 fn cropped_pixels_are_the_exact_selected_region() {
     let image = ColorImage::new(
         [10, 10],

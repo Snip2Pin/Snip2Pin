@@ -68,13 +68,15 @@ pub const OVERLAY: OverlayStyle = OverlayStyle {
 pub struct PinStyle {
     pub button_fill: Color32,
     pub highlight: Color32,
-    pub highlight_stroke: f32,
-    pub highlight_duration: std::time::Duration,
+    pub highlight_stroke_pixels: f32,
+    pub focused_resize_inset: f32,
+    pub menu_width: f32,
 }
 
 pub const PIN: PinStyle = PinStyle {
     button_fill: Color32::from_black_alpha(160),
     highlight: Color32::from_rgb(56, 132, 255),
-    highlight_stroke: 3.0,
-    highlight_duration: std::time::Duration::from_millis(1400),
+    highlight_stroke_pixels: 1.0,
+    focused_resize_inset: 24.0,
+    menu_width: 200.0,
 };

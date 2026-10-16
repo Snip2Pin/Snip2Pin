@@ -19,7 +19,8 @@ keep it above other windows, drag to move, and double-click to close.
 - 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
 - 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
-- 主页列表可直接编辑贴图名称，点击缩略图定位并高亮，也可锁定或关闭。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
+- 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，用方向键移动、`+`／`-` 缩放、`0` 恢复原始尺寸，右键菜单也可恢复。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
+- 截图和缩放后的宽高至少为 2 个物理像素。
 - 菜单栏／托盘和 macOS Dock 提供主页、截图和关闭未锁定贴图等操作。有托盘时关闭主页会留在后台；「开机自启」默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
@@ -41,10 +42,13 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
   follow the operating system. Double-click to close. Copy always uses the original
   screenshot. Hover for copy, lock and close controls. Narrow pins hide leftmost
   buttons; the right-click menu retains every action without enlarging the image.
-- Edit pin names directly in Home; names last until the pin closes. Select a
-  thumbnail to bring its pin forward and highlight it. The list also offers lock
+- Click a pin's row in Home to focus it; double-click its name to edit.
+  Focused pins stay highlighted. Use arrow keys to move, `+` / `-` to zoom and `0` to restore the
+  original size; restore is also in the right-click menu.
+  Names last until the pin closes. The list also offers lock
   and close. Locked pins cannot move, resize or close; quitting
   with locked pins requires confirmation.
+- Captures and resized pins have a minimum width and height of 2 physical pixels.
 - The menu bar / tray and macOS Dock offer Home, Capture and Close unlocked pins.
   Closing Home keeps the app running when a tray is available. Login startup is
   **off by default**.
