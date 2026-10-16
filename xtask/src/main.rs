@@ -26,6 +26,7 @@ fn run() -> Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["check"] => check(),
+        ["lint"] => lint(),
         ["preview", font] => preview(Path::new(font)),
         ["check-messages", base, head, title] => messages::check(base, head, title),
         ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
@@ -50,7 +51,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, distribution, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory), package::Distribution::parse(distribution)?)
         }
-        _ => Err("usage: cargo xtask check | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
+        _ => Err("usage: cargo xtask check | lint | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
     }
 }
 
@@ -146,6 +147,21 @@ fn revision() -> Result<String> {
 }
 
 fn check() -> Result {
+    lint()?;
+    execute(Command::new("cargo").args(["test", "--locked", "--workspace"]))?;
+    // Windows cannot replace the running xtask executable.
+    execute(Command::new("cargo").args([
+        "build",
+        "--locked",
+        "--workspace",
+        "--exclude",
+        "xtask",
+    ]))?;
+    execute(Command::new("git").args(["lfs", "fsck"]))?;
+    Ok(())
+}
+
+fn lint() -> Result {
     for args in [
         vec!["fmt", "--all", "--", "--check"],
         vec![
@@ -157,15 +173,11 @@ fn check() -> Result {
             "-D",
             "warnings",
         ],
-        vec!["test", "--locked", "--workspace"],
-        // Windows cannot replace the running xtask executable. The outer
-        // `cargo xtask` already built it; tests/Clippy still cover the workspace.
-        vec!["build", "--locked", "--workspace", "--exclude", "xtask"],
     ] {
         execute(Command::new("cargo").args(args))?;
     }
-    execute(Command::new("git").args(["lfs", "fsck"]))?;
     execute(Command::new("git").args(["diff", "--check"]))?;
+    execute(Command::new("git").args(["diff", "--cached", "--check"]))?;
     if cfg!(target_os = "macos") {
         execute(Command::new("bash").args([
             "-n",

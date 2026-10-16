@@ -124,6 +124,14 @@ Use `cargo xtask check` locally and in CI. Shared development/packaging logic
 belongs in the Rust `xtask` workspace member; native scripts only adapt platform
 tools. Read the development toolchain from rust-toolchain.toml and verify the
 minimum Rust version declared in Cargo.toml with `cargo xtask check-msrv`.
+Install the `.pre-commit-config.yaml` hooks for development. Commit-time checks
+run `cargo xtask lint` (Rust format, Clippy and repository metadata), YAML/TOML
+syntax and `cargo deny --locked check`; failures block the commit and never
+silently rewrite files or skip missing Rust/cargo-deny tools once hooks run. CI reuses the same lint entry point
+through `check`; full tests/builds remain separate from the faster commit checks.
+Preserve hooks managed by other tools; use their supported integration rather
+than overwriting `core.hooksPath` or disabling security/LFS hooks. Update
+CONTRIBUTING.md and docs/workflow.md together when changing hook setup or policy.
 Keep xtask's own tests in `#[cfg(test)]` modules: Cargo builds the normal binary
 for integration-test targets, which cannot replace a running `xtask.exe` on Windows.
 Dependency updates go through PRs and `cargo deny check`; do not auto-merge or

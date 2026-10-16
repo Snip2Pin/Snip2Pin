@@ -8,7 +8,7 @@ validation, packaging and manual releases.
 2. Start a short `feat/…`, `fix/…` or `chore/…` branch from current `main`.
 3. Keep one concern per PR. Add behavior regressions for bugs, update documentation
    when behavior changes, and remove unused code.
-4. Run `cargo xtask check`. Run `cargo deny check` when changing dependencies.
+4. Install the commit hooks described below. Run `cargo xtask check` before a PR.
 5. Open a PR with automatic results and explicit native interaction coverage.
    Tests use generated images, never private desktop or clipboard content.
    Keep PR descriptions and comments focused on the problem, design, implementation,
@@ -25,6 +25,23 @@ validation, packaging and manual releases.
 提交、合并和标签推送都不会自动发版；只有用户明确要求时才运行发版流程。
 
 Contributions are licensed under the project's MIT license. No CLA is required.
+
+Install [pre-commit](https://pre-commit.com/) and cargo-deny once, with Rust and
+Git LFS available on `PATH`:
+
+```sh
+uv tool install pre-commit==4.7.0
+cargo install cargo-deny --version 0.20.2 --locked
+pre-commit install
+pre-commit run --all-files
+```
+
+Each commit checks Rust formatting, Clippy, staged whitespace, YAML/TOML syntax,
+dependency advisories, licenses and sources. Checks fail without rewriting files;
+fix the reported issue, stage the changes and commit again. Dependency advisories
+require network access. Full tests, builds and native acceptance remain PR checks.
+If another tool manages `core.hooksPath`, preserve it and use its supported
+pre-commit integration instead of replacing existing hooks.
 
 Use Conventional Commits for PR titles and every commit subject:
 `type(scope)!: description` (scope and `!` optional, maximum 100 characters).

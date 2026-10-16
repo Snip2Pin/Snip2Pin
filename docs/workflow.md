@@ -49,14 +49,35 @@ PR 标题及分支内每个 commit 的标题使用 Conventional Commits：
 
 ## 统一验证
 
+首次开发安装提交钩子（先确保 Rust 工具链、Git LFS 在 `PATH` 中）：
+
 ```sh
+uv tool install pre-commit==4.7.0
+cargo install cargo-deny --version 0.20.2 --locked
+pre-commit install
+pre-commit run --all-files
+```
+
+`.pre-commit-config.yaml` 固定外部钩子版本。每次提交检查 YAML/TOML、Rust 格式、
+Clippy、工作区及暂存区空白问题，以及 cargo-deny 的安全公告、许可证、来源策略。
+检查失败就阻止提交，不自动修改文件；修正后重新暂存。钩子运行时缺少 Rust/cargo-deny 或网络检查失败时
+如实报错，不静默跳过。依赖审核与 CI 使用 cargo-deny 0.20.2。
+
+已有工具管理 `core.hooksPath` 时保留它，通过该工具支持的方式调用项目配置，
+不能为安装新钩子覆盖现有安全或 LFS 钩子。安装后实际提交一次，确认检查被触发。
+本地钩子属于提前反馈，不能替代 CI 和原生交互验收，也不启用发布操作。
+
+```sh
+cargo xtask lint
 cargo xtask check
 cargo xtask check-msrv
 cargo deny check
 ```
 
-`check` 顺序运行格式、Clippy、工作区测试和开发构建，再检查 LFS、diff 与 macOS
-脚本/模板。工具自身的回归测试也属于工作区测试。`check-msrv` 从 Cargo.toml 读取
+`lint` 运行格式、Clippy、diff 与 macOS 脚本/模板静态检查；`check` 复用 `lint`，
+再运行工作区测试、开发构建和 LFS 检查。工具自身的回归测试也属于工作区测试。
+CI 同时检查 pre-commit 配置及 YAML/TOML，避免本地钩子漏装或跳过时遗漏。
+`check-msrv` 从 Cargo.toml 读取
 最低 Rust 版本并检查所有目标；开发工具链只在 rust-toolchain.toml 固定。
 
 CI 对 PR、`main` 推送和手动验证运行，取消同一分支的过期检查。所有 Actions 固定
