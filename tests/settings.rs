@@ -248,6 +248,24 @@ fn invalid_preferences_are_reported_and_missing_fields_use_defaults() {
 }
 
 #[test]
+fn loaded_shortcut_errors_keep_their_language_until_displayed() {
+    use snip2pin::i18n::{Locale, Text};
+    let directory = tempfile::tempdir().expect("isolated preferences");
+    let path = directory.path().join("preferences.toml");
+    for binding in ["KeyA", "Ctrl+K+L"] {
+        std::fs::write(&path, format!("binding = '{binding}'\n"))
+            .expect("invalid shortcut fixture");
+        let error = Preferences::load(&path).expect_err("invalid shortcut");
+        let expected = Text::ReadSettings.context(Binding::parse(binding).expect_err("shortcut"));
+        assert_eq!(error, expected);
+        assert_ne!(error.render(Locale::Chinese), error.render(Locale::English));
+    }
+    std::fs::write(&path, "binding = ").expect("malformed TOML fixture");
+    let error = Preferences::load(&path).expect_err("TOML diagnostic");
+    assert!(error.render(Locale::English).contains("TOML parse error"));
+}
+
+#[test]
 fn language_defaults_migrates_and_round_trips_without_changing_other_preferences() {
     use snip2pin::i18n::Language;
     let directory = tempfile::tempdir().expect("isolated language preferences");

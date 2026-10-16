@@ -185,7 +185,17 @@ impl Preferences {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &Path) -> Result<Self, Message> {
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|error| Text::ReadSettings.with(error)),
+            Ok(text) => {
+                let value: toml::Value =
+                    toml::from_str(&text).map_err(|error| Text::ReadSettings.with(error))?;
+                // Validate before Serde turns typed shortcut errors into diagnostic strings.
+                if let Some(binding) = value.get("binding").and_then(toml::Value::as_str) {
+                    Binding::parse(binding).map_err(|error| Text::ReadSettings.context(error))?;
+                }
+                value
+                    .try_into()
+                    .map_err(|error| Text::ReadSettings.with(error))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 match std::fs::read_to_string(path.with_file_name("shortcut.txt")) {
                     Ok(text) => Ok(Self {
