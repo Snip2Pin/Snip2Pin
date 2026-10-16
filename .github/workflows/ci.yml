@@ -17,6 +17,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Validate pre-commit configuration and text metadata
+        run: |
+          python -m pip install pre-commit==4.7.0
+          pre-commit validate-config
+          pre-commit run check-yaml --all-files
+          pre-commit run check-toml --all-files
       - name: Validate workflow syntax and shell expressions
         shell: bash
         run: |
