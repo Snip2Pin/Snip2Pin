@@ -59,8 +59,13 @@ pre-commit run --all-files
 ```
 
 `.pre-commit-config.yaml` 固定外部钩子版本。每次提交检查 YAML/TOML、Rust 格式、
-Clippy、工作区及暂存区空白问题，以及 cargo-deny 的安全公告、许可证、来源策略。
-检查失败就阻止提交，不自动修改文件；修正后重新暂存。钩子运行时缺少 Rust/cargo-deny 或网络检查失败时
+Clippy、合并冲突标记、大文件，以及 cargo-deny 的安全公告、许可证、来源策略。
+通用检查复用官方 pre-commit-hooks；尾随空白和文件末尾换行由官方钩子自动修正，
+修改文件后阻止当次提交，需检查并重新暂存。大文件阈值为 500 KiB，使用 Git LFS
+管理的文件由大小检查跳过；`--enforce-all` 使本地与 CI 全量检查均有效。
+Rust 的 local hook 只调用 `cargo xtask lint`，复用 CI 的格式、Clippy、diff 和打包元数据检查，
+不在钩子配置里重复维护检查逻辑。其他检查失败也会阻止提交。
+钩子运行时缺少 Rust/cargo-deny 或网络检查失败时
 如实报错，不静默跳过。依赖审核与 CI 使用 cargo-deny 0.20.2。
 
 已有工具管理 `core.hooksPath` 时保留它，通过该工具支持的方式调用项目配置，
@@ -76,7 +81,7 @@ cargo deny check
 
 `lint` 运行格式、Clippy、diff 与 macOS 脚本/模板静态检查；`check` 复用 `lint`，
 再运行工作区测试、开发构建和 LFS 检查。工具自身的回归测试也属于工作区测试。
-CI 同时检查 pre-commit 配置及 YAML/TOML，避免本地钩子漏装或跳过时遗漏。
+CI 同时检查 pre-commit 配置并全量运行官方通用钩子，避免本地钩子漏装或跳过时遗漏。
 `check-msrv` 从 Cargo.toml 读取
 最低 Rust 版本并检查所有目标；开发工具链只在 rust-toolchain.toml 固定。
 
