@@ -79,6 +79,24 @@ fn oversized_images_fit_the_screen_proportionally() {
 }
 
 #[test]
+fn fitting_extreme_strips_preserves_aspect_without_an_application_minimum() {
+    let area = Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(1000.0, 1000.0));
+    for ratio in [1.0, 0.8, 0.5] {
+        for size in [[2.0, 1080.0], [1080.0, 2.0], [4.0, 4096.0]] {
+            let placement = Placement {
+                position: area.min.into(),
+                size,
+            };
+            let image = frame_geometry(placement, area, ratio).image;
+            assert!(image.size().min_elem() / ratio < 2.0);
+            assert!((image.width() / size[0] - image.height() / size[1]).abs() < 0.00001);
+            assert!(image.width() <= size[0] * ratio && image.height() <= size[1] * ratio);
+            assert!(image.intersects(Rect::from_min_max(area.min * ratio, area.max * ratio)));
+        }
+    }
+}
+
+#[test]
 fn images_that_fit_preserve_size_aspect_and_origin_even_when_controls_do_not_fit() {
     let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(680.0, 420.0));
     for width in [2.0, 12.0, 26.0, 40.0, 55.0, 56.0, 79.0, 85.0, 86.0, 160.0] {

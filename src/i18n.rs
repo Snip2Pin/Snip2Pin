@@ -125,6 +125,7 @@ catalogue! {
     DownloadsHelp => ("View GitHub Releases in your browser.", "在浏览器中查看 GitHub Releases。"),
     Home => ("Open home", "打开主页"),
     ClosePins => ("Close unlocked pins", "关闭未锁定贴图"),
+    PinZoomHint => ("Pin too small? Press + to enlarge.", "贴图太小？按 + 放大"),
     Quit => ("Quit Snip2Pin", "退出 Snip2Pin"),
     Copy => ("Copy", "复制"),
     RestoreSize => ("Restore original size", "恢复原始尺寸"),

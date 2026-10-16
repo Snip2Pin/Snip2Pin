@@ -596,14 +596,14 @@ fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
         Some(geometry::PixelRect {
             x: 0,
             y: 0,
-            width: 1,
+            width: 0,
             height: 8,
         }),
         Some(geometry::PixelRect {
             x: 0,
             y: 0,
             width: 8,
-            height: 1,
+            height: 0,
         }),
     ] {
         let ctx = egui::Context::default();
@@ -621,6 +621,47 @@ fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
         output.textures_delta.clear();
         assert!(output.platform_output.commands.is_empty());
         assert!(app.pins.is_empty());
+    }
+}
+
+#[test]
+fn single_pixel_selections_copy_the_original_without_an_application_size_floor() {
+    for scale in [1.0_f32, 1.5, 2.0, 3.0] {
+        for valid in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            let session = app.gate.begin().expect("capture");
+            let mut snapshot = capture::demo();
+            snapshot.display.scale = scale;
+            snapshot.display.size = if cfg!(target_os = "macos") {
+                [64.0; 2]
+            } else {
+                [64.0 * scale; 2]
+            };
+            snapshot.pixels = Arc::new(ColorImage::filled(
+                [(64.0 * scale) as usize; 2],
+                egui::Color32::WHITE,
+            ));
+            let edge = u32::from(valid);
+            let rect = geometry::PixelRect {
+                x: 0,
+                y: 0,
+                width: edge,
+                height: edge,
+            };
+            app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.selection_action(session, 0, overlay::Action::Select(rect), ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert_eq!(app.pins.len(), usize::from(valid));
+            assert_eq!(output.platform_output.commands.len(), usize::from(valid));
+            if valid {
+                assert_eq!(app.pins[&1].pixels.size, [edge as usize; 2]);
+                assert!((app.pins[&1].initial.width() - scale.recip()).abs() < 0.00001);
+                assert!((app.pins[&1].initial.height() - scale.recip()).abs() < 0.00001);
+            }
+        }
     }
 }
 
@@ -1490,7 +1531,7 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
     assert_eq!(pin.builder.position, Some(layout.image.min));
     assert_eq!(pin.builder.inner_size, Some(layout.image.size()));
     assert_eq!(pin.builder.resizable, Some(true));
-    assert_eq!(pin.builder.min_inner_size, Some(egui::Vec2::splat(2.0)));
+    assert!(pin.builder.min_inner_size.is_none());
     assert_eq!(pin.builder.has_shadow, Some(true));
     assert!(
         output.viewport_output[&ViewportId::ROOT]
@@ -1532,7 +1573,7 @@ fn narrow_capture_keeps_its_display_size_and_text_density() {
         "controls must adapt to the image, not enlarge it: selected={:?}, shown={shown:?}",
         expected.size,
     );
-    assert_eq!(builder.min_inner_size, Some(egui::Vec2::splat(2.0)));
+    assert!(builder.min_inner_size.is_none());
     assert_eq!(app.pins[&1].pixels.size, [24, 240]);
 }
 
@@ -1693,10 +1734,7 @@ fn pin_builder_cancels_backend_zoom_without_enlarging_tiny_images_for_controls()
                 let position = builder.position.expect("initial position");
                 let size = builder.inner_size.expect("initial size");
                 let model = &app.pins[&1];
-                assert_eq!(
-                    builder.min_inner_size,
-                    Some(egui::Vec2::splat(2.0 / (scale * zoom)))
-                );
+                assert!(builder.min_inner_size.is_none());
                 assert_eq!(
                     model.pixels.size,
                     [rect.width as usize, rect.height as usize]
@@ -1759,7 +1797,7 @@ fn changing_zoom_keeps_existing_pin_builder_and_paints_only_observed_native_geom
     let builder = &changed.viewport_output[&pin_id(1)].builder;
     assert_eq!(builder.position, initial_builder.position);
     assert_eq!(builder.inner_size, initial_builder.inner_size);
-    assert_eq!(builder.min_inner_size, Some(egui::Vec2::splat(1.0)));
+    assert!(builder.min_inner_size.is_none());
     let paint = changed.viewport_output[&pin_id(1)]
         .viewport_ui_cb
         .as_ref()
@@ -2175,7 +2213,7 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
 }
 
 #[test]
-fn native_minimum_size_tracks_current_display_density_without_resetting_geometry() {
+fn pin_dpi_and_ui_zoom_never_impose_an_application_minimum_size() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     ctx.set_zoom_factor(1.25);
@@ -2193,10 +2231,7 @@ fn native_minimum_size_tracks_current_display_density_without_resetting_geometry
         let mut output = ctx.run_ui(input, |ui| app.show_pins(ui.ctx()));
         output.textures_delta.clear();
         let viewport = &output.viewport_output[&pin_id(1)];
-        assert_eq!(
-            viewport.builder.min_inner_size,
-            Some(egui::Vec2::splat(2.0 / (scale * 1.25)))
-        );
+        assert!(viewport.builder.min_inner_size.is_none());
         assert_eq!(viewport.builder.position, Some(initial.min));
         assert_eq!(viewport.builder.inner_size, Some(initial.size()));
         assert!(viewport.commands.iter().all(|command| !matches!(
@@ -2995,9 +3030,11 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
             before.viewport_output[&pin_id(1)].builder.inner_size,
             Some(initial.size())
         );
-        assert_eq!(
-            before.viewport_output[&pin_id(1)].builder.min_inner_size,
-            Some(egui::Vec2::splat(2.0 / zoom))
+        assert!(
+            before.viewport_output[&pin_id(1)]
+                .builder
+                .min_inner_size
+                .is_none()
         );
         let area = app.pins[&1].screen;
         let position = egui::pos2(

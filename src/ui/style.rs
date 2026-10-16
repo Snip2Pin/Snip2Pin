@@ -4,6 +4,7 @@ use eframe::egui::Color32;
 pub struct LauncherStyle {
     pub window: [f32; 2],
     pub margin: i8,
+    pub compact_margin: i8,
     pub brand: f32,
     pub brand_icon: f32,
     pub heading: f32,
@@ -19,11 +20,17 @@ pub struct LauncherStyle {
     pub footer_margin: i8,
     pub pin_thumbnail: [f32; 2],
     pub pin_list_height: f32,
+    pub pin_row_min_height: f32,
+    pub pin_row_padding: [f32; 2],
+    pub pin_column_gap: f32,
+    pub pin_thumbnail_padding: f32,
+    pub pin_metadata_gap: f32,
 }
 
 pub const LAUNCHER: LauncherStyle = LauncherStyle {
     window: [390.0, 480.0],
     margin: 24,
+    compact_margin: 12,
     brand: 16.0,
     brand_icon: 24.0,
     heading: 20.0,
@@ -37,8 +44,13 @@ pub const LAUNCHER: LauncherStyle = LauncherStyle {
     control_width: 140.0,
     row_height: 40.0,
     footer_margin: 12,
-    pin_thumbnail: [48.0, 32.0],
+    pin_thumbnail: [48.0, 40.0],
     pin_list_height: 144.0,
+    pin_row_min_height: 64.0,
+    pin_row_padding: [12.0, 12.0],
+    pin_column_gap: 8.0,
+    pin_thumbnail_padding: 4.0,
+    pin_metadata_gap: 2.0,
 };
 
 pub struct OverlayStyle {

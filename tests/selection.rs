@@ -117,10 +117,38 @@ fn invalid_and_empty_selections_are_rejected() {
 }
 
 #[test]
-fn screenshot_minimum_is_two_physical_pixels_on_both_axes() {
+fn nonempty_single_pixel_selections_are_allowed() {
     for (start, end, expected) in [
-        ([10.0, 10.0], [11.0, 20.0], None),
-        ([10.0, 10.0], [20.0, 11.0], None),
+        (
+            [10.0, 10.0],
+            [11.0, 20.0],
+            Some(PixelRect {
+                x: 10,
+                y: 10,
+                width: 1,
+                height: 10,
+            }),
+        ),
+        (
+            [10.0, 10.0],
+            [20.0, 11.0],
+            Some(PixelRect {
+                x: 10,
+                y: 10,
+                width: 10,
+                height: 1,
+            }),
+        ),
+        (
+            [10.0, 10.0],
+            [11.0, 11.0],
+            Some(PixelRect {
+                x: 10,
+                y: 10,
+                width: 1,
+                height: 1,
+            }),
+        ),
         (
             [10.0, 10.0],
             [12.0, 12.0],

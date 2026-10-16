@@ -1,7 +1,7 @@
 //! Initial pin placement and controls inside the visible part of the image.
 use eframe::egui::{self, Pos2, Rect, Vec2};
 
-use crate::geometry::{MIN_IMAGE_PIXELS, Placement};
+use crate::geometry::Placement;
 
 pub struct Metrics {
     pub button: f32,
@@ -28,11 +28,10 @@ pub enum Zoom {
 
 /// Size in native window logical units, derived from its observed content size.
 /// `pixels_per_point` is the native display scale; the host converts egui zoom
-/// at its boundary. macOS windows quantize to whole logical points, so zoom
-/// steps use one point there, one physical pixel elsewhere. Both axes stay at
-/// least MIN_IMAGE_PIXELS physical pixels, using a single proportional scale.
-/// Original requests source pixels / display scale (100%) unless that would
-/// violate the pixel minimum. The window system owns native size constraints.
+/// at its boundary. macOS windows quantize to whole logical points, so
+/// zoom-in steps use one point there, one physical pixel elsewhere, so tiny
+/// pins can grow again. Original requests source pixels / display scale (100%).
+/// The window system owns native size constraints.
 pub fn zoom_size(
     current: Vec2,
     original_pixels: [usize; 2],
@@ -42,34 +41,18 @@ pub fn zoom_size(
     if !current.is_finite() || current.min_elem() <= 0.0 || original_pixels.contains(&0) {
         return None;
     }
-    let minimum_step = native_step(pixels_per_point)?;
-    let minimum_edge = minimum_size(pixels_per_point)?.min_elem();
-    let minimum_factor = minimum_step / current.min_elem();
+    let growth_step = native_step(pixels_per_point)?;
+    let growth_factor = growth_step / current.min_elem();
     let size = match command {
         // A one-pixel short edge must grow on the next native size request,
         // rather than rounding a 25% increase back to the same pixel.
-        Zoom::In => current * KEYBOARD_ZOOM_FACTOR.max(1.0 + minimum_factor),
-        Zoom::Out => {
-            current
-                * KEYBOARD_ZOOM_FACTOR
-                    .recip()
-                    .max(minimum_edge.max(minimum_step) / current.min_elem())
-        }
+        Zoom::In => current * KEYBOARD_ZOOM_FACTOR.max(1.0 + growth_factor),
+        Zoom::Out => current * KEYBOARD_ZOOM_FACTOR.recip(),
         Zoom::Original => {
             egui::vec2(original_pixels[0] as f32, original_pixels[1] as f32) / pixels_per_point
         }
     };
-    let size = size * (minimum_edge / size.min_elem()).max(1.0);
     (size.is_finite() && size.min_elem() > 0.0).then_some(size)
-}
-
-/// Smallest native logical content size that preserves the image pixel minimum.
-pub fn minimum_size(native_scale: f32) -> Option<Vec2> {
-    if !native_scale.is_finite() || native_scale <= 0.0 {
-        return None;
-    }
-    let edge = MIN_IMAGE_PIXELS as f32 / native_scale;
-    (edge.is_finite() && edge > 0.0).then_some(Vec2::splat(edge))
 }
 
 /// Convert accumulated arrow-key steps into native logical window units.

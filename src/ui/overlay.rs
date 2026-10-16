@@ -130,6 +130,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nonempty_tiny_selections_are_allowed_at_each_dpi_and_ui_zoom() {
+        for scale in [1.0_f32, 1.5, 2.0, 3.0] {
+            for zoom in [1.0, 1.25, 2.0] {
+                for (size, valid) in [
+                    (egui::vec2(1.0 / scale, 20.0), true),
+                    (egui::vec2(20.0, 1.0 / scale), true),
+                    (egui::Vec2::splat(2.0), true),
+                ] {
+                    let ctx = egui::Context::default();
+                    ctx.set_zoom_factor(zoom);
+                    let bounds = Rect::from_min_size(Pos2::ZERO, egui::Vec2::splat(100.0 / zoom));
+                    let mut selection = Selection {
+                        texture: ctx.load_texture(
+                            "generated",
+                            egui::ColorImage::filled([2, 2], Color32::WHITE),
+                            Default::default(),
+                        ),
+                        pixels: [(100.0 * scale) as u32; 2],
+                        pixel_step: [1, 1],
+                        start: None,
+                        focus_requested: true,
+                    };
+                    let start = egui::pos2(20.0, 20.0) / zoom;
+                    let end = start + size / zoom;
+                    let button = |point, pressed| egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    // First pass the drag threshold, then return to the tiny selection.
+                    let frames = [
+                        vec![egui::Event::PointerMoved(start)],
+                        vec![button(start, true)],
+                        vec![egui::Event::PointerMoved(start + egui::Vec2::splat(30.0))],
+                        vec![egui::Event::PointerMoved(end)],
+                        vec![button(end, false)],
+                    ];
+                    for (index, events) in frames.into_iter().enumerate() {
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(bounds),
+                                events,
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let action = show(ui, &mut selection, true);
+                                if index == 4 {
+                                    assert_eq!(
+                                        matches!(action, Some(Action::Select(_))),
+                                        valid,
+                                        "scale={scale} zoom={zoom} size={size:?}"
+                                    );
+                                }
+                            },
+                        );
+                        output.textures_delta.clear();
+                        if index >= 3 {
+                            assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == Color32::WHITE)), valid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn translated_selection_hint_wraps_inside_narrow_screens() {
         for locale in [crate::i18n::Locale::English, crate::i18n::Locale::Chinese] {
             for width in [180.0, 340.0, 1000.0] {

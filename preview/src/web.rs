@@ -37,7 +37,8 @@ impl Gesture {
             return self.image.translate(delta);
         };
         use ResizeDirection::*;
-        let minimum = Vec2::splat(snip2pin::geometry::MIN_IMAGE_PIXELS as f32 / pixels_per_point);
+        // The browser stand-in needs one canvas pixel to avoid inverted Areas.
+        let minimum = Vec2::splat(pixels_per_point.recip());
         let maximum = maximum.max(minimum);
         let mut image = self.image;
         if matches!(direction, West | NorthWest | SouthWest) {

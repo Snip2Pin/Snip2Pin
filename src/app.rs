@@ -707,8 +707,6 @@ impl Snip2Pin {
             return;
         }
         if let overlay::Action::Select(rect) = action
-            && rect.width >= geometry::MIN_IMAGE_PIXELS
-            && rect.height >= geometry::MIN_IMAGE_PIXELS
             && let Some(snapshot) = snapshots.iter().find(|shot| shot.display.id == display_id)
             && let Some(pixels) = capture::crop(&snapshot.pixels, rect)
         {
@@ -1344,15 +1342,6 @@ impl Snip2Pin {
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
             let locked = pin.locked;
-            let native_scale = ctx
-                .input(|input| {
-                    input
-                        .raw
-                        .viewports
-                        .get(&pin_id(id))
-                        .and_then(|viewport| viewport.native_pixels_per_point)
-                })
-                .unwrap_or(display_scale);
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
@@ -1363,11 +1352,6 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
-                .with_min_inner_size(
-                    pin::minimum_size(native_scale)
-                        .unwrap_or(egui::Vec2::splat(geometry::MIN_IMAGE_PIXELS as f32))
-                        / ctx.zoom_factor(),
-                )
                 .with_resizable(!locked)
                 .with_always_on_top()
                 .with_active(false)
