@@ -112,12 +112,12 @@ pub fn show(
                 )
             };
             result(if response == 0 {
-                Err(Text::QuitDialogError.context(std::io::Error::last_os_error()))
+                Err(Text::QuitDialogError.with(std::io::Error::last_os_error()))
             } else {
                 Ok(response == IDOK)
             });
         })
-        .map_err(|error| Text::QuitDialogError.context(error))?;
+        .map_err(|error| Text::QuitDialogError.with(error))?;
     Ok(Some(Dialog {}))
 }
 

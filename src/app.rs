@@ -868,7 +868,7 @@ impl Snip2Pin {
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.exiting = true;
-        drop(self.quit_confirmation.take());
+        let _ = self.quit_confirmation.take();
         #[cfg(target_os = "macos")]
         if let Some(dock) = &self.dock {
             dock.resolve_quit(true);
@@ -886,7 +886,7 @@ impl Snip2Pin {
     fn cancel_quit(&mut self, ctx: &egui::Context) {
         // Invalidate the request before dropping a sheet: dismissal may deliver
         // its completion synchronously, but that queued result is now stale.
-        drop(self.quit_confirmation.take());
+        let _ = self.quit_confirmation.take();
         #[cfg(target_os = "macos")]
         if let Some(dock) = &self.dock {
             dock.resolve_quit(false);
