@@ -125,9 +125,14 @@ belongs in the Rust `xtask` workspace member; native scripts only adapt platform
 tools. Read the development toolchain from rust-toolchain.toml and verify the
 minimum Rust version declared in Cargo.toml with `cargo xtask check-msrv`.
 Install the `.pre-commit-config.yaml` hooks for development. Commit-time checks
-run `cargo xtask lint` (Rust format, Clippy and repository metadata), YAML/TOML
-syntax and `cargo deny --locked check`; failures block the commit and never
-silently rewrite files or skip missing Rust/cargo-deny tools once hooks run. CI reuses the same lint entry point
+run `cargo xtask lint` (Rust format, Clippy and repository metadata), official
+YAML/TOML, large-file and merge-conflict hooks, and `cargo deny --locked check`.
+Official whitespace and end-of-file fixers may edit files and block that commit;
+review and stage their changes before retrying. Large files above 500 KiB must use
+Git LFS; enforce the size check on all supplied files, with LFS files skipped by
+the official hook. Other failures block the commit without rewriting files; never
+skip missing Rust/cargo-deny tools once hooks run. Keep the local Rust hook as a thin
+call to xtask and run the official general hooks in CI too. CI reuses the same lint entry point
 through `check`; full tests/builds remain separate from the faster commit checks.
 Preserve hooks managed by other tools; use their supported integration rather
 than overwriting `core.hooksPath` or disabling security/LFS hooks. Update

@@ -7,6 +7,11 @@ repos:
     hooks:
       - id: check-yaml
       - id: check-toml
+      - id: check-added-large-files
+        args: [--enforce-all]
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
   - repo: local
     hooks:
       - id: rust-lint

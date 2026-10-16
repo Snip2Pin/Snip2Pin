@@ -36,10 +36,15 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-Each commit checks Rust formatting, Clippy, staged whitespace, YAML/TOML syntax,
-dependency advisories, licenses and sources. Checks fail without rewriting files;
-fix the reported issue, stage the changes and commit again. Dependency advisories
-require network access. Full tests, builds and native acceptance remain PR checks.
+Each commit checks Rust formatting, Clippy, YAML/TOML syntax, merge conflicts,
+large files, dependency advisories, licenses and sources. Official hooks also fix
+trailing whitespace and normalize the final newline, blocking the commit when
+they change a file; review and stage those changes before committing again.
+Files above 500 KiB must use Git LFS; the size hook skips LFS-managed files.
+The local Rust hook calls `cargo xtask lint`, keeping format, Clippy and repository
+metadata checks identical to CI rather than duplicating them in hook wrappers.
+Dependency advisories require network access. Full tests, builds and native
+acceptance remain PR checks.
 If another tool manages `core.hooksPath`, preserve it and use its supported
 pre-commit integration instead of replacing existing hooks.
 
