@@ -17,7 +17,8 @@ fn app() -> Snip2Pin {
         pins: BTreeMap::new(),
         pin_menu: None,
         selected_pin: None,
-        quit_confirmation: false,
+        quit_confirmation: None,
+        next_quit_request: 0,
         #[cfg(target_os = "macos")]
         pin_drag: platform::macos_drag::DragEvents::default(),
         next_pin: 0,
@@ -1951,7 +1952,17 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
                 app.tray_action(crate::tray::Action::Quit, ctx);
             }
         });
-        assert!(app.quit_confirmation);
+        assert!(app.quit_confirmation.is_some());
+        assert!(
+            matches!(
+                app.quit_confirmation
+                    .as_ref()
+                    .expect("pending quit")
+                    .presentation,
+                QuitPresentation::Fallback
+            ),
+            "demo must retain its generated GUI confirmation without opening a native dialog"
+        );
         assert!(!app.exiting);
         assert_eq!(app.pins.len(), 2);
         let root_commands = &requested.viewport_commands[&ViewportId::ROOT];
@@ -1998,7 +2009,7 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
         };
         let _ = quit_dialog_frame(&mut app, &ctx, vec![event(true)]);
         let clicked = quit_dialog_frame(&mut app, &ctx, vec![event(false)]);
-        assert!(!app.quit_confirmation);
+        assert!(app.quit_confirmation.is_none());
         assert_eq!(app.exiting, confirm);
         assert_eq!(
             app.relaunch.lock().expect("pending relaunch").is_some(),
@@ -2053,7 +2064,7 @@ fn closing_home_without_a_tray_or_locked_pins_quits_and_releases_images() {
     assert!(app.pins.values().all(|pin| !pin.locked));
     let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
     assert!(app.exiting);
-    assert!(!app.quit_confirmation);
+    assert!(app.quit_confirmation.is_none());
     assert!(app.pins.is_empty());
     assert_eq!(app.selected_pin, None);
     assert!(original.upgrade().is_none());
@@ -2065,6 +2076,264 @@ fn closing_home_without_a_tray_or_locked_pins_quits_and_releases_images() {
     assert!(!root_commands.contains(&ViewportCommand::WindowLevel(
         egui::WindowLevel::AlwaysOnTop
     )));
+}
+
+#[test]
+fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
+    for confirmed in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        add_second_test_pin(&mut app);
+        app.toggle_pin_lock(1, &ctx);
+        app.selected_pin = Some(1);
+        let original = Arc::downgrade(&app.pins[&1].pixels);
+        let initial = app.pins[&1].initial;
+        *app.relaunch.lock().expect("pending relaunch") =
+            Some(std::process::Command::new("generated-relaunch-fixture"));
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.tray_action(crate::tray::Action::Quit, ctx);
+        });
+        let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+        app.sender
+            .send(Event::QuitDecision(id, Ok(confirmed)))
+            .expect("asynchronous decision");
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        });
+        assert!(app.quit_confirmation.is_none());
+        assert_eq!(app.exiting, confirmed);
+        assert_eq!(
+            app.relaunch.lock().expect("pending relaunch").is_some(),
+            confirmed
+        );
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::OutputCommand::CopyImage(_))),
+            "quit decisions must not write image data to the clipboard"
+        );
+        if confirmed {
+            assert!(app.pins.is_empty());
+            assert!(original.upgrade().is_none());
+            assert_eq!(app.selected_pin, None);
+            for viewport in [pin_id(1), pin_id(2), ViewportId::ROOT] {
+                assert!(output.viewport_commands[&viewport].contains(&ViewportCommand::Close));
+            }
+        } else {
+            assert_eq!(app.pins.len(), 2);
+            assert!(app.pins[&1].locked);
+            assert_eq!(app.selected_pin, Some(1));
+            assert_eq!(app.pins[&1].initial, initial);
+            assert!(Arc::ptr_eq(
+                &original.upgrade().expect("retained original"),
+                &app.pins[&1].pixels
+            ));
+            assert!(
+                output.viewport_commands[&ViewportId::ROOT]
+                    .contains(&ViewportCommand::WindowLevel(egui::WindowLevel::Normal))
+            );
+            assert!(
+                output
+                    .viewport_commands
+                    .values()
+                    .flatten()
+                    .all(|command| *command != ViewportCommand::Close)
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_quit_reuses_its_request_and_late_results_cannot_resolve_a_new_prompt() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let first = app.quit_confirmation.as_ref().expect("first prompt").id;
+    let cancelled = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(first, Ok(false), ctx)
+    });
+    assert!(app.quit_confirmation.is_none());
+    assert!(
+        cancelled
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let second = app.quit_confirmation.as_ref().expect("second prompt").id;
+    assert_ne!(first, second);
+    let next_request = app.next_quit_request;
+    let repeated = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx);
+        app.tray_action(crate::tray::Action::Quit, ctx);
+    });
+    assert_eq!(
+        app.quit_confirmation.as_ref().expect("same prompt").id,
+        second
+    );
+    assert_eq!(app.next_quit_request, next_request);
+    assert!(
+        repeated.viewport_commands.is_empty(),
+        "repeated quit must not reopen or refocus its prompt"
+    );
+    for confirmed in [true, false] {
+        app.sender
+            .send(Event::QuitDecision(first, Ok(confirmed)))
+            .expect("late decision");
+    }
+    let stale = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert_eq!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("new prompt survives")
+            .id,
+        second
+    );
+    assert!(!app.exiting);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert!(
+        stale
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+}
+
+#[test]
+fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    // Set state before opting into the native presentation path. No native pin
+    // adapter is called, and the test frame never owns a real host window.
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.demo = false;
+    let frame = eframe::Frame::_new_kittest();
+    assert!(
+        frame.window_handle().is_err(),
+        "the test must never be able to open a native dialog"
+    );
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx)
+    });
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    assert!(matches!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("pending quit")
+            .presentation,
+        QuitPresentation::AwaitingHost
+    ));
+    for expected_ready in [true, false, false] {
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.prepare_quit_prompt(ctx, &frame)
+        });
+        let pending = app.quit_confirmation.as_ref().expect("pending quit");
+        assert_eq!(pending.id, id);
+        assert_eq!(
+            matches!(pending.presentation, QuitPresentation::Ready),
+            expected_ready
+        );
+        if !expected_ready {
+            assert!(matches!(pending.presentation, QuitPresentation::Fallback));
+        }
+        assert!(output.viewport_commands.is_empty());
+        assert!(output.platform_output.commands.is_empty());
+        assert!(
+            app.events.try_recv().is_err(),
+            "no native callback can run without a host"
+        );
+        assert!(!app.exiting);
+        assert!(app.pins.contains_key(&1));
+    }
+}
+
+#[test]
+fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.demo = false;
+    let frame = eframe::Frame::_new_kittest();
+    assert!(frame.window_handle().is_err());
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        if ui.ctx().current_pass_index() == 0 {
+            app.tray_action(crate::tray::Action::Quit, ui.ctx());
+            ui.ctx()
+                .request_discard("exercise native prompt host ordering");
+        }
+        app.prepare_quit_prompt(ui.ctx(), &frame);
+    });
+    output.textures_delta.clear();
+    assert_eq!(output.platform_output.num_completed_passes, 2);
+    assert!(
+        matches!(
+            app.quit_confirmation
+                .as_ref()
+                .expect("pending")
+                .presentation,
+            QuitPresentation::Ready
+        ),
+        "a second pass cannot start a native prompt before host commands apply"
+    );
+    let mut next = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.prepare_quit_prompt(ui.ctx(), &frame);
+    });
+    next.textures_delta.clear();
+    assert!(matches!(
+        app.quit_confirmation
+            .as_ref()
+            .expect("fallback")
+            .presentation,
+        QuitPresentation::Fallback
+    ));
+    assert!(!app.exiting);
+    assert!(app.pins[&1].locked);
+}
+
+#[test]
+fn failed_native_quit_presentation_falls_back_without_losing_pins() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let id = app.quit_confirmation.as_ref().expect("pending").id;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(id, Err(Text::QuitDialogUnavailable.into()), ctx);
+    });
+    let pending = app
+        .quit_confirmation
+        .as_ref()
+        .expect("fallback keeps request");
+    assert_eq!(pending.id, id);
+    assert!(matches!(pending.presentation, QuitPresentation::Fallback));
+    assert!(!app.exiting);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert!(
+        output
+            .viewport_commands
+            .values()
+            .flatten()
+            .all(|command| *command != ViewportCommand::Close)
+    );
+    app.quit_decision(id, Ok(false), &ctx);
+    assert!(app.quit_confirmation.is_none());
+    assert!(app.pins[&1].locked);
 }
 
 #[test]

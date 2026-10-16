@@ -135,6 +135,8 @@ catalogue! {
     QuitLockedTitle => ("Quit with locked pins?", "退出并关闭锁定贴图？"),
     QuitLockedHelp => ("Quitting closes all pins, including locked ones. Nothing is saved.", "退出会关闭全部贴图，包括锁定贴图；图片不会保存。"),
     QuitConfirm => ("Quit and close all", "退出并关闭全部"),
+    QuitDialogUnavailable => ("Native confirmation is unavailable. Use the in-app confirmation.", "系统确认框暂不可用，请使用应用内确认框。"),
+    QuitDialogError => ("Could not open native confirmation: {value}", "无法打开系统确认框：{value}"),
     Cancel => ("Cancel", "取消"),
     DockMenuMissing => ("Dock menu resources are missing. Reinstall the application.", "Dock 菜单资源缺失，请重新安装应用。"),
     DockMenuLoadFailed => ("Could not load the Dock menu.", "无法加载 Dock 菜单。"),

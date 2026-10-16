@@ -11,6 +11,9 @@ use snip2pin::settings::Binding;
 #[path = "platform/pin_menu.rs"]
 pub mod pin_menu;
 
+#[path = "platform/quit_prompt.rs"]
+pub mod quit_prompt;
+
 #[cfg(target_os = "macos")]
 #[path = "platform/macos_drag.rs"]
 pub mod macos_drag;

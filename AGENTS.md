@@ -23,6 +23,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
 - 主页列出当前贴图的缩略图、定位、锁定和关闭操作；选中时将对应窗口置前并短暂高亮，不移动或缩放图片，不新增截图历史。列表可折叠并限高滚动，复用已有纹理。
 - 锁定贴图不可移动、缩放、双击／Esc／菜单关闭，关闭全部跳过锁定项；复制、定位与解锁仍可用。所有关闭和手势入口在消费事件时检查锁定，不能只禁用按钮。有锁定贴图时主动退出须确认，取消保留全部图片且取消待执行重启；确认后才释放图片并退出。
+- 退出等确认对话框优先使用系统原生界面；macOS 用异步 NSAlert sheet，Windows 原生消息框在专用线程等待，通过带请求标识的事件回传结果，不在绘制或主事件循环借用期间同步嵌套模态循环。默认取消，过期结果不得影响新请求；等待 Windows 消息框时保留其所有者窗口。无通用原生接口的平台、演示和自动测试保留轻量应用内回退，不引入第二套 GUI 运行时。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
 - 截图模式用蓝框标识鼠标所在屏幕，其他屏幕略微变暗；随鼠标切换高亮，不在后台轮询鼠标。
 - 完成或取消截图时恢复普通光标；演示和自动化测试不得修改系统光标或抢占用户焦点。
@@ -89,6 +90,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
 - `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
 - `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu and system Quit routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
+- `src/platform/quit_prompt.rs`: asynchronous native quit confirmation with an application-UI fallback.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `src/i18n.rs`: typed Chinese/English catalogue, deferred messages and locale matching.
 - `src/permission.rs`: user-driven authorization state without native calls or polling.
