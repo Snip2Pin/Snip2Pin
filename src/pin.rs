@@ -16,7 +16,7 @@ pub const METRICS: Metrics = Metrics {
     inset: 12.0,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Control {
     Copy,
     Lock,

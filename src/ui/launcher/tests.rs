@@ -512,3 +512,50 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
         );
     }
 }
+
+#[test]
+fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
+    let ctx = egui::Context::default();
+    let size = Vec2::from(LAUNCHER.window);
+    let texture = ctx.load_texture(
+        "generated-list-identity",
+        egui::ColorImage::filled([3, 5], egui::Color32::WHITE),
+        egui::TextureOptions::default(),
+    );
+    let pins = [17, 18].map(|id| PinEntry {
+        id,
+        texture: &texture,
+        size: [3, 5],
+        locked: false,
+        selected: false,
+    });
+    let frame = |events, pins: &[PinEntry<'_>]| {
+        frame_with_pins(&ctx, size, events, false, Locale::English, pins)
+    };
+    let _ = frame(vec![], &pins);
+    let output = frame(vec![], &pins).0;
+    let close = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "×" => {
+                Some(shape.shape.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .expect("first row close button")
+        .center();
+    let _ = frame(vec![Event::PointerMoved(close)], &pins);
+    let pointer = |pressed| Event::PointerButton {
+        pos: close,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    let _ = frame(vec![pointer(true)], &pins);
+    assert!(
+        frame(vec![pointer(false)], &pins[1..]).1.is_none(),
+        "releasing an old row's press must not close a different pin"
+    );
+}

@@ -156,19 +156,22 @@ pub fn controls(
         );
         let enabled = control != Control::Close || !locked;
         let response = ui
-            .add_enabled_ui(enabled, |ui| {
-                ui.put(
-                    rect,
-                    egui::Button::new(
-                        egui::RichText::new(if control == Control::Close { "×" } else { "" })
-                            .color(if enabled {
-                                Color32::WHITE
-                            } else {
-                                Color32::GRAY
-                            }),
+            .push_id(("pin-control", id, control), |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    ui.put(
+                        rect,
+                        egui::Button::new(
+                            egui::RichText::new(if control == Control::Close { "×" } else { "" })
+                                .color(if enabled {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::GRAY
+                                }),
+                        )
+                        .fill(PIN.button_fill),
                     )
-                    .fill(PIN.button_fill),
-                )
+                })
+                .inner
             })
             .inner;
         response.widget_info(|| {

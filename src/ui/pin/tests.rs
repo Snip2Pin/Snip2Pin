@@ -1079,3 +1079,40 @@ fn locked_menu_keeps_copy_and_unlock_available_and_close_disabled_in_both_locale
         }
     }
 }
+
+#[test]
+fn hiding_a_button_during_a_press_cannot_trigger_its_replacement() {
+    let ctx = egui::Context::default();
+    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+    let actions = RefCell::new(Vec::new());
+    let paint = |count, events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(bounds),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                super::controls(
+                    ui,
+                    7,
+                    false,
+                    Toolbar {
+                        bounds: Rect::from_min_size(Pos2::ZERO, METRICS.toolbar_size_for(count)),
+                        count,
+                    },
+                    &|action| actions.borrow_mut().push(action),
+                )
+            },
+        );
+        output.textures_delta.clear();
+    };
+    let point = egui::pos2(METRICS.button / 2.0, METRICS.button / 2.0);
+    paint(3, vec![Event::PointerMoved(point)]);
+    paint(3, vec![pointer(point, true)]);
+    paint(2, vec![pointer(point, false)]);
+    assert!(
+        actions.into_inner().is_empty(),
+        "releasing Copy after it disappears must not toggle Lock"
+    );
+}

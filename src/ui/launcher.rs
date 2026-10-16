@@ -128,7 +128,12 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                                 .max_height(LAUNCHER.pin_list_height)
                                 .show(ui, |ui| {
                                     for pin in model.pins {
-                                        if let Some(selected) = pin_row(ui, pin, locale) {
+                                        if let Some(selected) = ui
+                                            .push_id(("pin-row", pin.id), |ui| {
+                                                pin_row(ui, pin, locale)
+                                            })
+                                            .inner
+                                        {
                                             action = Some(selected);
                                         }
                                     }
