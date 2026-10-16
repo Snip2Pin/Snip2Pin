@@ -3,6 +3,20 @@ use std::cell::RefCell;
 use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Vec2};
 
+fn image(
+    ui: &mut egui::Ui,
+    id: u64,
+    texture: &TextureHandle,
+    native_edges: bool,
+    excluded: Option<Rect>,
+    events: &dyn Fn(Action),
+) -> bool {
+    let ctx = ui.ctx().clone();
+    image_with_host(ui, id, texture, native_edges, excluded, events, |command| {
+        ctx.send_viewport_cmd(command);
+    })
+}
+
 fn pointer(point: Pos2, pressed: bool) -> Event {
     Event::PointerButton {
         pos: point,

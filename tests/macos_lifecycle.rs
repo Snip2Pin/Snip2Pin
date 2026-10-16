@@ -60,6 +60,8 @@ fn main() {
     }
     impl ApplicationHandler for Lifecycle {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let drag = platform::macos_drag::DragEvents::install().expect("local drag monitor");
+            drop(drag);
             let sizes = [(300.0, 200.0), (1.0, 1.0), (12.0, 120.0)];
             let images: Vec<_> = sizes
                 .iter()
@@ -108,6 +110,54 @@ fn main() {
                 assert!(image.is_resizable());
                 assert!(native.parentWindow().is_none());
                 let initial = native.contentRectForFrameRect(native.frame());
+                #[cfg(test)]
+                if index == 0 {
+                    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+                    use objc2_foundation::NSPoint;
+                    let view = native.contentView().expect("pin view");
+                    let point = NSPoint::new(111.7, 74.1);
+                    let window_point = view.convertPoint_toView(point, None);
+                    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                        NSEventType::LeftMouseDown, window_point, NSEventModifierFlags::empty(),
+                        123.0, native.windowNumber(), None, 42, 1, 1.0,
+                    ).expect("synthetic press; never posted to AppKit");
+                    let drag = platform::macos_drag::DragEvents::default();
+                    drag.record_native_for_test(event);
+                    let physical = [
+                        point.x * native.backingScaleFactor(),
+                        point.y * native.backingScaleFactor(),
+                    ];
+                    for zoom in [1.0, 1.25, 2.0] {
+                        let pixels_per_point = image.scale_factor() as f32 * zoom;
+                        let origin = egui::pos2(
+                            physical[0] as f32 / pixels_per_point,
+                            physical[1] as f32 / pixels_per_point,
+                        );
+                        let requests = drag.requests();
+                        assert!(
+                            requests
+                                .matching(index as u64, origin, pixels_per_point)
+                                .is_some()
+                        );
+                        assert!(
+                            requests
+                                .matching(index as u64 + 1, origin, pixels_per_point)
+                                .is_none()
+                        );
+                        assert!(
+                            requests
+                                .matching(
+                                    index as u64,
+                                    origin + egui::vec2(1.0, 0.0),
+                                    pixels_per_point
+                                )
+                                .is_none()
+                        );
+                    }
+                    println!(
+                        "macOS synthetic original-press mapping passed without event delivery"
+                    );
+                }
                 assert_eq!(initial.size.width, initial_width);
                 assert_eq!(initial.size.height, initial_height);
                 assert!(native.contentMinSize().width <= 1.0);

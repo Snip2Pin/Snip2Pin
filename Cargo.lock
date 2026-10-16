@@ -3593,6 +3593,7 @@ dependencies = [
 name = "snip2pin"
 version = "0.2.0"
 dependencies = [
+ "block2 0.6.2",
  "directories",
  "eframe",
  "egui-winit",

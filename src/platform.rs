@@ -10,6 +10,10 @@ use snip2pin::settings::Binding;
 #[path = "platform/pin_menu.rs"]
 pub mod pin_menu;
 
+#[cfg(target_os = "macos")]
+#[path = "platform/macos_drag.rs"]
+pub mod macos_drag;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[path = "platform/work_area.rs"]
 mod work_area;

@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(target_os = "macos")]
+#[path = "tests/macos_drag.rs"]
+mod macos_drag;
+
 fn app() -> Snip2Pin {
     let (sender, events) = mpsc::channel();
     Snip2Pin {
@@ -12,6 +16,8 @@ fn app() -> Snip2Pin {
         active_display: None,
         pins: BTreeMap::new(),
         pin_menu: None,
+        #[cfg(target_os = "macos")]
+        pin_drag: platform::macos_drag::DragEvents::default(),
         next_pin: 0,
         message: None,
         shortcut: None,

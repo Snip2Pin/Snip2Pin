@@ -56,6 +56,8 @@ pub enum Event {
     Ready(u64, Result<Vec<Snapshot>, String>, Option<[f32; 2]>),
     Selection(u64, u32, overlay::Action),
     PinReady(u64, u64),
+    #[cfg(target_os = "macos")]
+    BeginPinDrag(u64, platform::macos_drag::PressId),
     CopyPin(u64),
     ClosePin(u64),
     MenuPin(u64, Option<egui::Pos2>),
@@ -106,6 +108,8 @@ pub struct Snip2Pin {
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
     pin_menu: Option<PinMenu>,
+    #[cfg(target_os = "macos")]
+    pin_drag: platform::macos_drag::DragEvents,
     next_pin: u64,
     message: Option<String>,
     shortcut: Option<Shortcut>,
@@ -223,6 +227,15 @@ impl Snip2Pin {
         let home_visible = !std::env::args().any(|arg| arg == "--background")
             || tray.is_none()
             || layers.is_empty();
+        #[cfg(target_os = "macos")]
+        let pin_drag = if demo {
+            platform::macos_drag::DragEvents::default()
+        } else {
+            platform::macos_drag::DragEvents::install().unwrap_or_else(|error| {
+                message = Some(error);
+                platform::macos_drag::DragEvents::default()
+            })
+        };
         Self {
             events,
             sender,
@@ -233,6 +246,8 @@ impl Snip2Pin {
             active_display: None,
             pins: BTreeMap::new(),
             pin_menu: None,
+            #[cfg(target_os = "macos")]
+            pin_drag,
             next_pin: 0,
             message,
             shortcut,
@@ -930,6 +945,8 @@ impl Snip2Pin {
             let screen = pin.screen;
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
+            #[cfg(target_os = "macos")]
+            let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             ctx.show_viewport_deferred(
                 pin_id(id),
                 self.window_icon(egui::ViewportBuilder::default())
@@ -990,13 +1007,32 @@ impl Snip2Pin {
                         })
                         .flatten();
                     let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
-                    ui::pin::image(
+                    #[cfg(target_os = "macos")]
+                    let press_origin = ui.input(|input| input.pointer.press_origin());
+                    ui::pin::image_with_host(
                         ui,
                         id,
                         &texture,
                         cfg!(target_os = "macos"),
                         controls,
                         &dispatch,
+                        |command| {
+                            #[cfg(target_os = "macos")]
+                            if command == ViewportCommand::StartDrag
+                                && let Some(requests) = &native_drag
+                            {
+                                if ctx.current_pass_index() == 0
+                                    && let Some(origin) = press_origin
+                                    && let Some(press) =
+                                        requests.matching(id, origin, ctx.pixels_per_point())
+                                {
+                                    let _ = events.send(Event::BeginPinDrag(id, press));
+                                    ctx.request_repaint_of(ViewportId::ROOT);
+                                }
+                                return;
+                            }
+                            ctx.send_viewport_cmd(command);
+                        },
                     );
                     if hovered && let Some(row) = controls {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
@@ -1085,6 +1121,12 @@ impl eframe::App for Snip2Pin {
                     if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
                     {
                         self.restore(ctx);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                Event::BeginPinDrag(id, press) => {
+                    if self.pins.contains_key(&id) {
+                        self.pin_drag.begin(id, press);
                     }
                 }
                 Event::CopyPin(id) => {

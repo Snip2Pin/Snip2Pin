@@ -15,20 +15,6 @@ pub enum Action {
 const MENU_PADDING: f32 = 8.0;
 pub const MENU_SIZE: egui::Vec2 = egui::vec2(120.0, 72.0);
 
-pub fn image(
-    ui: &mut egui::Ui,
-    id: u64,
-    texture: &TextureHandle,
-    native_edges: bool,
-    excluded: Option<Rect>,
-    events: &dyn Fn(Action),
-) -> bool {
-    let ctx = ui.ctx().clone();
-    image_with_host(ui, id, texture, native_edges, excluded, events, |command| {
-        ctx.send_viewport_cmd(command);
-    })
-}
-
 /// The web sandbox intercepts these requests; desktop hosts handle the gesture.
 /// This view never computes or requests a new window position or size.
 pub fn image_with_host(

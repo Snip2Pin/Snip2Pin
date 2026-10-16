@@ -66,7 +66,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 验证用户最终能否完成操作，而不只验证中间数值或某个分支。涉及窗口行为时，检查真实的平台约束和完整交互路径；布局计算正确或隐藏窗口能设置位置，不代表用户拖动时一定正确。明确区分自动化验证与用户实际交互验证，发现缺口时补足测试。
 - 确认原始问题真正消失前不得合并或启用自动合并，证据不足的修复保持 Draft PR。闪烁、跳动、瞬时偏移须验证可见原生窗口连续操作的中间帧；自动检查、网页或隐藏缓冲区测试通过不能视为真实交互通过。用户不允许操控屏幕时先安装验证构建，等待用户明确确认；仍能复现就继续修复，不先合入或宣称完成。验收记录关联具体提交，后续影响该行为的改动须重新验证。
 - 原生窗口是移动、缩放和当前几何的唯一权威；Rust 只保留不可变原图、初始放置与图内按钮布局。删除应用层的拖动锚点、缩放求解、重复期望 Rect 和反馈补偿；跨 DPI 先统一坐标单位。
-- macOS 原生拖动使用所属窗口的原始鼠标按下事件，不能在延迟重绘后用 `NSApplication.currentEvent` 代替。应用内监听仅保留一次有效按下，松开或消费后释放；不安装全局监听，不吞掉事件，不自行求解拖动位置。
+- macOS 原生拖动使用所属窗口的原始鼠标按下事件，不能在延迟重绘后用 `NSApplication.currentEvent` 代替。应用内监听仅保留一次有效按下，松开或消费后释放；请求匹配原始按下点并绑定该次按下的代际和目标窗口，过期请求不能消费后来的点击。不安装全局监听，不吞掉事件，不自行求解拖动位置。
 - 窗口与渲染时序按实际后端验证，包括 egui 多 pass 重绘和连续原生事件。图片绘制不能产生主窗口几何副作用，不能依赖某个可能被丢弃的 UI pass 提交 drawable 补丁。不得用巨大透明窗口、手动更新 GL context 或定位重试掩盖问题。
 - 原生状态查询也要验证是否会改变窗口；初始化验收必须覆盖窗口加入显示顺序后的路径。修补上游依赖时使用可追溯的已发布源码、保留许可证和最小差异，并记录移除条件，不通过坐标补偿掩盖后端副作用。
 - 截图线程使用有界队列，取消立即恢复 UI、丢弃晚到结果并阻止尚未开始的后续屏幕采集，不承诺强停正在执行的系统调用。像素转换在工作线程完成，截图数据与纹理上传共享不可变图片；上传前验证 GPU 纹理边长上限。多屏并行不跨线程搬运非 Send 原生句柄，Linux Portal 不并发请求。
@@ -83,6 +83,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
+- `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `src/permission.rs`: user-driven authorization state without native calls or polling.
 - `src/platform/macos_access.rs`: main-thread permission requests, settings navigation, and installation/identity migration checks.
