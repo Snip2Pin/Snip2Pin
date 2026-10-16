@@ -2214,6 +2214,131 @@ fn repeated_quit_reuses_its_request_and_late_results_cannot_resolve_a_new_prompt
 }
 
 #[test]
+fn pending_quit_keeps_its_host_after_the_last_pin_is_unlocked() {
+    for confirmed in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = tiny_pin_app(&ctx);
+        app.toggle_pin_lock(1, &ctx);
+        let original = Arc::downgrade(&app.pins[&1].pixels);
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.tray_action(crate::tray::Action::Quit, ctx);
+            app.toggle_pin_lock(1, ctx);
+        });
+        let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+        assert!(app.tray.is_none());
+        assert!(!app.pins[&1].locked);
+        let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
+        assert!(
+            output
+                .viewport_commands
+                .get(&ViewportId::ROOT)
+                .is_some_and(|commands| { commands.contains(&ViewportCommand::CancelClose) }),
+            "a pending confirmation must retain its host even if lock state changes"
+        );
+        assert!(!app.exiting);
+        assert_eq!(app.quit_confirmation.as_ref().expect("same request").id, id);
+        assert!(original.upgrade().is_some());
+        app.quit_decision(id, Ok(confirmed), &ctx);
+        assert!(app.quit_confirmation.is_none());
+        assert_eq!(app.exiting, confirmed);
+        assert_eq!(original.upgrade().is_none(), confirmed);
+    }
+}
+
+#[test]
+fn english_quit_fallback_ignores_enter_and_escape_preserves_pins() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.preferences.language = Language::English;
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    *app.relaunch.lock().expect("pending relaunch") =
+        Some(std::process::Command::new("generated-relaunch-fixture"));
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let _ = quit_dialog_frame(&mut app, &ctx, vec![]);
+    let output = quit_dialog_frame(&mut app, &ctx, vec![]);
+    for key in [
+        Text::QuitLockedTitle,
+        Text::QuitLockedHelp,
+        Text::Cancel,
+        Text::QuitConfirm,
+    ] {
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Locale::English.text(key))
+        }), "missing English confirmation text: {key:?}");
+    }
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        let _ = quit_dialog_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!app.exiting);
+        assert_eq!(app.quit_confirmation.is_some(), key == egui::Key::Enter);
+        assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    }
+    assert!(app.relaunch.lock().expect("pending relaunch").is_none());
+}
+
+#[test]
+fn confirmed_quit_ignores_a_later_capture_event_in_the_same_batch() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.tray_action(crate::tray::Action::Quit, &ctx);
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    app.sender
+        .send(Event::QuitDecision(id, Ok(true)))
+        .expect("confirm");
+    app.sender.send(Event::Capture).expect("late shortcut");
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(app.exiting);
+    assert!(app.pins.is_empty());
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(
+        app.capture_worker.is_none(),
+        "exiting must not start capture work"
+    );
+}
+
+#[test]
+fn quitting_during_capture_discards_late_results_and_can_resume_after_cancel() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let capture = app.gate.begin().expect("pending generated capture");
+    app.phase = Phase::Capturing;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Quit, ctx);
+        app.accept_capture(capture, Ok(vec![capture::demo()]), None, ctx);
+        app.capture_command(ctx);
+    });
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.capture_worker.is_none());
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+    assert!(output.platform_output.commands.is_empty());
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    let id = app.quit_confirmation.as_ref().expect("pending quit").id;
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.quit_decision(id, Ok(false), ctx);
+        app.capture_command(ctx);
+    });
+    assert!(!app.exiting);
+    assert!(matches!(app.phase, Phase::Capturing));
+    assert!(app.capture_worker.is_some());
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+}
+
+#[test]
 fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
