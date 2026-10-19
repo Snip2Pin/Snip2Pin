@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType, CGRect};
 use objc2_core_graphics::{
     CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo, CGWindowListOption,
-    kCGFloatingWindowLevel, kCGNormalWindowLevel, kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer,
+    kCGDockWindowLevel, kCGNormalWindowLevel, kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer,
 };
 
 use super::WindowBounds;
@@ -29,7 +29,7 @@ fn describe(info: &CFDictionary) -> Option<WindowBounds> {
     let (layer, alpha, bounds) = unsafe { (kCGWindowLayer, kCGWindowAlpha, kCGWindowBounds) };
     let layer = value(info, layer)?.downcast_ref::<CFNumber>()?.as_i32()?;
     let alpha = value(info, alpha)?.downcast_ref::<CFNumber>()?.as_f64()?;
-    if !(kCGNormalWindowLevel..=kCGFloatingWindowLevel).contains(&layer)
+    if !(kCGNormalWindowLevel..kCGDockWindowLevel).contains(&layer)
         || !alpha.is_finite()
         || alpha <= 0.0
     {
@@ -70,7 +70,10 @@ pub(in crate::capture) fn visible(cancelled: &AtomicBool) -> Vec<WindowBounds> {
 mod tests {
     use super::*;
     use objc2_core_foundation::{CGPoint, CGSize};
-    use objc2_core_graphics::CGRectCreateDictionaryRepresentation;
+    use objc2_core_graphics::{
+        CGRectCreateDictionaryRepresentation, kCGFloatingWindowLevel, kCGModalPanelWindowLevel,
+        kCGUtilityWindowLevel,
+    };
 
     #[test]
     fn window_metadata_keeps_normal_and_floating_windows_but_excludes_system_overlays() {
@@ -83,7 +86,9 @@ mod tests {
         for (level, alpha, accepted) in [
             (kCGNormalWindowLevel, 1.0, true),
             (kCGFloatingWindowLevel, 1.0, true),
-            (kCGFloatingWindowLevel + 1, 1.0, false),
+            (kCGModalPanelWindowLevel, 1.0, true),
+            (kCGUtilityWindowLevel, 1.0, true),
+            (kCGDockWindowLevel, 1.0, false),
             (kCGNormalWindowLevel, 0.0, false),
             (kCGNormalWindowLevel, f64::NAN, false),
         ] {

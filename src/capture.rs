@@ -313,7 +313,12 @@ pub fn demo_windows(origin: Option<[f32; 2]>) -> Snapshot {
                 } else if y < rect.y + 28 {
                     eframe::egui::Color32::from_rgb(48, 66 + index as u8 * 30, 90)
                 } else {
-                    image[(x as usize, y as usize)].gamma_multiply(0.65)
+                    let color = image[(x as usize, y as usize)];
+                    eframe::egui::Color32::from_rgb(
+                        color.r() / 3 * 2,
+                        color.g() / 3 * 2,
+                        color.b() / 3 * 2,
+                    )
                 };
             }
         }

@@ -9,7 +9,7 @@ use windows_sys::{
         Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
         UI::WindowsAndMessaging::{
             EnumWindows, GWL_EXSTYLE, GetClassNameW, GetDesktopWindow, GetWindowLongPtrW,
-            GetWindowRect, IsIconic, IsWindowVisible, WS_EX_TRANSPARENT,
+            GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_TRANSPARENT,
         },
     },
     core::BOOL,
@@ -22,9 +22,14 @@ struct Enumeration<'a> {
     windows: Vec<WindowBounds>,
 }
 
+fn selection_surface(process: u32, style: u32) -> bool {
+    process == std::process::id() && style & WS_EX_TRANSPARENT != 0
+}
+
 fn describe(window: HWND) -> Option<WindowBounds> {
     let mut rect = RECT::default();
     let mut cloaked = 0_u32;
+    let mut process = 0_u32;
     // Win32 window class names contain at most 256 characters, including NUL.
     const WINDOW_CLASS_CAPACITY: usize = 256;
     let mut class = [0; WINDOW_CLASS_CAPACITY];
@@ -32,10 +37,11 @@ fn describe(window: HWND) -> Option<WindowBounds> {
     // outputs are owned, correctly sized buffers. A disappearing window simply
     // fails its query; no native pointer or handle survives this function.
     unsafe {
+        GetWindowThreadProcessId(window, &mut process);
         if IsWindowVisible(window) == 0
             || IsIconic(window) != 0
             || window == GetDesktopWindow()
-            || GetWindowLongPtrW(window, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT != 0
+            || selection_surface(process, GetWindowLongPtrW(window, GWL_EXSTYLE) as u32)
         {
             return None;
         }
@@ -49,7 +55,7 @@ fn describe(window: HWND) -> Option<WindowBounds> {
         }
         if DwmGetWindowAttribute(
             window,
-            DWMWA_CLOAKED,
+            DWMWA_CLOAKED as u32,
             (&mut cloaked as *mut u32).cast(),
             std::mem::size_of_val(&cloaked) as u32,
         ) >= 0
@@ -59,7 +65,7 @@ fn describe(window: HWND) -> Option<WindowBounds> {
         }
         if DwmGetWindowAttribute(
             window,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
+            DWMWA_EXTENDED_FRAME_BOUNDS as u32,
             (&mut rect as *mut RECT).cast(),
             std::mem::size_of_val(&rect) as u32,
         ) < 0
@@ -100,4 +106,17 @@ pub(in crate::capture) fn visible(cancelled: &AtomicBool) -> Vec<WindowBounds> {
     // by the capture worker and is never retried.
     unsafe { EnumWindows(Some(visit), (&mut state as *mut Enumeration<'_>) as LPARAM) };
     state.windows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparent_windows_are_skipped_only_for_our_idle_selection_surfaces() {
+        assert!(selection_surface(std::process::id(), WS_EX_TRANSPARENT));
+        assert!(!selection_surface(std::process::id(), 0));
+        assert!(!selection_surface(0, WS_EX_TRANSPARENT));
+        assert!(!selection_surface(0, 0));
+    }
 }

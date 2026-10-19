@@ -106,9 +106,17 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
     // A complete fast gesture may arrive before the next frame, leaving no
     // in-progress drag response. Use egui's own click classification, retaining
     // the original press instead of guessing a new threshold or anchor.
+    let blank_press = selection
+        .press
+        .is_some_and(|point| selection.window_at(bounds, point).is_none());
     let released_drag = selection.press.is_some()
-        && ui.input(|input| input.pointer.primary_released() && !input.pointer.primary_clicked());
-    if response.drag_started_by(egui::PointerButton::Primary) || released_drag {
+        && ui.input(|input| {
+            input.pointer.primary_released() && (!input.pointer.primary_clicked() || blank_press)
+        });
+    if response.drag_started_by(egui::PointerButton::Primary)
+        || released_drag
+        || (blank_press && ui.input(|input| input.pointer.primary_down()))
+    {
         selection.start = selection
             .press
             .or_else(|| ui.input(|input| input.pointer.press_origin()));
@@ -137,7 +145,9 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
             );
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) || released_drag {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+            if selected.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+            }
             selection.start = None;
             selection.press = None;
             return selected.map(Action::Select);
@@ -524,6 +534,70 @@ mod tests {
                     assert!(matches!(show(ui, &mut selection, false), Some(Action::Select(selected)) if selected == rect));
                 });
             });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn blank_space_allows_direct_tiny_drags_without_first_exceeding_click_tolerance() {
+        let ctx = egui::Context::default();
+        let mut selection = Selection {
+            texture: ctx.load_texture(
+                "generated blank region",
+                egui::ColorImage::filled([2, 2], Color32::BLACK),
+                Default::default(),
+            ),
+            pixels: [640, 480],
+            pixel_step: [1, 1],
+            windows: Vec::new(),
+            press: None,
+            start: None,
+            focus_requested: true,
+        };
+        for (index, events) in [
+            vec![
+                egui::Event::PointerMoved(egui::pos2(20.0, 20.0)),
+                egui::Event::PointerButton {
+                    pos: egui::pos2(20.0, 20.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![
+                egui::Event::PointerMoved(egui::pos2(22.0, 22.0)),
+                egui::Event::PointerButton {
+                    pos: egui::pos2(22.0, 22.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let action = show(ui, &mut selection, true);
+                    if index == 1 {
+                        assert!(matches!(
+                            action,
+                            Some(Action::Select(PixelRect {
+                                x: 20,
+                                y: 20,
+                                width: 2,
+                                height: 2
+                            }))
+                        ));
+                    }
+                },
+            );
             output.textures_delta.clear();
         }
     }
