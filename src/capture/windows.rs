@@ -42,11 +42,11 @@ mod linux;
 pub(super) use linux::visible;
 
 #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
-#[path = "windows/windows.rs"]
-mod windows;
+#[path = "windows/win32.rs"]
+mod win32;
 
 #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
-pub(super) use windows::visible;
+pub(super) use win32::visible;
 
 #[cfg(test)]
 mod tests {

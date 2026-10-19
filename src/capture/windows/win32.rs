@@ -1,4 +1,4 @@
-//! One front-to-back EnumWindows pass, including this app's Home and pins.
+//! One front-to-back Win32 enumeration, including this app's Home and pins.
 #![allow(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, Ordering};

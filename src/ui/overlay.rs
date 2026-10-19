@@ -539,6 +539,91 @@ mod tests {
     }
 
     #[test]
+    fn window_click_tolerance_allows_jitter_and_long_hold_tiny_selection() {
+        for long_hold in [false, true] {
+            let ctx = egui::Context::default();
+            let duration = ctx.options(|options| options.input_options.max_click_duration);
+            let window = PixelRect {
+                x: 40,
+                y: 50,
+                width: 120,
+                height: 90,
+            };
+            let mut selection = Selection {
+                texture: ctx.load_texture(
+                    "generated window gesture",
+                    egui::ColorImage::filled([2, 2], Color32::BLACK),
+                    Default::default(),
+                ),
+                pixels: [640, 480],
+                pixel_step: [1, 1],
+                windows: vec![window],
+                press: None,
+                start: None,
+                focus_requested: true,
+            };
+            let start = egui::pos2(80.0, 80.0);
+            let end = start + egui::Vec2::splat(2.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let release_time = if long_hold {
+                duration * 2.0
+            } else {
+                duration / 2.0
+            };
+            for (index, (time, events)) in [
+                (0.0, vec![egui::Event::PointerMoved(start)]),
+                (0.01, vec![button(start, true)]),
+                (
+                    0.01 + release_time,
+                    vec![egui::Event::PointerMoved(end), button(end, false)],
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(640.0, 480.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let result = show(ui, &mut selection, true);
+                        if index == 2 {
+                            let expected = if long_hold {
+                                PixelRect {
+                                    x: 80,
+                                    y: 80,
+                                    width: 2,
+                                    height: 2,
+                                }
+                            } else {
+                                window
+                            };
+                            assert!(
+                                matches!(result, Some(Action::Select(rect)) if rect == expected),
+                                "long_hold={long_hold}"
+                            );
+                        } else {
+                            assert!(result.is_none());
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
     fn blank_space_allows_direct_tiny_drags_without_first_exceeding_click_tolerance() {
         let ctx = egui::Context::default();
         let mut selection = Selection {
