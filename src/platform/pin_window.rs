@@ -235,7 +235,7 @@ pub fn activate(id: u64) -> Result<(), Message> {
     let sibling = property_value(root, active, AtomEnum::WINDOW).filter(|window| {
         property_value(*window, pid, AtomEnum::CARDINAL) == Some(std::process::id())
     });
-    for window in windows {
+    if let Some(window) = windows.into_iter().next() {
         let sibling = sibling.filter(|sibling| *sibling != window);
         let restack = atom(b"_NET_RESTACK_WINDOW")?;
         if sibling.is_some() && !supports(restack) {
