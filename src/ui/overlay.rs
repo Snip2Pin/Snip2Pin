@@ -30,6 +30,58 @@ fn image_rect(bounds: Rect, pixels: [u32; 2], rect: PixelRect) -> Rect {
 }
 
 impl Selection {
+    fn moved_after_press(&self, events: &[egui::Event]) -> bool {
+        let Some(start) = self.press else {
+            return false;
+        };
+        let begin = events
+            .iter()
+            .rposition(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+            .map_or(0, |index| index + 1);
+        for event in &events[begin..] {
+            match event {
+                egui::Event::PointerMoved(point) if *point != start => return true,
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => return *pos != start,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn full_display(&self) -> PixelRect {
+        PixelRect {
+            x: 0,
+            y: 0,
+            width: self.pixels[0],
+            height: self.pixels[1],
+        }
+    }
+
+    fn target_at(&self, bounds: Rect, point: Pos2) -> Option<PixelRect> {
+        (point.x >= bounds.min.x
+            && point.x < bounds.max.x
+            && point.y >= bounds.min.y
+            && point.y < bounds.max.y)
+            .then(|| {
+                self.window_at(bounds, point)
+                    .unwrap_or_else(|| self.full_display())
+            })
+    }
+
     fn paint_target(&self, ui: &egui::Ui, bounds: Rect, pixels: PixelRect, color: Color32) {
         let target = image_rect(bounds, self.pixels, pixels);
         // Clip the same frozen image instead of resampling the selected region.
@@ -117,19 +169,36 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
     let blank_press = selection
         .press
         .is_some_and(|point| selection.window_at(bounds, point).is_none());
+    let current = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => Some(*pos),
+                _ => None,
+            })
+            .or_else(|| input.pointer.interact_pos())
+    });
+    let blank_drag = blank_press && ui.input(|input| selection.moved_after_press(&input.events));
     let released_drag = selection.press.is_some()
         && ui.input(|input| {
-            input.pointer.primary_released() && (!input.pointer.primary_clicked() || blank_press)
+            input.pointer.primary_released()
+                && (!input.pointer.primary_clicked() || blank_drag || selection.start.is_some())
         });
     if response.drag_started_by(egui::PointerButton::Primary)
         || released_drag
-        || (blank_press && ui.input(|input| input.pointer.primary_down()))
+        || (blank_drag && ui.input(|input| input.pointer.primary_down()))
     {
         selection.start = selection
             .press
             .or_else(|| ui.input(|input| input.pointer.press_origin()));
     }
-    let current = ui.input(|input| input.pointer.interact_pos());
     if let (Some(start), Some(current)) = (selection.start, current) {
         let selected = geometry::selection_with_step(
             [
@@ -157,7 +226,11 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         }
     }
     let hovered = (active || activate)
-        .then(|| current.and_then(|point| selection.window_at(bounds, point)))
+        .then(|| {
+            current.map_or(Some(selection.full_display()), |point| {
+                selection.target_at(bounds, point)
+            })
+        })
         .flatten();
     if selection.start.is_none()
         && let Some(rect) = hovered
@@ -169,7 +242,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         if ui.input(|input| input.pointer.primary_clicked())
             && selection
                 .press
-                .and_then(|point| selection.window_at(bounds, point))
+                .and_then(|point| selection.target_at(bounds, point))
                 == Some(rect)
         {
             selection.press = None;
@@ -185,11 +258,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         let width = OVERLAY.hint_size[0].min(bounds.width());
         let galley = ui.painter().layout(
             crate::i18n::locale(ui.ctx())
-                .text(if selection.windows.is_empty() {
-                    crate::i18n::Text::SelectionHelp
-                } else {
-                    crate::i18n::Text::WindowSelectionHelp
-                })
+                .text(crate::i18n::Text::SelectionHelp)
                 .into(),
             egui::FontId::proportional(OVERLAY.hint_font),
             Color32::WHITE,
@@ -217,6 +286,137 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_blank_gestures_distinguish_clicks_from_tiny_round_trip_drags() {
+        for round_trip in [false, true] {
+            let ctx = egui::Context::default();
+            let mut selection = Selection {
+                texture: ctx.load_texture(
+                    "generated blank gesture",
+                    egui::ColorImage::filled([2, 2], Color32::WHITE),
+                    Default::default(),
+                ),
+                pixels: [640, 480],
+                pixel_step: [1, 1],
+                windows: Vec::new(),
+                press: None,
+                start: None,
+                focus_requested: true,
+            };
+            let start = egui::pos2(600.0, 400.0);
+            let button = |pressed| egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut events = vec![
+                egui::Event::PointerMoved(egui::pos2(20.0, 20.0)),
+                egui::Event::PointerMoved(start),
+                button(true),
+            ];
+            if round_trip {
+                events.extend([
+                    egui::Event::PointerMoved(start + egui::Vec2::splat(2.0)),
+                    egui::Event::PointerMoved(start),
+                ]);
+            }
+            events.push(button(false));
+            events.push(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let action = show(ui, &mut selection, true);
+                    if round_trip {
+                        assert!(
+                            action.is_none(),
+                            "an empty round-trip drag must not become a full-screen click"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                action,
+                                Some(Action::Select(PixelRect {
+                                    x: 0,
+                                    y: 0,
+                                    width: 640,
+                                    height: 480
+                                }))
+                            ),
+                            "hover motion before a press must not turn a click into a drag"
+                        );
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            assert!(selection.start.is_none() && selection.press.is_none());
+        }
+    }
+
+    #[test]
+    fn unrecognized_areas_preview_and_click_the_whole_current_display() {
+        for pixels in [[640, 480], [1920, 1080]] {
+            for windows in [
+                Vec::new(),
+                vec![PixelRect {
+                    x: 40,
+                    y: 50,
+                    width: 120,
+                    height: 90,
+                }],
+            ] {
+                let ctx = egui::Context::default();
+                let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0));
+                let point = egui::pos2(600.0, 400.0);
+                let mut selection = Selection {
+                    texture: ctx.load_texture(
+                        "generated fallback",
+                        egui::ColorImage::filled([2, 2], Color32::WHITE),
+                        Default::default(),
+                    ),
+                    pixels,
+                    pixel_step: [1, 1],
+                    windows,
+                    press: None,
+                    start: None,
+                    focus_requested: true,
+                };
+                let frames = [
+                    vec![],
+                    vec![egui::Event::PointerMoved(point)],
+                    vec![egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    vec![egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                ];
+                for (index, events) in frames.into_iter().enumerate() {
+                    let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(bounds), events, ..Default::default() }, |ui| {
+                        let result = show(ui, &mut selection, true);
+                        if index == 3 {
+                            assert!(matches!(result, Some(Action::Select(rect)) if rect == PixelRect { x: 0, y: 0, width: pixels[0], height: pixels[1] }), "fallback must select all source pixels");
+                        } else {
+                            assert!(result.is_none());
+                        }
+                    });
+                    output.textures_delta.clear();
+                    assert_eq!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == OVERLAY.highlight && rect.rect == bounds)).count(), 1, "the whole display is the only fallback target");
+                }
+            }
+        }
+    }
 
     #[test]
     fn hovering_identifies_the_front_window_and_a_click_selects_the_exact_preview() {
@@ -424,7 +624,7 @@ mod tests {
                 Some(egui::pos2(400.0, 300.0)),
                 egui::pos2(400.0, 300.0),
                 egui::PointerButton::Primary,
-                false,
+                true,
             ),
             (
                 None,
@@ -1051,6 +1251,7 @@ mod tests {
             let mut frame = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(bounds),
+                    events: vec![egui::Event::PointerMoved(egui::pos2(-1.0, -1.0))],
                     ..Default::default()
                 },
                 |ui| {

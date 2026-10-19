@@ -838,12 +838,9 @@ fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
             })
             .collect();
         if should_paint {
-            assert_eq!(
-                images,
-                vec![egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0)
-                )],
+            let expected = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+            assert!(
+                !images.is_empty() && images.iter().all(|image| *image == expected),
                 "Retina desktop must retain its full dimensions and aspect ratio"
             );
         } else {

@@ -30,7 +30,7 @@ keep it above other windows, drag to move, and double-click to close.
 macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内「打开授权设置」，
 允许 Snip2Pin 后点击「授权后继续截图」；若仍未生效，点击「重新打开应用」。
 
-窗口识别截取预览框内的可见画面，包含覆盖在窗口上的其他内容；跨屏或越界窗口只截当前屏幕内的部分。窗口内需框选极小区域时，先长按再拖动。Wayland 或无法识别窗口时使用拖动框选。
+窗口识别截取预览框内的可见画面，包含覆盖在窗口上的其他内容；跨屏或越界窗口只截当前屏幕内的部分。窗口内需框选极小区域时，先长按再拖动。未识别到窗口时（包括 Wayland），默认选中当前整屏，单击截图或拖动框选。
 
 采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
 
@@ -68,8 +68,9 @@ On first capture on macOS, allow screen recording. If access is missing, use
 
 Window selection crops the visible preview, including any overlapping content.
 Spanning or off-screen windows are clipped to the selected monitor. For a tiny
-region inside a window, hold before dragging. Use drag selection on Wayland or
-when window recognition is unavailable.
+region inside a window, hold before dragging. When no window is recognized
+(including on Wayland), the current display is selected: click to capture it or
+drag a region.
 
 Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
