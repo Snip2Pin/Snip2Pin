@@ -30,6 +30,23 @@ fn image_rect(bounds: Rect, pixels: [u32; 2], rect: PixelRect) -> Rect {
 }
 
 impl Selection {
+    fn paint_target(&self, ui: &egui::Ui, bounds: Rect, pixels: PixelRect, color: Color32) {
+        let target = image_rect(bounds, self.pixels, pixels);
+        // Clip the same frozen image instead of resampling the selected region.
+        ui.painter().with_clip_rect(target).image(
+            self.texture.id(),
+            bounds,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        ui.painter().rect_stroke(
+            target,
+            0,
+            Stroke::new(OVERLAY.stroke, color),
+            StrokeKind::Inside,
+        );
+    }
+
     fn window_at(&self, bounds: Rect, point: Pos2) -> Option<PixelRect> {
         bounds.contains(point).then_some(())?;
         self.windows.iter().copied().find(|window| {
@@ -71,6 +88,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
+    ui.painter().rect_filled(bounds, 0, OVERLAY.unselected_fill);
     let response = ui.allocate_rect(bounds, Sense::click_and_drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
@@ -127,12 +145,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
             selection.pixel_step,
         );
         if let Some(pixels) = selected {
-            ui.painter().rect_stroke(
-                image_rect(bounds, selection.pixels, pixels),
-                0,
-                Stroke::new(OVERLAY.stroke, Color32::WHITE),
-                StrokeKind::Inside,
-            );
+            selection.paint_target(ui, bounds, pixels, Color32::WHITE);
         }
         if response.drag_stopped_by(egui::PointerButton::Primary) || released_drag {
             if selected.is_some() {
@@ -149,12 +162,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
     if selection.start.is_none()
         && let Some(rect) = hovered
     {
-        ui.painter().rect_stroke(
-            image_rect(bounds, selection.pixels, rect),
-            0,
-            Stroke::new(OVERLAY.stroke, OVERLAY.highlight),
-            StrokeKind::Inside,
-        );
+        selection.paint_target(ui, bounds, rect, OVERLAY.highlight);
         // The layer can receive a complete click on its very first frame,
         // before egui has a prior-frame widget hit map. The retained in-bounds
         // press binds this layer; egui still decides whether the gesture clicked.
@@ -1022,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn displays_keep_the_same_appearance_without_screen_highlighting() {
+    fn unselected_displays_are_dimmed_without_screen_outlines() {
         let ctx = egui::Context::default();
         let texture = ctx.load_texture(
             "selection",
@@ -1050,11 +1058,24 @@ mod tests {
                 },
             );
             frame.textures_delta.clear();
-            assert!(
-                !frame.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds)
-                }),
-                "display activation must not add a screen border or dimming layer"
+            let backdrop: Vec<_> = frame
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect == bounds => Some(rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                backdrop.len(),
+                1,
+                "all unselected displays must have one dimmed backdrop"
+            );
+            assert!(backdrop[0].fill.a() > 0);
+            assert_eq!(
+                backdrop[0].stroke.color,
+                Color32::TRANSPARENT,
+                "a screen border must never compete with the target"
             );
             assert_eq!(
                 frame.viewport_output[&egui::ViewportId::ROOT]
