@@ -71,16 +71,6 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
-    if active {
-        ui.painter().rect_stroke(
-            bounds,
-            0,
-            Stroke::new(OVERLAY.stroke, OVERLAY.active),
-            StrokeKind::Inside,
-        );
-    } else {
-        ui.painter().rect_filled(bounds, 0, OVERLAY.dim);
-    }
     let response = ui.allocate_rect(bounds, Sense::click_and_drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
@@ -162,7 +152,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         ui.painter().rect_stroke(
             image_rect(bounds, selection.pixels, rect),
             0,
-            Stroke::new(OVERLAY.stroke, OVERLAY.active),
+            Stroke::new(OVERLAY.stroke, OVERLAY.highlight),
             StrokeKind::Inside,
         );
         // The layer can receive a complete click on its very first frame,
@@ -290,6 +280,7 @@ mod tests {
             output.textures_delta.clear();
             if frame == 0 {
                 assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(120.0, 90.0)))), "hover must outline the selected window");
+                assert_eq!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == OVERLAY.highlight)).count(), 1, "only the recognized window may be highlighted");
             }
         }
     }
@@ -371,6 +362,25 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
+                if index == last {
+                    let outlines: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.stroke.color != Color32::TRANSPARENT =>
+                            {
+                                Some(rect.stroke.color)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        outlines,
+                        vec![Color32::WHITE],
+                        "dragging must show only the region outline"
+                    );
+                }
             }
         }
     }
@@ -1012,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn active_screen_is_outlined_and_other_screens_are_dimmed() {
+    fn displays_keep_the_same_appearance_without_screen_highlighting() {
         let ctx = egui::Context::default();
         let texture = ctx.load_texture(
             "selection",
@@ -1040,12 +1050,12 @@ mod tests {
                 },
             );
             frame.textures_delta.clear();
-            assert_eq!(frame.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds && rect.stroke.color == Color32::from_rgb(56, 132, 255))
-            }), active);
-            assert_eq!(frame.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds && rect.fill == Color32::from_black_alpha(28))
-            }), !active);
+            assert!(
+                !frame.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == bounds)
+                }),
+                "display activation must not add a screen border or dimming layer"
+            );
             assert_eq!(
                 frame.viewport_output[&egui::ViewportId::ROOT]
                     .commands
