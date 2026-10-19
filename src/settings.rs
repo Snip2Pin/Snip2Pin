@@ -28,6 +28,29 @@ impl Default for Binding {
 }
 
 impl Binding {
+    pub fn unlock_all() -> Self {
+        Self(HotKey::new(
+            Some(
+                Modifiers::ALT
+                    | Modifiers::SHIFT
+                    | if cfg!(target_os = "macos") {
+                        Modifiers::SUPER
+                    } else {
+                        Modifiers::CONTROL
+                    },
+            ),
+            global_hotkey::hotkey::Code::KeyL,
+        ))
+    }
+
+    pub fn validate_capture(self) -> Result<(), Message> {
+        if self == Self::unlock_all() {
+            Err(Text::ReservedUnlockShortcut.into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, Message> {
         let key: HotKey = text
             .trim()

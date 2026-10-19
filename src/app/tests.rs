@@ -1996,10 +1996,78 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
         ready: Arc::new(AtomicBool::new(true)),
         locked: false,
         #[cfg(target_os = "macos")]
+        lock_limits: None,
+        #[cfg(target_os = "macos")]
         presented: Cell::new(false),
     };
     app.pins.insert(2, second);
     app.pins[&1].ready.store(true, Ordering::Release);
+}
+
+#[test]
+fn unlock_all_is_idempotent_and_preserves_images_and_geometry() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    add_second_test_pin(&mut app);
+    let original = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    app.toggle_pin_lock(1, &ctx);
+    app.toggle_pin_lock(2, &ctx);
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::UnlockPins, ctx);
+        app.tray_action(crate::tray::Action::UnlockPins, ctx);
+    });
+    assert_eq!(app.pins.len(), 2);
+    assert!(app.pins.values().all(|pin| !pin.locked));
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    assert_eq!(initial, app.pins[&1].initial);
+    for commands in output.viewport_commands.values() {
+        assert!(commands.iter().all(|command| !matches!(
+            command,
+            ViewportCommand::InnerSize(_)
+                | ViewportCommand::OuterPosition(_)
+                | ViewportCommand::Close
+                | ViewportCommand::Focus
+        )));
+    }
+    let before = app.preferences.binding;
+    app.change_binding(Binding::unlock_all(), &ctx);
+    assert_eq!(before, app.preferences.binding);
+    assert_eq!(app.message, Some(Text::ReservedUnlockShortcut.into()));
+}
+
+#[test]
+fn recovery_key_in_a_legacy_capture_binding_never_starts_capture() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.preferences.binding = Binding::unlock_all();
+    app.toggle_pin_lock(1, &ctx);
+    let raw = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::L,
+            physical_key: Some(egui::Key::L),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                alt: true,
+                shift: true,
+                ctrl: !cfg!(target_os = "macos"),
+                mac_cmd: cfg!(target_os = "macos"),
+                command: true,
+            },
+        }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(raw, |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    output.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(!app.pins[&1].locked);
 }
 
 #[test]
@@ -2017,7 +2085,17 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
         app.toggle_pin_lock(1, ctx)
     });
     assert!(app.pins[&1].locked);
+    #[cfg(not(target_os = "macos"))]
     assert!(locked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(false)));
+    #[cfg(target_os = "macos")]
+    assert!(
+        !locked
+            .viewport_commands
+            .get(&pin_id(1))
+            .is_some_and(|commands| commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::Resizable(_))))
+    );
     let guarded = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
         app.tray_action(crate::tray::Action::ClosePin(1), ctx);
@@ -2038,7 +2116,17 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
         app.toggle_pin_lock(1, ctx)
     });
     assert!(!app.pins[&1].locked);
+    #[cfg(not(target_os = "macos"))]
     assert!(unlocked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(true)));
+    #[cfg(target_os = "macos")]
+    assert!(
+        !unlocked
+            .viewport_commands
+            .get(&pin_id(1))
+            .is_some_and(|commands| commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::Resizable(_))))
+    );
     let closed = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_pins(ctx));
     assert!(app.pins.is_empty());
     assert!(closed.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Close));
@@ -2148,8 +2236,10 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
     let pixels = app.pins[&1].pixels.clone();
     let texture = app.pins[&1].texture.id();
     for (command, expected) in [
-        (pin::Zoom::In, egui::vec2(125.0, 75.0)),
-        (pin::Zoom::Out, egui::vec2(80.0, 48.0)),
+        (pin::Zoom::In, egui::vec2(101.0, 60.6)),
+        (pin::Zoom::Out, egui::vec2(99.0099, 59.40594)),
+        (pin::Zoom::Scale(1.25), egui::vec2(125.0, 75.0)),
+        (pin::Zoom::Scale(0.8), egui::vec2(80.0, 48.0)),
         (pin::Zoom::Original, egui::vec2(0.75, 1.25)),
     ] {
         let mut input = egui::RawInput::default();
@@ -2165,9 +2255,8 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
             },
         );
         let output = ctx.run_logic(&input, |ctx| app.zoom_pin(1, &[command], None, ctx));
-        assert_eq!(
-            output.viewport_commands[&pin_id(1)],
-            [ViewportCommand::InnerSize(expected)]
+        assert!(
+            matches!(output.viewport_commands[&pin_id(1)].as_slice(), [ViewportCommand::InnerSize(size)] if (*size - expected).abs().max_elem() < 0.0001)
         );
     }
     assert_eq!(app.pins[&1].initial, initial);
@@ -2227,19 +2316,22 @@ fn queued_zoom_keys_accumulate_in_order_and_request_one_native_size() {
     for (commands, expected) in [
         (
             vec![pin::Zoom::In, pin::Zoom::In],
-            egui::vec2(156.25, 93.75),
+            egui::vec2(408.04, 244.824),
         ),
-        (vec![pin::Zoom::In, pin::Zoom::Out], egui::vec2(100.0, 60.0)),
+        (
+            vec![pin::Zoom::In, pin::Zoom::Out],
+            egui::vec2(400.0, 240.0),
+        ),
         (
             vec![pin::Zoom::Original, pin::Zoom::In],
-            egui::vec2(250.0, 150.0),
+            egui::vec2(202.0, 121.2),
         ),
     ] {
         app.sender
             .send(Event::ZoomPin(
                 1,
                 commands,
-                Some((egui::vec2(100.0, 60.0), 1.0)),
+                Some((egui::vec2(400.0, 240.0), 1.0)),
             ))
             .expect("zoom keys");
         let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
@@ -2252,7 +2344,7 @@ fn queued_zoom_keys_accumulate_in_order_and_request_one_native_size() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(sizes, [expected]);
+        assert!(matches!(sizes.as_slice(), [size] if (*size - expected).abs().max_elem() < 0.0001));
         assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
         assert!(
             output.viewport_commands[&pin_id(1)]

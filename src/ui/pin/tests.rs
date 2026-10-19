@@ -50,6 +50,50 @@ fn texture(ctx: &egui::Context) -> TextureHandle {
     )
 }
 
+#[test]
+fn recovery_shortcut_unlocks_a_locked_unfocused_image_once_without_geometry_changes() {
+    let ctx = egui::Context::default();
+    let image = texture(&ctx);
+    let events = RefCell::new(Vec::new());
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
+        events: vec![Event::Key {
+            key: egui::Key::L,
+            physical_key: Some(egui::Key::L),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers {
+                alt: true,
+                shift: true,
+                ctrl: !cfg!(target_os = "macos"),
+                mac_cmd: cfg!(target_os = "macos"),
+                command: true,
+            },
+        }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| {
+        image_with_host(
+            ui,
+            42,
+            &image,
+            Interaction {
+                locked: true,
+                keyboard_focus: Some(false),
+                ..Default::default()
+            },
+            &|action| events.borrow_mut().push(action),
+            |_| panic!("recovery must not drag or resize"),
+        );
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("recovery multipass");
+        }
+    });
+    assert_eq!(*events.borrow(), [Action::UnlockAll]);
+    assert_no_geometry(&output);
+    output.textures_delta.clear();
+}
+
 fn commands(output: &FullOutput) -> &[ViewportCommand] {
     &output.viewport_output[&egui::ViewportId::ROOT].commands
 }
@@ -790,6 +834,7 @@ fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
                             native_edges,
                             locked,
                             excluded: Some(toolbar.bounds),
+                            keyboard_focus: None,
                         },
                         &|action| actions.borrow_mut().push(action),
                         |command| ctx.send_viewport_cmd(command),
@@ -861,6 +906,293 @@ fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
 }
 
 #[test]
+fn wheel_units_and_precision_are_independent_of_ui_zoom() {
+    for zoom in [1.0, 1.25, 2.0] {
+        for fast in [false, true] {
+            for unit in [
+                egui::MouseWheelUnit::Line,
+                egui::MouseWheelUnit::Point,
+                egui::MouseWheelUnit::Page,
+            ] {
+                let ctx = egui::Context::default();
+                ctx.set_zoom_factor(zoom);
+                let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
+                warmup.textures_delta.clear();
+                let line = ctx.options(|options| options.input_options.line_scroll_speed);
+                let delta = match unit {
+                    egui::MouseWheelUnit::Line => 1.0,
+                    egui::MouseWheelUnit::Point => line / zoom,
+                    egui::MouseWheelUnit::Page => line / 160.0,
+                };
+                let texture = texture(&ctx);
+                let actions = RefCell::new(Vec::new());
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(240.0, 160.0) / zoom,
+                        )),
+                        events: vec![
+                            Event::PointerMoved(egui::pos2(40.0, 40.0) / zoom),
+                            Event::MouseWheel {
+                                unit,
+                                delta: egui::vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                modifiers: if fast {
+                                    Modifiers::SHIFT
+                                } else {
+                                    Modifiers::NONE
+                                },
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        image_with_host(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction::default(),
+                            &|action| actions.borrow_mut().push(action),
+                            |command| ctx.send_viewport_cmd(command),
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                assert_no_geometry(&output);
+                let actions = actions.into_inner();
+                let [Action::Zoom(7, commands)] = actions.as_slice() else {
+                    panic!("expected one wheel adjustment: {actions:?}")
+                };
+                let [Zoom::Scale(factor)] = commands.as_slice() else {
+                    panic!("expected one scale: {commands:?}")
+                };
+                let expected = if fast { 1.25 } else { 1.01 };
+                assert!(
+                    (factor - expected).abs() < 0.00001,
+                    "zoom={zoom} unit={unit:?} fast={fast} factor={factor}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
+    for blocked in [
+        "none",
+        "reset",
+        "ctrl",
+        "command",
+        "alt",
+        "toolbar",
+        "drag",
+        "horizontal",
+        "cancel",
+        "editing",
+    ] {
+        let ctx = egui::Context::default();
+        let texture = texture(&ctx);
+        let actions = RefCell::new(Vec::new());
+        let point = egui::pos2(40.0, 40.0);
+        let modifiers = match blocked {
+            "ctrl" => Modifiers::CTRL,
+            "command" => Modifiers::COMMAND,
+            "alt" => Modifiers::ALT,
+            _ => Modifiers::NONE,
+        };
+        let wheel = || Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: match blocked {
+                "horizontal" => egui::vec2(1.0, 0.0),
+                _ => egui::vec2(0.0, 0.5),
+            },
+            phase: if blocked == "cancel" {
+                egui::TouchPhase::Cancel
+            } else {
+                egui::TouchPhase::Move
+            },
+            modifiers,
+        };
+        let mut events = vec![Event::PointerMoved(point)];
+        if blocked == "drag" {
+            events.push(pointer(point, true));
+        }
+        events.extend([wheel(), wheel()]);
+        if blocked == "reset" {
+            events.push(Event::Key {
+                key: egui::Key::Num0,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+            events.push(wheel());
+        }
+        let mut name = "pin".to_owned();
+        if blocked == "editing" {
+            let mut warmup = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut name))
+                        .request_focus();
+                },
+            );
+            warmup.textures_delta.clear();
+        }
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                if blocked == "editing" {
+                    ui.add(egui::TextEdit::singleline(&mut name))
+                        .request_focus();
+                }
+                image_with_host(
+                    ui,
+                    7,
+                    &texture,
+                    Interaction {
+                        keyboard_focus: Some(blocked == "reset"),
+                        excluded: (blocked == "toolbar")
+                            .then_some(Rect::from_center_size(point, Vec2::splat(20.0))),
+                        ..Default::default()
+                    },
+                    &|action| actions.borrow_mut().push(action),
+                    |_| {},
+                );
+                if ui.ctx().current_pass_index() == 0 {
+                    ui.ctx().request_discard("wheel events batch once");
+                }
+            },
+        );
+        output.textures_delta.clear();
+        assert_no_geometry(&output);
+        let actions = actions.into_inner();
+        if blocked == "none" {
+            assert!(
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(factor)] if (*factor - 1.01).abs() < 0.00001))
+            );
+        } else if blocked == "reset" {
+            assert!(
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(before), Zoom::Original, Zoom::Scale(after)] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
+            );
+        } else {
+            assert!(actions.is_empty(), "blocked={blocked}: {actions:?}");
+        }
+    }
+}
+
+#[test]
+fn wheel_zoom_tracks_hover_without_requiring_keyboard_focus() {
+    for focused in [false, true] {
+        for locked in [false, true] {
+            for hovering in [false, true] {
+                let ctx = egui::Context::default();
+                let texture = texture(&ctx);
+                let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+                let actions = RefCell::new(Vec::new());
+                let mut input = egui::RawInput {
+                    screen_rect: Some(bounds),
+                    events: vec![
+                        Event::PointerMoved(if hovering {
+                            bounds.center()
+                        } else {
+                            bounds.max + Vec2::splat(10.0)
+                        }),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Line,
+                            delta: egui::vec2(0.0, 1.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .get_mut(&egui::ViewportId::ROOT)
+                    .unwrap()
+                    .focused = Some(focused);
+                let mut output = ctx.run_ui(input, |ui| {
+                    image_with_host(
+                        ui,
+                        7,
+                        &texture,
+                        Interaction {
+                            locked,
+                            ..Default::default()
+                        },
+                        &|action| actions.borrow_mut().push(action),
+                        |command| ctx.send_viewport_cmd(command),
+                    );
+                    if ui.ctx().current_pass_index() == 0 {
+                        ui.ctx().request_discard("wheel dispatch must happen once");
+                    }
+                });
+                output.textures_delta.clear();
+                assert_no_geometry(&output);
+                let actions = actions.into_inner();
+                assert_eq!(actions.len(), usize::from(hovering && !locked));
+                if hovering && !locked {
+                    assert!(
+                        matches!(&actions[0], Action::Zoom(7, commands) if commands.len() == 1)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn shift_arrows_accumulate_fast_movement_once() {
+    let ctx = egui::Context::default();
+    let texture = texture(&ctx);
+    let actions = RefCell::new(Vec::new());
+    let mut input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
+        events: [egui::Key::ArrowRight, egui::Key::ArrowRight]
+            .into_iter()
+            .map(|key| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: Modifiers::SHIFT,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .focused = Some(true);
+    let mut output = ctx.run_ui(input, |ui| {
+        image_with_host(
+            ui,
+            7,
+            &texture,
+            Interaction::default(),
+            &|action| actions.borrow_mut().push(action),
+            |command| ctx.send_viewport_cmd(command),
+        );
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("fast keys dispatch once");
+        }
+    });
+    output.textures_delta.clear();
+    assert_no_geometry(&output);
+    assert_eq!(actions.into_inner(), vec![Action::Move(7, [20, 0])]);
+}
+
+#[test]
 fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
     for focused in [None, Some(false), Some(true)] {
         for locked in [false, true] {
@@ -904,6 +1236,7 @@ fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
                                 native_edges,
                                 locked,
                                 excluded: None,
+                                keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1076,7 +1409,14 @@ fn keyboard_zoom_and_movement_leave_text_editing_and_command_shortcuts_alone() {
             assert_eq!(
                 actions.into_inner(),
                 if !editing && (modifiers == Modifiers::NONE || modifiers.shift) {
-                    vec![Action::Zoom(7, vec![Zoom::In]), Action::Move(7, [-1, 0])]
+                    if modifiers.shift {
+                        vec![
+                            Action::Zoom(7, vec![Zoom::Scale(snip2pin::pin::FAST_ZOOM_FACTOR)]),
+                            Action::Move(7, [-10, 0]),
+                        ]
+                    } else {
+                        vec![Action::Zoom(7, vec![Zoom::In]), Action::Move(7, [-1, 0])]
+                    }
                 } else {
                     vec![]
                 }
@@ -1326,6 +1666,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                                 native_edges,
                                 locked: true,
                                 excluded: None,
+                                keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1374,6 +1715,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                         native_edges,
                         locked: true,
                         excluded: None,
+                        keyboard_focus: None,
                     },
                     &|action| actions.borrow_mut().push(action),
                     |command| ctx.send_viewport_cmd(command),
@@ -1435,6 +1777,7 @@ fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
                                 native_edges: false,
                                 locked: true,
                                 excluded: Some(row),
+                                keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),

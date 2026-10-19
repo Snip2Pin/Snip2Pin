@@ -51,6 +51,7 @@ fn dispatch_pin(
     menu_position: Option<egui::Pos2>,
 ) {
     let event = match action {
+        ui::pin::Action::UnlockAll => Event::Tray(crate::tray::Action::UnlockPins),
         ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
         ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
         ui::pin::Action::MenuPin(id) => Event::MenuPin(id, menu_position),
@@ -129,6 +130,8 @@ struct Pin {
     ready: Arc<AtomicBool>,
     locked: bool,
     #[cfg(target_os = "macos")]
+    lock_limits: Option<platform::PinLock>,
+    #[cfg(target_os = "macos")]
     presented: Cell<bool>,
 }
 
@@ -202,7 +205,11 @@ impl Snip2Pin {
             .map(Preferences::load)
             .unwrap_or(Ok(Preferences::default()));
         let mut message = loaded.as_ref().err().cloned();
-        let preferences = loaded.unwrap_or_default();
+        let mut preferences = loaded.unwrap_or_default();
+        if let Err(error) = preferences.binding.validate_capture() {
+            preferences.binding = Binding::default();
+            message = Some(error);
+        }
         let system_locale = Locale::system();
         let locale = preferences.language.resolve(system_locale);
         i18n::set_locale(&cc.egui_ctx, locale);
@@ -218,11 +225,25 @@ impl Snip2Pin {
         } else {
             let ctx = cc.egui_ctx.clone();
             let hotkey_sender = sender.clone();
-            match Shortcut::register(preferences.binding, move || {
-                let _ = hotkey_sender.send(Event::Capture);
-                ctx.request_repaint_of(ViewportId::ROOT);
-            }) {
-                Ok(shortcut) => Some(shortcut),
+            let unlock_sender = sender.clone();
+            let unlock_ctx = cc.egui_ctx.clone();
+            match Shortcut::register(
+                preferences.binding,
+                move || {
+                    let _ = hotkey_sender.send(Event::Capture);
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                },
+                move || {
+                    let _ = unlock_sender.send(Event::Tray(crate::tray::Action::UnlockPins));
+                    unlock_ctx.request_repaint_of(ViewportId::ROOT);
+                },
+            ) {
+                Ok((shortcut, warning)) => {
+                    if warning.is_some() {
+                        message = warning;
+                    }
+                    Some(shortcut)
+                }
                 Err(error) => {
                     message = Some(Text::GlobalShortcutError.context(error));
                     None
@@ -498,6 +519,7 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),
+            Action::UnlockPins => self.unlock_pins(ctx),
             Action::CopyPin(id) => self.copy_pin(id, ctx),
             Action::ClosePin(id) => self.close_pin(id, ctx),
             Action::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
@@ -789,6 +811,8 @@ impl Snip2Pin {
                     ready: Arc::new(AtomicBool::new(false)),
                     locked: false,
                     #[cfg(target_os = "macos")]
+                    lock_limits: None,
+                    #[cfg(target_os = "macos")]
                     presented: Cell::new(false),
                 },
             );
@@ -867,17 +891,36 @@ impl Snip2Pin {
     }
 
     fn toggle_pin_lock(&mut self, id: u64, ctx: &egui::Context) {
+        if let Some(pin) = self.pins.get(&id) {
+            self.set_pin_locked(id, !pin.locked, ctx);
+        }
+    }
+
+    fn unlock_pins(&mut self, ctx: &egui::Context) {
+        let ids: Vec<_> = self
+            .pins
+            .iter()
+            .filter_map(|(&id, pin)| pin.locked.then_some(id))
+            .collect();
+        for id in ids {
+            self.set_pin_locked(id, false, ctx);
+        }
+    }
+
+    fn set_pin_locked(&mut self, id: u64, locked: bool, ctx: &egui::Context) {
         let Some(pin) = self.pins.get_mut(&id) else {
             return;
         };
-        pin.locked = !pin.locked;
-        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Resizable(!pin.locked));
         #[cfg(target_os = "macos")]
         if !self.demo
-            && let Err(error) = platform::set_pin_movable(id, !pin.locked)
+            && let Err(error) = platform::set_pin_locked(id, locked, &mut pin.lock_limits)
         {
             self.message = Some(error);
+            return;
         }
+        pin.locked = locked;
+        #[cfg(not(target_os = "macos"))]
+        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Resizable(!locked));
         self.close_pin_menu(ctx);
         ctx.request_repaint_of(pin_id(id));
         ctx.request_repaint_of(ViewportId::ROOT);
@@ -1091,15 +1134,32 @@ impl Snip2Pin {
     }
 
     fn change_binding(&mut self, binding: Binding, ctx: &egui::Context) {
+        if let Err(error) = binding.validate_capture() {
+            self.message = Some(error);
+            return;
+        }
         self.suppress_shortcut_until = Instant::now() + SHORTCUT_SUPPRESSION;
+        let mut registration_warning = None;
         if self.shortcut.is_none() && !self.demo && platform::global_shortcuts_supported() {
             let sender = self.sender.clone();
+            let unlock_sender = self.sender.clone();
+            let unlock_ctx = ctx.clone();
             let ctx = ctx.clone();
-            match Shortcut::register(binding, move || {
-                let _ = sender.send(Event::Capture);
-                ctx.request_repaint_of(ViewportId::ROOT);
-            }) {
-                Ok(shortcut) => self.shortcut = Some(shortcut),
+            match Shortcut::register(
+                binding,
+                move || {
+                    let _ = sender.send(Event::Capture);
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                },
+                move || {
+                    let _ = unlock_sender.send(Event::Tray(crate::tray::Action::UnlockPins));
+                    unlock_ctx.request_repaint_of(ViewportId::ROOT);
+                },
+            ) {
+                Ok((shortcut, warning)) => {
+                    self.shortcut = Some(shortcut);
+                    registration_warning = warning;
+                }
                 Err(error) => {
                     self.message = Some(Text::ShortcutError.context(error));
                     return;
@@ -1131,14 +1191,20 @@ impl Snip2Pin {
             return;
         }
         self.preferences = preferences;
-        self.message = Some(
-            if self.shortcut.is_some() {
-                Text::ShortcutSaved
-            } else {
-                Text::ShortcutSavedLocal
-            }
-            .into(),
-        );
+        self.message = registration_warning.or_else(|| {
+            Some(
+                if self
+                    .shortcut
+                    .as_ref()
+                    .is_some_and(Shortcut::capture_registered)
+                {
+                    Text::ShortcutSaved
+                } else {
+                    Text::ShortcutSavedLocal
+                }
+                .into(),
+            )
+        });
     }
 
     fn change_appearance(
@@ -1366,7 +1432,7 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
-                .with_resizable(!locked)
+                .with_resizable(cfg!(target_os = "macos") || !locked)
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false);
@@ -1437,6 +1503,7 @@ impl Snip2Pin {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
                         excluded: controls.map(|toolbar| toolbar.bounds),
+                        keyboard_focus: None,
                     },
                     &dispatch,
                     |command| {
@@ -1550,6 +1617,16 @@ impl eframe::App for Snip2Pin {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_locale(ctx, self.preferences.language.resolve(self.system_locale));
+        if ctx.current_pass_index() == 0
+            && ctx.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .any(|event| Binding::unlock_all().matches(event))
+            })
+        {
+            self.unlock_pins(ctx);
+        }
         if !matches!(self.phase, Phase::Idle)
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
         {
@@ -1605,6 +1682,7 @@ impl eframe::App for Snip2Pin {
                     && !self.recording
                     && self.quit_confirmation.is_none(),
                 self.pins.values().any(|pin| !pin.locked),
+                self.pins.values().any(|pin| pin.locked),
                 matches!(self.phase, Phase::Capturing),
             );
         }
@@ -1620,6 +1698,7 @@ impl eframe::App for Snip2Pin {
                     && !self.recording
                     && self.quit_confirmation.is_none(),
                 self.pins.values().any(|pin| !pin.locked),
+                self.pins.values().any(|pin| pin.locked),
                 matches!(self.phase, Phase::Capturing),
             );
         }
@@ -1667,7 +1746,10 @@ impl eframe::App for Snip2Pin {
                         locale,
                         pins: &pins,
                         message: message.as_deref(),
-                        global_shortcut: self.shortcut.is_some(),
+                        global_shortcut: self
+                            .shortcut
+                            .as_ref()
+                            .is_some_and(Shortcut::capture_registered),
                         preferences: self.preferences,
                         icon_texture: self.icon_texture.as_ref(),
                         recording: self.recording,
@@ -1736,10 +1818,9 @@ impl eframe::App for Snip2Pin {
             && self.quit_confirmation.is_none()
             && !ctx.egui_wants_keyboard_input()
             && ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .any(|event| self.preferences.binding.matches(event))
+                input.events.iter().any(|event| {
+                    self.preferences.binding.matches(event) && !Binding::unlock_all().matches(event)
+                })
             })
         {
             self.capture_command(&ctx);

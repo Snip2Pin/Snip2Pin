@@ -300,7 +300,7 @@ fn keyboard_zoom_preserves_aspect_without_an_application_minimum() {
             );
             let mut repeatedly_shrunk = grown;
             for _ in 0..60 {
-                repeatedly_shrunk = zoom_size(repeatedly_shrunk, pixels, scale, Zoom::Out)
+                repeatedly_shrunk = zoom_size(repeatedly_shrunk, pixels, scale, Zoom::Scale(0.8))
                     .expect("repeated shrink stays finite");
             }
             assert!(repeatedly_shrunk.min_elem() > 0.0 && repeatedly_shrunk.min_elem() < 1.0);
@@ -324,7 +324,7 @@ fn keyboard_zoom_uses_the_native_size_quantum_on_a_retina_display() {
 
 #[test]
 fn keyboard_zoom_rejects_invalid_or_overflowing_geometry() {
-    for command in [Zoom::In, Zoom::Out, Zoom::Original] {
+    for command in [Zoom::In, Zoom::Out, Zoom::Original, Zoom::Scale(1.25)] {
         for current in [
             egui::vec2(0.0, 1.0),
             egui::vec2(-1.0, 2.0),
@@ -350,6 +350,12 @@ fn keyboard_zoom_rejects_invalid_or_overflowing_geometry() {
         zoom_size(egui::Vec2::splat(f32::MAX), [1, 1], 1.0, Zoom::In),
         None
     );
+    for factor in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            zoom_size(egui::vec2(100.0, 60.0), [100, 60], 1.0, Zoom::Scale(factor)),
+            None
+        );
+    }
 }
 
 #[test]

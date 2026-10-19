@@ -110,6 +110,75 @@ fn main() {
                 assert!(image.is_resizable());
                 assert!(native.parentWindow().is_none());
                 let initial = native.contentRectForFrameRect(native.frame());
+                if index == 0 {
+                    let original = native.frame();
+                    let mut frames = vec![original];
+                    let screens = objc2_app_kit::NSScreen::screens(thread);
+                    if let Some(first) = screens.iter().next() {
+                        let a = first.frame();
+                        for other in screens.iter().skip(1) {
+                            let b = other.frame();
+                            let low = a.origin.y.max(b.origin.y);
+                            let high = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+                            if high <= low {
+                                continue;
+                            }
+                            let x = a.origin.x.max(b.origin.x);
+                            let frame = objc2_foundation::NSRect::new(
+                                objc2_foundation::NSPoint::new(
+                                    x - initial_width / 2.0,
+                                    (low + high - initial_height) / 2.0,
+                                ),
+                                initial.size,
+                            );
+                            frames.push(frame);
+                        }
+                    }
+                    for frame in frames {
+                        native.setFrame_display(frame, false);
+                        let before = native.frame();
+                        let view = native.contentView().expect("spanning content");
+                        let view_before = view.frame();
+                        let style = native.styleMask();
+                        let min = native.contentMinSize();
+                        let max = native.contentMaxSize();
+                        let movable = native.isMovable();
+                        let mut limits = None;
+                        for locked in [true, true, false, false] {
+                            platform::set_pin_locked(index as u64, locked, &mut limits)
+                                .expect("native lock constraints");
+                            platform::prepare_floating_windows().expect("prepare spanning lock");
+                            assert_eq!(
+                                native.styleMask(),
+                                style,
+                                "lock must not reconfigure the window style"
+                            );
+                            assert_eq!(
+                                native.contentMinSize(),
+                                if locked { before.size } else { min }
+                            );
+                            assert_eq!(
+                                native.contentMaxSize(),
+                                if locked { before.size } else { max }
+                            );
+                            assert_eq!(native.isMovable(), !locked && movable);
+                            assert_eq!(
+                                native.frame(),
+                                before,
+                                "lock changed the spanning native frame"
+                            );
+                            assert_eq!(
+                                view.frame(),
+                                view_before,
+                                "lock clipped the native content view"
+                            );
+                            assert!(
+                                !native.isVisible() && !native.isKeyWindow() && !app.isActive()
+                            );
+                        }
+                    }
+                    native.setFrame_display(original, false);
+                }
                 #[cfg(test)]
                 if index == 0 {
                     use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};

@@ -16,14 +16,17 @@ pub const METRICS: Metrics = Metrics {
     inset: 12.0,
 };
 
-/// Each keyboard zoom step scales both axes together.
-pub const KEYBOARD_ZOOM_FACTOR: f32 = 1.25;
+/// Explicit adjustments preserve proportions; Shift selects the faster pace.
+pub const FINE_ZOOM_FACTOR: f32 = 1.01;
+pub const FAST_ZOOM_FACTOR: f32 = 1.25;
+pub const FAST_MOVE_STEPS: i32 = 10;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Zoom {
     In,
     Out,
     Original,
+    Scale(f32),
 }
 
 /// Size in native window logical units, derived from its observed content size.
@@ -45,9 +48,18 @@ pub fn zoom_size(
     let growth_factor = growth_step / current.min_elem();
     let size = match command {
         // A one-pixel short edge must grow on the next native size request,
-        // rather than rounding a 25% increase back to the same pixel.
-        Zoom::In => current * KEYBOARD_ZOOM_FACTOR.max(1.0 + growth_factor),
-        Zoom::Out => current * KEYBOARD_ZOOM_FACTOR.recip(),
+        // rather than rounding a small increase back to the same pixel.
+        Zoom::In => current * FINE_ZOOM_FACTOR.max(1.0 + growth_factor),
+        Zoom::Out => current * FINE_ZOOM_FACTOR.recip(),
+        Zoom::Scale(factor) if factor.is_finite() && factor > 0.0 => {
+            current
+                * if factor > 1.0 {
+                    factor.max(1.0 + growth_factor)
+                } else {
+                    factor
+                }
+        }
+        Zoom::Scale(_) => return None,
         Zoom::Original => {
             egui::vec2(original_pixels[0] as f32, original_pixels[1] as f32) / pixels_per_point
         }

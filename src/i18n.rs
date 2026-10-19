@@ -125,6 +125,10 @@ catalogue! {
     DownloadsHelp => ("View GitHub Releases in your browser.", "在浏览器中查看 GitHub Releases。"),
     Home => ("Open home", "打开主页"),
     ClosePins => ("Close unlocked pins", "关闭未锁定贴图"),
+    UnlockPins => ("Unlock all pins", "解锁全部贴图"),
+    UnlockHint => ("Locked · {value} to unlock all", "已锁定 · {value} 解锁全部贴图"),
+    ReservedUnlockShortcut => ("This combination is reserved for unlocking all pins.", "此组合键用于解锁全部贴图，请选择其他截图快捷键。"),
+    UnlockShortcutError => ("Could not register the unlock shortcut: {value}", "无法注册全局解锁快捷键：{value}"),
     PinZoomHint => ("Pin too small? Press + to enlarge.", "贴图太小？按 + 放大"),
     Quit => ("Quit Snip2Pin", "退出 Snip2Pin"),
     Copy => ("Copy", "复制"),
@@ -205,6 +209,7 @@ pub enum Message {
     Text(Text, Option<String>),
     Context(Text, Box<Message>),
     Diagnostic(String),
+    Combined(Vec<Message>),
 }
 
 impl Text {
@@ -225,6 +230,11 @@ impl Message {
                 locale.text(*key).replace("{value}", &detail.render(locale))
             }
             Self::Diagnostic(text) => text.clone(),
+            Self::Combined(messages) => messages
+                .iter()
+                .map(|message| message.render(locale))
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 }

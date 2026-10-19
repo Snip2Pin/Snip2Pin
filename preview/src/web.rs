@@ -138,6 +138,11 @@ impl Sandbox {
 
     fn pin_action(&mut self, action: pin_view::Action, ui: &egui::Ui, bounds: Rect) {
         match action {
+            pin_view::Action::UnlockAll => {
+                for pin in &mut self.pins {
+                    pin.locked = false;
+                }
+            }
             pin_view::Action::ClosePin(id) => {
                 if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
                     launcher::forget_pin_name(ui.ctx(), id);
@@ -235,7 +240,9 @@ impl eframe::App for Sandbox {
                         self.recording = false;
                         break;
                     }
-                    match Binding::from_key(key, modifiers) {
+                    match Binding::from_key(key, modifiers)
+                        .and_then(|binding| binding.validate_capture().map(|()| binding))
+                    {
                         Ok(binding) => {
                             self.preferences.binding = binding;
                             self.recording = false;
@@ -249,10 +256,9 @@ impl eframe::App for Sandbox {
         } else if self.selection.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .any(|event| self.preferences.binding.matches(event))
+                input.events.iter().any(|event| {
+                    self.preferences.binding.matches(event) && !Binding::unlock_all().matches(event)
+                })
             })
         {
             self.capture();
@@ -434,22 +440,24 @@ impl eframe::App for Sandbox {
                             native_edges: false,
                             locked: pin.locked,
                             excluded: controls.map(|toolbar| toolbar.bounds),
+                            keyboard_focus: Some(self.focused_pin == Some(pin.id)),
                         },
                         &|action| {
-                            if !matches!(action, pin_view::Action::Zoom(id, _) | pin_view::Action::Move(id, _) if self.focused_pin != Some(id)) {
-                                events.borrow_mut().push(action);
-                            }
+                            events.borrow_mut().push(action);
                         },
                         |command| requested = Some(command),
                     );
                     if self.focused_pin == Some(pin.id) {
-                            let style = &snip2pin::ui::style::PIN;
-                            ui.painter().rect_stroke(
-                                ui.max_rect(),
-                                0,
-                                egui::Stroke::new(style.highlight_stroke_pixels / ui.ctx().pixels_per_point(), style.highlight),
-                                egui::StrokeKind::Inside,
-                            );
+                        let style = &snip2pin::ui::style::PIN;
+                        ui.painter().rect_stroke(
+                            ui.max_rect(),
+                            0,
+                            egui::Stroke::new(
+                                style.highlight_stroke_pixels / ui.ctx().pixels_per_point(),
+                                style.highlight,
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
                     }
                     if hovered && let Some(row) = controls {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
