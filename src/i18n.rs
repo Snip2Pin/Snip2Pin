@@ -144,6 +144,7 @@ catalogue! {
     DockMenuLoadFailed => ("Could not load the Dock menu.", "无法加载 Dock 菜单。"),
     DockQuitUnavailable => ("Could not connect the system Quit action. Locked pin quit confirmation is unavailable.", "无法连接系统退出操作，锁定贴图的退出确认不可用。"),
     SelectionHelp => ("Drag to select, release to pin · Esc cancels", "拖动框选区域，松手置顶 · Esc 取消"),
+    WindowSelectionHelp => ("Click a window or drag a region · Esc cancels", "单击窗口或拖动框选 · Esc 取消"),
     ShortcutSaved => ("Shortcut saved.", "快捷键已保存。"),
     ShortcutSavedLocal => ("Shortcut saved. This desktop supports in-app shortcuts only.", "快捷键已保存；当前桌面仅支持窗口内快捷键。"),
     AppearanceSaved => ("Appearance saved.", "外观设置已保存。"),

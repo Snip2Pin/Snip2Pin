@@ -28,6 +28,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 退出等确认对话框优先使用系统原生界面；macOS 用异步 NSAlert sheet，Windows 原生消息框在专用线程等待，通过带请求标识的事件回传结果，不在绘制或主事件循环借用期间同步嵌套模态循环。默认取消，过期结果不得影响新请求；等待 Windows 消息框时保留其所有者窗口。无通用原生接口的平台、演示和自动测试保留轻量应用内回退，不引入第二套 GUI 运行时。
 - 开机自启默认关闭，只在用户明确勾选后写入当前用户的系统配置；关闭时仅删除本应用入口。启动和安装不得自动启用自启，测试只操作临时目录，不修改真实登录项或注册表。自启后台启动，不弹主页、不抢焦点、不截图；源码运行的 macOS 应用须先安装后才能启用。
 - 截图模式用蓝框标识鼠标所在屏幕，其他屏幕略微变暗；随鼠标切换高亮，不在后台轮询鼠标。
+- 截图模式悬停识别最前面的可见窗口，单击截取识别框、拖动仍自由框选；空白处单击不截图，按下和松开须命中同一窗口。窗口边界与屏幕画面在同一截图任务中收集，鼠标移动只做内存命中检测，不逐帧查询系统；识别失败不影响框选。识别框与裁剪共用像素矩形和原生坐标网格，只截当前屏幕的可见画面，不补拍被遮挡内容。元数据仅保留边界和顺序，随截图会话释放，不保留或记录其他应用窗口标题。原生 Wayland 没有通用窗口枚举能力，不用 XWayland 的不完整窗口列表猜测被遮挡窗口。
 - 完成或取消截图时恢复普通光标；演示和自动化测试不得修改系统光标或抢占用户焦点。
 - 贴图采用系统阴影，不为旧边框样式增加透明边距或坐标补偿。复制、锁定、关闭在图片内部悬停横排显示，窄图从左起逐个隐藏完整按钮，不竖排、不放大图片；列表和右键菜单保留全部操作。复制使用双层照片图标。按钮点击不得触发窗口拖动或缩放。视觉样式可为更流畅的交互调整。
 - 成功框选后自动复制图片到系统剪贴板，复制按钮可再次复制；取消、无效或过期选区不能改动剪贴板。测试只检查复制命令，不写入真实系统剪贴板。
@@ -82,6 +83,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 ## Structure
 
 - `src/capture.rs`, `src/capture/worker.rs`: monitor enumeration, shared in-memory pixels and bounded cancellable capture work.
+- `src/capture/windows.rs`, `src/capture/windows/`: one-shot visible-window metadata, platform stacking/visibility adapters and source-pixel region mapping.
 - `src/geometry.rs`: validated pixel selection and original-position pin placement.
 - `src/pin.rs`: initial proportional fitting, display coordinate conversion and adaptive visible image controls placement.
 - `src/app.rs`: capture state machine, events, and window lifecycle.

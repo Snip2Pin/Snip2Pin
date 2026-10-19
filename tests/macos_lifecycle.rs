@@ -248,6 +248,7 @@ fn main() {
             // egui-winit builder application used by eframe's native backend.
             // Generated source pixels never enter clipboard or capture APIs.
             let snapshot = capture::Snapshot {
+                windows: Arc::from([]),
                 display: capture::Display {
                     id: 42,
                     origin: [0.0, 0.0],

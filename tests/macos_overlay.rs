@@ -42,7 +42,7 @@ fn main() {
                 true,
             )
         };
-        window.setTitle(&NSString::from_str("Snip2Pin · 框选"));
+        window.setTitle(&NSString::from_str(snip2pin::SELECTION_WINDOW_TITLE));
         platform::prepare_floating_windows().expect("prepare native windows");
         assert!(!window.isVisible());
         assert!(!application.isActive());

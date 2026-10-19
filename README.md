@@ -16,7 +16,7 @@ keep it above other windows, drag to move, and double-click to close.
 
 ### 中文
 
-- 点击「截图并置顶」或按快捷键，在任意显示器上拖动框选，松手后原位置顶，并自动复制到剪贴板。
+- 点击「截图并置顶」或按快捷键，悬停识别窗口后单击，或在任意显示器上拖动框选；完成后原位置顶，并自动复制到剪贴板。
 - 蓝框标识鼠标所在屏幕。框选时按 Esc 取消。
 - 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
 - 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，用方向键移动、`+`／`-` 缩放、`0` 恢复原始尺寸，右键菜单也可恢复。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
@@ -30,12 +30,14 @@ keep it above other windows, drag to move, and double-click to close.
 macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内「打开授权设置」，
 允许 Snip2Pin 后点击「授权后继续截图」；若仍未生效，点击「重新打开应用」。
 
+窗口识别截取预览框内的可见画面，包含覆盖在窗口上的其他内容；跨屏或越界窗口只截当前屏幕内的部分。Wayland 或无法识别窗口时使用拖动框选。
+
 采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
 
 ### English
 
-- Click **Capture & pin** or use the shortcut. Drag to select a
-  region on any monitor; release to pin it in place and copy it to the clipboard.
+- Click **Capture & pin** or use the shortcut. Hover and click a window, or drag
+  a region on any monitor, to pin it in place and copy it to the clipboard.
 - A blue border marks the screen under the pointer. Press **Esc** to cancel.
 - Drag a pin to move it and its edges to resize; proportions, **Shift** and anchors
   follow the operating system. Double-click to close. Copy always uses the original
@@ -62,6 +64,10 @@ immediately; local update installs apply the saved icon to Finder and Launchpad.
 On first capture on macOS, allow screen recording. If access is missing, use
 **Open permission settings**, allow Snip2Pin, then click
 **Allow access & continue**. If needed, use **Reopen app**.
+
+Window selection crops the visible preview, including any overlapping content.
+Spanning or off-screen windows are clipped to the selected monitor. Use drag selection
+on Wayland or when window recognition is unavailable.
 
 Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
