@@ -30,6 +30,11 @@ mod work_area;
 mod macos;
 
 #[cfg(target_os = "macos")]
+pub fn activate_application() -> Result<(), Message> {
+    macos::activate_application()
+}
+
+#[cfg(target_os = "macos")]
 pub fn set_pin_movable(id: u64, movable: bool) -> Result<(), Message> {
     pin_window::find(id)?.setMovable(movable);
     Ok(())

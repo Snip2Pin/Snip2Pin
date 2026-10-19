@@ -368,6 +368,26 @@ fn tray_home_and_quit_dispatch_root_commands_and_demo_cannot_enable_startup() {
 }
 
 #[test]
+fn opening_home_restores_a_minimized_window_before_requesting_focus() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.home_visible = false;
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        app.tray_action(crate::tray::Action::Home, ctx);
+    });
+    let commands = &output.viewport_commands[&ViewportId::ROOT];
+    let restored = commands
+        .iter()
+        .position(|command| *command == ViewportCommand::Minimized(false))
+        .expect("opening Home must restore it from the Dock");
+    let focus = commands
+        .iter()
+        .position(|command| *command == ViewportCommand::Focus)
+        .expect("opening Home must request keyboard focus");
+    assert!(restored < focus);
+}
+
+#[test]
 fn opening_home_without_a_confirmation_restores_normal_window_level() {
     let ctx = egui::Context::default();
     let mut app = tiny_pin_app(&ctx);

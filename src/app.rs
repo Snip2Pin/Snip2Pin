@@ -490,6 +490,15 @@ impl Snip2Pin {
                     ViewportCommand::MousePassthrough(false),
                 );
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+                // Visible(true) can make Home key before egui-winit handles
+                // Focus, causing its key-window guard to skip app activation.
+                #[cfg(target_os = "macos")]
+                if !self.demo
+                    && let Err(error) = platform::activate_application()
+                {
+                    self.message = Some(error);
+                }
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),

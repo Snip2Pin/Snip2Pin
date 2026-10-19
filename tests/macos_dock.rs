@@ -12,7 +12,7 @@ mod tray;
 fn main() {
     use objc2::{MainThreadMarker, MainThreadOnly, sel};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem};
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSAppleEventDescriptor, NSAppleEventManager, NSString};
 
     let thread = MainThreadMarker::new().expect("native menu test runs on the main thread");
     let app = NSApplication::sharedApplication(thread);
@@ -40,10 +40,34 @@ fn main() {
     .expect("install system Quit route");
 
     // A raw test executable has no bundled NIB. Resource failure must leave the
-    // Quit bridge operational, rather than allowing native Quit to bypass locks.
+    // Quit and Reopen bridges operational independently of the custom menu.
     assert!(dock.load_menu().is_err());
     assert_eq!(quit.title().to_string(), "Generated quit");
     assert_eq!(quit.keyEquivalent().to_string(), "q");
+    let manager = NSAppleEventManager::sharedAppleEventManager();
+    for _ in 0..2 {
+        let event = NSAppleEventDescriptor::appleEventWithEventClass_eventID_targetDescriptor_returnID_transactionID(
+            u32::from_be_bytes(*b"aevt"),
+            u32::from_be_bytes(*b"rapp"),
+            None,
+            -1,
+            0,
+        );
+        let reply = NSAppleEventDescriptor::nullDescriptor();
+        // SAFETY: Both descriptors stay alive for synchronous in-process
+        // dispatch. No event is sent to another process or to the WindowServer.
+        let result = unsafe {
+            manager.dispatchRawAppleEvent_withRawReply_handlerRefCon(
+                std::ptr::NonNull::new(event.aeDesc().cast_mut()).expect("event descriptor"),
+                std::ptr::NonNull::new(reply.aeDesc().cast_mut()).expect("reply descriptor"),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(result, 0, "Dock reopen must reach the installed handler");
+        assert_eq!(receiver.try_recv(), Ok(tray::Action::Home));
+        assert!(!app.isActive());
+        assert!(app.windows().is_empty());
+    }
     for confirmed in [false, false, true] {
         menu.performActionForItemAtIndex(0);
         assert_eq!(receiver.try_recv(), Ok(tray::Action::Quit));
@@ -61,7 +85,7 @@ fn main() {
     assert!(!app.isActive());
     assert!(app.windows().is_empty());
     println!(
-        "macOS native Quit route remains usable after missing NIB and repeated cancellation; no windows or activation"
+        "macOS native Reopen and Quit routes passed after missing NIB and repeated cancellation; no windows or activation"
     );
 }
 

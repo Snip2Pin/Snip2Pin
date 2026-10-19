@@ -26,6 +26,7 @@ const CLOSE_PINS_TAG: isize = 3;
 // Public AppleEvents.h / AEDataModel.h wire identifiers.
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
 const QUIT_APPLICATION: u32 = u32::from_be_bytes(*b"quit");
+const REOPEN_APPLICATION: u32 = u32::from_be_bytes(*b"rapp");
 const ERROR_NUMBER: u32 = u32::from_be_bytes(*b"errn");
 const NULL_DESCRIPTOR: u32 = u32::from_be_bytes(*b"null");
 const USER_CANCELED: i32 = -128;
@@ -72,6 +73,11 @@ define_class!(
         #[unsafe(method(snip2pinQuit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             (self.ivars().callback)(Action::Quit);
+        }
+
+        #[unsafe(method(snip2pinReopenEvent:withReplyEvent:))]
+        fn reopen_event(&self, _event: &NSAppleEventDescriptor, _reply: &NSAppleEventDescriptor) {
+            (self.ivars().callback)(Action::Home);
         }
 
         // NSAppleEventManager's documented two-descriptor callback ABI.
@@ -129,8 +135,8 @@ impl Dock {
     /// Install once on the main thread after eframe initializes AppKit and its
     /// main menu. Keep alive until the application event loop ends; hot removal
     /// or replacement of this adapter or the application menu is unsupported.
-    /// Skip this in the sandbox and in synthetic native tests. The callback must
-    /// enqueue an application command and wake its UI, not terminate immediately.
+    /// Skip this in the sandbox. The callback must enqueue an application command
+    /// and wake its UI, not terminate immediately.
     /// Every Quit command must eventually call resolve_quit before cancellation
     /// or application shutdown, even if no confirmation dialog was needed.
     pub fn new(callback: impl Fn(Action) + Send + Sync + 'static) -> Result<Self, Message> {
@@ -150,7 +156,7 @@ impl Dock {
         let event_manager = NSAppleEventManager::sharedAppleEventManager();
         // SAFETY: AppKit is initialized on the main thread. This target implements
         // the documented event/reply descriptor ABI and lives until removal.
-        // Only the process's Quit AppleEvent is claimed; backend delegates,
+        // Only the process's Quit and Reopen AppleEvents are claimed; delegates,
         // window classes and unrelated event handlers remain unchanged.
         unsafe {
             event_manager.setEventHandler_andSelector_forEventClass_andEventID(
@@ -158,6 +164,12 @@ impl Dock {
                 sel!(snip2pinQuitEvent:withReplyEvent:),
                 CORE_EVENT_CLASS,
                 QUIT_APPLICATION,
+            );
+            event_manager.setEventHandler_andSelector_forEventClass_andEventID(
+                &target,
+                sel!(snip2pinReopenEvent:withReplyEvent:),
+                CORE_EVENT_CLASS,
+                REOPEN_APPLICATION,
             );
         }
         Ok(Self {
@@ -169,7 +181,7 @@ impl Dock {
     }
 
     /// Load the optional custom Dock menu from the signed application bundle.
-    /// Failure leaves the Quit bridge installed. Items remain disabled until the
+    /// Failure leaves Quit and Reopen connected. Items remain disabled until the
     /// caller's next update supplies current labels and enabled state.
     pub fn load_menu(&mut self) -> Result<(), Message> {
         if self.menu.is_some() {
@@ -328,6 +340,8 @@ impl Drop for Dock {
         // requests unanswered or allow a new one to target a released callback.
         self.event_manager
             .removeEventHandlerForEventClass_andEventID(CORE_EVENT_CLASS, QUIT_APPLICATION);
+        self.event_manager
+            .removeEventHandlerForEventClass_andEventID(CORE_EVENT_CLASS, REOPEN_APPLICATION);
         self.resolve_quit(false);
         for quit in &self.quit_items {
             // SAFETY: Restore the exact valid target/action pair captured before

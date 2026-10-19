@@ -20,7 +20,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。截图只校验非空和源图边界，不设置额外的 2 像素或 2 点下限，原生窗口和宿主决定实际最小尺寸。高亮边框为 1 个物理像素。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边；不增加 DPI 下限换算、几何反馈或定位重试。复制始终使用原始像素。
 - 移动和缩放手势交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 不计算手势的下一帧窗口几何。显式键盘缩放与恢复原始尺寸由事件处理器根据实际内容尺寸及目标屏幕 DPI 换算，单次请求尺寸，不改位置、不重试。
 - 缩放和初始适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。显示器、DPI 和应用缩放按统一单位换算；复制、关闭按钮仍须在可用区内。
-- 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
+- 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。明确打开主页或点击 macOS Dock 图标时恢复隐藏／最小化并激活主页，使其显示到其他普通应用之前，保持普通窗口层级；不能用 key-window 状态代替应用前台状态，也不靠永久置顶、定时或反复聚焦补偿。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出和重新打开的 AppleEvent 路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
 - 主页列出当前贴图的缩略图、定位、锁定和关闭操作；定位将键盘焦点交给对应贴图。列表与图片高亮只依据真实窗口焦点，直接点击图片同样生效，失焦即取消；不保留额外选中状态或高亮计时，不新增截图历史。选中且未锁定的贴图实际显示尺寸不足以容纳一个操作按钮时，列表显示橙色提示“贴图太小？按 + 放大”；使用已观测的内容区尺寸，不以原图像素或初始尺寸猜测，未知时不提示，不恢复图片最小尺寸限制。尺寸跨提示阈值时通过事件重绘主页，不轮询或形成重绘循环，贴图关闭时释放提示状态。列表可折叠并限高滚动，默认至少显示 3.5 行（行高随字体推导），可独立纵向拖长，少量贴图按内容收缩；复用已有纹理。
 - 列表采用轻量行布局，保留左右内距；缩略图在带底色、细边框与内留白的固定区域居中，完整展示，不裁切原图。名称起点对齐，长名称截断并可查看全文，重名须可区分；操作按钮弱化，不能紧贴边缘或挤压名称。行高随字体增长，覆盖窄窗、大字体、极端图片比例、空列表和长列表滚动。单击行内非操作按钮区域选中并定位，双击名称进入标准文本编辑器，清空后显示随语言变化的默认编号。主页采用普通窗口层级，不能为定位或管理贴图而永久置顶；只有等待退出确认时可临时提升，取消须恢复。定位不改变几何，不用焦点往返、定时或层级降升补偿；名称编辑不触发定位或截图，锁定不妨碍命名。名称及编辑撤销状态随贴图关闭释放，不写入设置、日志或磁盘，不改变原生窗口身份及原图。
 - 聚焦且未锁定的贴图支持方向键微调位置、`+`／`=` 放大、`-` 缩小、`0` 恢复原始显示尺寸；右键菜单同样提供恢复操作。移动步长使用系统可表达的最小单位，只从实际外框位置发出一次移动请求，不猜测 Wayland 缺失的全局坐标；边界由系统处理。键盘缩放保持当前比例，最短边放大时须实际增长，尺寸边界遵循原生系统和宿主；恢复原始尺寸不施加应用下限。文本编辑或 Ctrl／Command／Alt 组合不触发键盘移动与缩放。保持窗口与图片同尺寸，不为点击热区自动放大或增加透明外边框；非 macOS 聚焦时可加宽图内缩放热区，同时保留中心拖动区域。
@@ -89,10 +89,10 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `preview/`: local WebAssembly sandbox using the same Rust UI and generated images; no native services.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
-- `src/platform/macos.rs`: floating level only, preserving backend classes and observation lifecycle.
+- `src/platform/macos.rs`: explicit application activation and floating levels, preserving backend classes and observation lifecycle.
 - `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
 - `src/platform/pin_window.rs`: same-process native pin lookup and explicit keyboard-focus activation without geometry changes.
-- `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu and system Quit routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
+- `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu, system Quit and Reopen routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
 - `src/platform/quit_prompt.rs`: asynchronous native quit confirmation with an application-UI fallback.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.
 - `src/i18n.rs`: typed Chinese/English catalogue, deferred messages and locale matching.
