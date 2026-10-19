@@ -1,12 +1,20 @@
 use eframe::egui::{self, Rect};
-use snip2pin::pin::{METRICS, coordinate_ratio, toolbar_geometry};
+use snip2pin::{
+    geometry::Placement,
+    pin::{
+        Control, METRICS, Zoom, coordinate_ratio, frame_geometry, movement_delta, toolbar_geometry,
+        zoom_size,
+    },
+};
 
 fn area() -> Rect {
     Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(680.0, 420.0))
 }
 
 fn controls(image: Rect, area: Rect) -> Rect {
-    let row = toolbar_geometry(image, &[area], area, 1.0).expect("visible controls");
+    let toolbar = toolbar_geometry(image, &[area], area, 1.0).expect("visible controls");
+    assert_eq!(toolbar.count, Control::ALL.len());
+    let row = toolbar.bounds;
     assert!(area.contains_rect(row));
     assert!(image.contains_rect(row));
     assert_eq!(row.size(), METRICS.toolbar_size());
@@ -49,14 +57,22 @@ fn controls_stay_inside_images_clipped_at_the_left_or_bottom() {
 #[test]
 fn controls_fit_without_requiring_resize_insets_or_enlarging_the_image() {
     let area = area();
-    for size in [egui::vec2(56.0, 26.0), egui::vec2(26.0, 56.0)] {
+    assert_eq!(Control::ALL, [Control::Copy, Control::Lock, Control::Close]);
+    assert_eq!(METRICS.toolbar_size(), egui::vec2(86.0, 26.0));
+    for (size, count) in [
+        (egui::vec2(86.0, 26.0), 3),
+        (egui::vec2(56.0, 26.0), 2),
+        (egui::vec2(26.0, 26.0), 1),
+        (egui::vec2(26.0, 120.0), 1),
+    ] {
         let image = Rect::from_min_size(egui::pos2(100.0, 120.0), size);
-        assert_eq!(toolbar_geometry(image, &[area], area, 1.0), Some(image));
+        let toolbar = toolbar_geometry(image, &[area], area, 1.0).expect("complete buttons fit");
+        assert_eq!(toolbar.count, count);
+        assert_eq!(toolbar.bounds.size(), METRICS.toolbar_size_for(count));
+        assert!(image.contains_rect(toolbar.bounds));
+        assert_eq!(toolbar.bounds.max.x, image.max.x);
         assert_eq!(image.size(), size);
     }
-    let image = Rect::from_min_size(egui::pos2(100.0, 120.0), egui::vec2(56.0, 56.0));
-    let row = controls(image, area);
-    assert_eq!(row.size(), egui::vec2(56.0, 26.0));
 }
 
 #[test]
@@ -71,15 +87,24 @@ fn fractional_controls_fit_exact_boundaries_and_reject_real_shortfalls() {
         for scale in [1.0, 1.5, 2.0] {
             for zoom in [1.0, 1.25, 2.0] {
                 let position = origin / (scale * zoom);
-                for size in [egui::vec2(56.0, 26.0), egui::vec2(26.0, 56.0)] {
+                for (size, count) in [
+                    (egui::vec2(86.0, 26.0), 3),
+                    (egui::vec2(56.0, 26.0), 2),
+                    (egui::vec2(26.0, 26.0), 1),
+                ] {
                     for axis in [egui::Vec2::X, egui::Vec2::Y] {
                         for margin in [-1.0, -0.25, 0.0, 0.25, 1.0] {
                             let image = Rect::from_min_size(position, size + axis * margin);
                             let area = image.expand(100.0);
                             let row = toolbar_geometry(image, &[area], area, 1.0);
+                            let expected = if margin < 0.0 {
+                                if axis == egui::Vec2::X { count - 1 } else { 0 }
+                            } else {
+                                count
+                            };
                             assert_eq!(
-                                row.is_some(),
-                                margin >= 0.0,
+                                row.map_or(0, |toolbar| toolbar.count),
+                                expected,
                                 "image size: origin={origin:?}, scale={scale}, zoom={zoom}, size={size:?}, axis={axis:?}, margin={margin}"
                             );
                             if let Some(row) = row {
@@ -90,14 +115,18 @@ fn fractional_controls_fit_exact_boundaries_and_reject_real_shortfalls() {
                                     .max(image.max.to_vec2().abs())
                                     .max_elem();
                                 let precision = magnitude.next_up() - magnitude;
-                                assert!(image.expand(precision).contains_rect(row));
+                                assert!(image.expand(precision).contains_rect(row.bounds));
+                                assert!((row.bounds.height() - METRICS.button).abs() <= precision);
                             }
                         }
                         let image = Rect::from_min_size(position, size);
                         for deficit in [0.25, 1.0] {
                             let area = Rect::from_min_max(image.min, image.max - axis * deficit);
-                            assert!(
-                                toolbar_geometry(image, &[area], area, 1.0).is_none(),
+                            let expected = if axis == egui::Vec2::X { count - 1 } else { 0 };
+                            assert_eq!(
+                                toolbar_geometry(image, &[area], area, 1.0)
+                                    .map_or(0, |toolbar| toolbar.count),
+                                expected,
                                 "visible area: origin={origin:?}, scale={scale}, zoom={zoom}, size={size:?}, axis={axis:?}, deficit={deficit}"
                             );
                         }
@@ -121,16 +150,18 @@ fn insufficient_visible_space_returns_none_without_relocating_the_image() {
 }
 
 #[test]
-fn a_narrow_visible_strip_uses_vertical_controls_before_falling_back_to_a_menu() {
+fn a_narrow_visible_strip_hides_left_buttons_before_falling_back_to_a_menu() {
     let area = area();
     let image = Rect::from_min_size(egui::pos2(630.0, 150.0), egui::vec2(200.0, 100.0));
-    let column = toolbar_geometry(image, &[area], area, 1.0).expect("vertical controls");
-    assert_eq!(column.size(), egui::vec2(26.0, 56.0));
-    assert!(image.intersect(area).contains_rect(column));
+    let toolbar = toolbar_geometry(image, &[area], area, 1.0).expect("close still fits");
+    assert_eq!(toolbar.count, 1);
+    assert_eq!(toolbar.bounds.size(), egui::vec2(26.0, 26.0));
+    assert!(image.intersect(area).contains_rect(toolbar.bounds));
     for size in [
         egui::vec2(1.0, 1.0),
         egui::vec2(12.0, 120.0),
-        egui::vec2(40.0, 50.0),
+        egui::vec2(25.75, 120.0),
+        egui::vec2(120.0, 25.75),
     ] {
         let image = Rect::from_min_size(egui::pos2(100.0, 120.0), size);
         assert!(toolbar_geometry(image, &[area], area, 1.0).is_none());
@@ -149,8 +180,9 @@ fn negative_monitor_origins_and_fractional_dpi_use_one_coordinate_space() {
         );
         let scaled = Rect::from_min_max(left.min * ratio, left.max * ratio);
         let row = toolbar_geometry(image, &[right, left], right, ratio).expect("left display");
-        assert!(scaled.contains_rect(row));
-        assert!(image.contains_rect(row));
+        assert_eq!(row.count, 3);
+        assert!(scaled.contains_rect(row.bounds));
+        assert!(image.contains_rect(row.bounds));
         assert_eq!(toolbar_geometry(image, &[], left, ratio), Some(row));
     }
 }
@@ -162,8 +194,9 @@ fn controls_use_a_roomy_intersection_when_the_closest_screen_only_shows_a_strip(
     let image = Rect::from_min_max(egui::pos2(1800.0, 700.0), egui::pos2(2220.0, 880.0));
     for screens in [[left, right], [right, left]] {
         let row = toolbar_geometry(image, &screens, right, 1.0).expect("left visible image");
-        assert!(left.contains_rect(row));
-        assert!(image.contains_rect(row));
+        assert_eq!(row.count, 3);
+        assert!(left.contains_rect(row.bounds));
+        assert!(image.contains_rect(row.bounds));
     }
 }
 
@@ -174,9 +207,50 @@ fn controls_choose_the_nearest_valid_position_to_the_image_top_right() {
     let image = Rect::from_min_max(egui::pos2(-200.0, 150.0), egui::pos2(200.0, 350.0));
     for screens in [[left, right], [right, left]] {
         let row = toolbar_geometry(image, &screens, left, 1.0).expect("right visible image");
-        assert!(right.contains_rect(row));
-        assert_eq!(row.max.x, image.max.x - METRICS.inset);
-        assert_eq!(row.min.y, image.min.y + METRICS.inset);
+        assert_eq!(row.count, 3);
+        assert!(right.contains_rect(row.bounds));
+        assert_eq!(row.bounds.max.x, image.max.x - 7.0);
+        assert_eq!(row.bounds.min.y, image.min.y + METRICS.inset);
+    }
+}
+
+#[test]
+fn full_controls_on_another_display_take_priority_over_a_nearer_partial_row() {
+    let left = Rect::from_min_max(egui::pos2(-300.0, -100.0), egui::pos2(0.0, 300.0));
+    let right = Rect::from_min_max(egui::pos2(0.0, -100.0), egui::pos2(300.0, 300.0));
+    for ratio in [1.0, 0.8, 0.625] {
+        let image = Rect::from_min_max(
+            egui::pos2(-200.0, -80.0) * ratio,
+            egui::pos2(60.0, 80.0) * ratio,
+        );
+        let visible_left = Rect::from_min_max(left.min * ratio, left.max * ratio);
+        for screens in [[left, right], [right, left]] {
+            let toolbar = toolbar_geometry(image, &screens, right, ratio).expect("full left row");
+            assert_eq!(toolbar.count, 3);
+            assert!(visible_left.contains_rect(toolbar.bounds));
+            assert!(image.contains_rect(toolbar.bounds));
+        }
+    }
+}
+
+#[test]
+fn initial_fitting_never_enlarges_small_images_to_make_room_for_controls() {
+    let screen = area();
+    for (size, count) in [
+        ([2.0, 2.0], 0),
+        ([12.0, 120.0], 0),
+        ([26.0, 72.0], 1),
+        ([56.0, 26.0], 2),
+        ([86.0, 26.0], 3),
+    ] {
+        let placement = Placement {
+            position: [100.0, 120.0],
+            size,
+        };
+        let layout = frame_geometry(placement, screen, 1.0);
+        assert_eq!(layout.image.min, egui::pos2(100.0, 120.0));
+        assert_eq!(layout.image.size(), egui::Vec2::from(size));
+        assert_eq!(layout.controls.map_or(0, |toolbar| toolbar.count), count);
     }
 }
 
@@ -191,4 +265,125 @@ fn viewport_coordinate_conversion_keeps_native_and_capture_units_distinct() {
         2.0 / 3.0
     };
     assert_eq!(ratio, expected);
+}
+
+#[test]
+fn keyboard_zoom_preserves_aspect_without_an_application_minimum() {
+    for scale in [1.0_f32, 1.25, 1.5, 2.0, 3.0] {
+        for pixels in [
+            [1, 1],
+            [1, 120],
+            [120, 1],
+            [2, 2],
+            [2, 120],
+            [3, 7],
+            [400, 300],
+        ] {
+            let original = egui::vec2(pixels[0] as f32, pixels[1] as f32);
+            let step = if cfg!(target_os = "macos") {
+                1.0
+            } else {
+                scale.recip()
+            };
+            let current = original / scale;
+            let grown = zoom_size(current, pixels, scale, Zoom::In).expect("valid zoom in");
+            assert!(grown.min_elem() + f32::EPSILON >= current.min_elem() + step);
+            let factors = grown / current;
+            assert!((factors.x - factors.y).abs() <= f32::EPSILON * factors.max_elem());
+            let shrunk = zoom_size(current, pixels, scale, Zoom::Out).expect("valid zoom out");
+            assert!(shrunk.min_elem() < current.min_elem());
+            let factors = shrunk / current;
+            assert!((factors.x - factors.y).abs() <= f32::EPSILON * factors.max_elem());
+            assert_eq!(
+                zoom_size(grown, pixels, scale, Zoom::Original),
+                Some(original / scale)
+            );
+            let mut repeatedly_shrunk = grown;
+            for _ in 0..60 {
+                repeatedly_shrunk = zoom_size(repeatedly_shrunk, pixels, scale, Zoom::Out)
+                    .expect("repeated shrink stays finite");
+            }
+            assert!(repeatedly_shrunk.min_elem() > 0.0 && repeatedly_shrunk.min_elem() < 1.0);
+        }
+    }
+}
+
+#[test]
+fn keyboard_zoom_uses_the_native_size_quantum_on_a_retina_display() {
+    let current = egui::vec2(1.0, 80.0);
+    let grown = zoom_size(current, [2, 160], 2.0, Zoom::In).expect("retina zoom in");
+    let expected_short_edge = if cfg!(target_os = "macos") { 2.0 } else { 1.5 };
+    assert!(grown.x >= expected_short_edge);
+    assert_eq!(grown.y / grown.x, current.y / current.x);
+    assert_eq!(
+        zoom_size(current, [1, 120], 2.0, Zoom::Original),
+        Some(egui::vec2(0.5, 60.0)),
+        "restoring a tiny original must not impose an application minimum"
+    );
+}
+
+#[test]
+fn keyboard_zoom_rejects_invalid_or_overflowing_geometry() {
+    for command in [Zoom::In, Zoom::Out, Zoom::Original] {
+        for current in [
+            egui::vec2(0.0, 1.0),
+            egui::vec2(-1.0, 2.0),
+            egui::vec2(f32::NAN, 1.0),
+            egui::vec2(1.0, f32::INFINITY),
+        ] {
+            assert_eq!(zoom_size(current, [1, 1], 1.0, command), None);
+        }
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                zoom_size(egui::Vec2::splat(1.0), [1, 1], scale, command),
+                None
+            );
+        }
+        for pixels in [[0, 1], [1, 0]] {
+            assert_eq!(
+                zoom_size(egui::Vec2::splat(1.0), pixels, 1.0, command),
+                None
+            );
+        }
+    }
+    assert_eq!(
+        zoom_size(egui::Vec2::splat(f32::MAX), [1, 1], 1.0, Zoom::In),
+        None
+    );
+}
+
+#[test]
+fn keyboard_movement_steps_use_native_units_at_each_display_scale() {
+    for scale in [1.0_f32, 1.25, 1.5, 2.0, 3.0] {
+        let step = if cfg!(target_os = "macos") {
+            1.0
+        } else {
+            scale.recip()
+        };
+        for steps in [[-1, 0], [1, 0], [0, -1], [0, 1], [-3, 2]] {
+            let expected = egui::vec2(steps[0] as f32, steps[1] as f32) * step;
+            assert_eq!(movement_delta(steps, scale), Some(expected));
+        }
+        assert_eq!(movement_delta([0, 0], scale), None);
+    }
+}
+
+#[test]
+fn keyboard_movement_rejects_invalid_scales_without_an_origin_guess() {
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(movement_delta([1, -1], scale), None);
+    }
+}
+
+#[test]
+fn restoring_legal_originals_preserves_one_to_one_pixels_and_aspect() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        for pixels in [[1, 1], [1, 120], [120, 1], [2, 2], [640, 480]] {
+            let expected = egui::vec2(pixels[0] as f32, pixels[1] as f32) / scale;
+            assert_eq!(
+                zoom_size(egui::vec2(300.0, 180.0), pixels, scale, Zoom::Original),
+                Some(expected)
+            );
+        }
+    }
 }

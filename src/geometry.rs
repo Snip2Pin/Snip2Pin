@@ -7,8 +7,6 @@ pub struct PixelRect {
     pub height: u32,
 }
 
-const MIN_SELECTION_EDGE: u32 = 2;
-
 /// Convert any drag direction from viewport points to image pixels. Ratios are
 /// derived from the actual viewport, avoiding double application of Retina DPI.
 pub fn selection(
@@ -56,7 +54,7 @@ pub fn selection_with_step(
     }
     let width = high[0].saturating_sub(low[0]);
     let height = high[1].saturating_sub(low[1]);
-    (width >= MIN_SELECTION_EDGE && height >= MIN_SELECTION_EDGE).then_some(PixelRect {
+    (width > 0 && height > 0).then_some(PixelRect {
         x: low[0],
         y: low[1],
         width,

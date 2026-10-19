@@ -263,6 +263,13 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     }
     let resources = destination.join("Contents/Resources");
     fs::create_dir_all(&resources)?;
+    execute(
+        Command::new("xcrun")
+            .args(["ibtool", "--minimum-deployment-target", "13.0", "--compile"])
+            .arg(resources.join("DockMenu.nib"))
+            .arg("packaging/macos/DockMenu.xib"),
+    )
+    .map_err(|error| format!("Dock menu compilation requires Xcode's ibtool: {error}"))?;
     fs::create_dir_all(destination.join("Contents/MacOS"))?;
     fs::copy(binary, destination.join("Contents/MacOS/snip2pin"))?;
     let plist = destination.join("Contents/Info.plist");
@@ -458,6 +465,9 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
             }
         }
         let plist = app.join("Contents/Info.plist");
+        if !app.join("Contents/Resources/DockMenu.nib").exists() {
+            return Err("macOS package is missing its native Dock menu".into());
+        }
         for locale in ["en", "zh-Hans"] {
             let strings = app.join(format!(
                 "Contents/Resources/{locale}.lproj/InfoPlist.strings"

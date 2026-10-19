@@ -15,9 +15,11 @@ use wasm_bindgen::{JsCast, prelude::*};
 
 struct Pin {
     id: u64,
+    name: String,
     texture: TextureHandle,
     image: Rect,
     gesture: Option<Gesture>,
+    locked: bool,
 }
 
 /// Browser-only stand-in for a desktop window manager. Native builds never use
@@ -35,6 +37,7 @@ impl Gesture {
             return self.image.translate(delta);
         };
         use ResizeDirection::*;
+        // The browser stand-in needs one canvas pixel to avoid inverted Areas.
         let minimum = Vec2::splat(pixels_per_point.recip());
         let maximum = maximum.max(minimum);
         let mut image = self.image;
@@ -71,6 +74,8 @@ struct Sandbox {
     pins: Vec<Pin>,
     menu: Option<(u64, Pos2)>,
     next_id: u64,
+    // Simulated native focus; browser Areas do not have OS window focus.
+    focused_pin: Option<u64>,
 }
 
 impl Sandbox {
@@ -110,6 +115,7 @@ impl Sandbox {
             pins: Vec::new(),
             menu: None,
             next_id: 0,
+            focused_pin: None,
         }
     }
 
@@ -124,6 +130,67 @@ impl Sandbox {
             focus_requested: false,
         });
     }
+
+    fn pin_action(&mut self, action: pin_view::Action, ui: &egui::Ui, bounds: Rect) {
+        match action {
+            pin_view::Action::ClosePin(id) => {
+                if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
+                    launcher::forget_pin_name(ui.ctx(), id);
+                }
+                self.pins.retain(|pin| pin.id != id || pin.locked);
+                if !self.pins.iter().any(|pin| Some(pin.id) == self.focused_pin) {
+                    self.focused_pin = None;
+                }
+                self.menu = None;
+            }
+            pin_view::Action::ToggleLock(id) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
+                    pin.locked = !pin.locked;
+                    pin.gesture = None;
+                }
+                self.menu = None;
+            }
+            pin_view::Action::CopyPin(_) => {
+                self.message = Some(Text::DemoCopied.into());
+                self.menu = None;
+            }
+            pin_view::Action::MenuPin(id) => {
+                let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
+                    bounds.min,
+                    (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
+                );
+                self.menu = Some((id, position));
+            }
+            pin_view::Action::Move(id, steps) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
+                    && let Some(delta) = pin::movement_delta(
+                        steps,
+                        ui.ctx().native_pixels_per_point().unwrap_or(1.0),
+                    )
+                {
+                    pin.image = pin.image.translate(delta / ui.ctx().zoom_factor());
+                }
+            }
+            pin_view::Action::Zoom(id, commands) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
+                    && let Some(size) = commands.iter().try_fold(
+                        pin.image.size() * ui.ctx().zoom_factor(),
+                        |size, &command| {
+                            pin::zoom_size(
+                                size,
+                                pin.texture.size(),
+                                ui.ctx().native_pixels_per_point().unwrap_or(1.0),
+                                command,
+                            )
+                        },
+                    )
+                {
+                    pin.image = Rect::from_min_size(pin.image.min, size / ui.ctx().zoom_factor());
+                }
+                self.menu = None;
+            }
+        }
+    }
 }
 
 impl eframe::App for Sandbox {
@@ -131,6 +198,24 @@ impl eframe::App for Sandbox {
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         let bounds = ui.max_rect();
+        if !ui.input(|input| input.focused) {
+            self.focused_pin = None;
+        } else if self.menu.is_none() && ui.input(|input| input.pointer.any_pressed()) {
+            self.focused_pin = ui.ctx().pointer_latest_pos().and_then(|point| {
+                self.pins
+                    .iter()
+                    .rev()
+                    .find(|pin| {
+                        pin.image.contains(point)
+                            && ui.ctx().layer_id_at(point)
+                                == Some(egui::LayerId::new(
+                                    egui::Order::Foreground,
+                                    egui::Id::new(("pin", pin.id)),
+                                ))
+                    })
+                    .map(|pin| pin.id)
+            });
+        }
         if self.recording {
             for event in ui.input(|input| input.events.clone()) {
                 if let egui::Event::Key {
@@ -157,6 +242,7 @@ impl eframe::App for Sandbox {
                 }
             }
         } else if self.selection.is_none()
+            && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events
@@ -193,6 +279,7 @@ impl eframe::App for Sandbox {
                         );
                         self.pins.push(Pin {
                             id: self.next_id,
+                            name: String::new(),
                             texture: ui.ctx().load_texture(
                                 format!("pin-{}", self.next_id),
                                 pixels,
@@ -200,6 +287,7 @@ impl eframe::App for Sandbox {
                             ),
                             image: layout.image,
                             gesture: None,
+                            locked: false,
                         });
                         self.message = Some(Text::DemoPinned.into());
                     }
@@ -220,17 +308,32 @@ impl eframe::App for Sandbox {
         );
         let mut action = None;
         let message = self.message.as_ref().map(|message| message.render(locale));
+        let pins = self
+            .pins
+            .iter()
+            .rev()
+            .map(|pin| launcher::PinEntry {
+                id: pin.id,
+                name: &pin.name,
+                texture: &pin.texture,
+                size: pin.texture.size(),
+                display_size: Some(pin.image.size()),
+                locked: pin.locked,
+                selected: self.focused_pin == Some(pin.id),
+            })
+            .collect::<Vec<_>>();
         egui::Window::new("Snip2Pin")
             .id(egui::Id::new("home"))
             .title_bar(false)
             .fixed_pos(egui::pos2(24.0, 24.0))
-            .fixed_size(snip2pin::ui::style::LAUNCHER.window)
+            .default_size(snip2pin::ui::style::LAUNCHER.window)
+            .resizable(true)
             .show(ui.ctx(), |ui| {
                 action = launcher::show(
                     ui,
                     launcher::Model {
                         locale,
-                        pin_count: self.pins.len(),
+                        pins: &pins,
                         message: message.as_deref(),
                         global_shortcut: false,
                         preferences: self.preferences,
@@ -245,8 +348,30 @@ impl eframe::App for Sandbox {
                 );
             });
         match action {
+            Some(launcher::Action::RenamePin(id, name)) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
+                    pin.name = name;
+                }
+            }
             Some(launcher::Action::Capture) => self.capture(),
-            Some(launcher::Action::ClosePins) => self.pins.clear(),
+            Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
+                if !pin.locked {
+                    launcher::forget_pin_name(ui.ctx(), pin.id);
+                }
+                pin.locked
+            }),
+            Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
+            Some(launcher::Action::SelectPin(id)) => {
+                if let Some(index) = self.pins.iter().position(|pin| pin.id == id) {
+                    let pin = self.pins.remove(index);
+                    self.pins.push(pin);
+                    self.focused_pin = Some(id);
+                    ui.ctx().move_to_top(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new(("pin", id)),
+                    ));
+                }
+            }
             Some(launcher::Action::RecordShortcut) => self.recording = !self.recording,
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.preferences.theme = theme;
@@ -265,6 +390,9 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::Startup(enabled)) => self.startup = enabled,
             Some(launcher::Action::Language(language)) => self.preferences.language = language,
             _ => {}
+        }
+        if ui.ctx().text_edit_focused() {
+            self.focused_pin = None;
         }
         if self.menu.is_some()
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -297,14 +425,30 @@ impl eframe::App for Sandbox {
                         ui,
                         pin.id,
                         &pin.texture,
-                        false,
-                        controls,
-                        &|action| events.borrow_mut().push(action),
+                        pin_view::Interaction {
+                            native_edges: false,
+                            locked: pin.locked,
+                            excluded: controls.map(|toolbar| toolbar.bounds),
+                        },
+                        &|action| {
+                            if !matches!(action, pin_view::Action::Zoom(id, _) | pin_view::Action::Move(id, _) if self.focused_pin != Some(id)) {
+                                events.borrow_mut().push(action);
+                            }
+                        },
                         |command| requested = Some(command),
                     );
+                    if self.focused_pin == Some(pin.id) {
+                            let style = &snip2pin::ui::style::PIN;
+                            ui.painter().rect_stroke(
+                                ui.max_rect(),
+                                0,
+                                egui::Stroke::new(style.highlight_stroke_pixels / ui.ctx().pixels_per_point(), style.highlight),
+                                egui::StrokeKind::Inside,
+                            );
+                    }
                     if hovered && let Some(row) = controls {
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
-                            pin_view::controls(ui, pin.id, &|action| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
+                            pin_view::controls(ui, pin.id, pin.locked, row, &|action| {
                                 events.borrow_mut().push(action)
                             });
                         });
@@ -328,23 +472,7 @@ impl eframe::App for Sandbox {
             }
         }
         for event in events.into_inner() {
-            match event {
-                pin_view::Action::ClosePin(id) => {
-                    self.pins.retain(|pin| pin.id != id);
-                    self.menu = None;
-                }
-                pin_view::Action::CopyPin(_) => {
-                    self.message = Some(Text::DemoCopied.into());
-                    self.menu = None;
-                }
-                pin_view::Action::MenuPin(id) => {
-                    let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
-                        bounds.min,
-                        (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
-                    );
-                    self.menu = Some((id, position));
-                }
-            }
+            self.pin_action(event, ui, bounds);
         }
         if let Some((id, position)) = self.menu {
             let menu_rect = Rect::from_min_size(position, pin_view::MENU_SIZE);
@@ -371,17 +499,12 @@ impl eframe::App for Sandbox {
                         ui.set_max_size(pin_view::MENU_SIZE);
                         ui.painter()
                             .rect_filled(ui.max_rect(), 4, ui.visuals().window_fill);
-                        pin_view::menu(ui, id, &|event| *action.borrow_mut() = Some(event));
+                        let locked = self.pins.iter().any(|pin| pin.id == id && pin.locked);
+                        pin_view::menu(ui, id, locked, &|event| *action.borrow_mut() = Some(event));
                     });
                 if let Some(action) = action.into_inner() {
                     self.menu = None;
-                    match action {
-                        pin_view::Action::CopyPin(_) => {
-                            self.message = Some(Text::DemoCopied.into());
-                        }
-                        pin_view::Action::ClosePin(id) => self.pins.retain(|pin| pin.id != id),
-                        pin_view::Action::MenuPin(_) => {}
-                    }
+                    self.pin_action(action, ui, bounds);
                 }
             }
         }

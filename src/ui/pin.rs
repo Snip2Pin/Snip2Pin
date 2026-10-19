@@ -1,19 +1,38 @@
 use eframe::egui::{
     self, Color32, Pos2, Rect, ResizeDirection, Sense, TextureHandle, ViewportCommand,
 };
-use snip2pin::pin::METRICS;
+use snip2pin::pin::{Control, METRICS, Toolbar, Zoom};
 
-use super::{icons::paint_copy_icon, style::PIN};
+use super::{
+    icons::{paint_copy_icon, paint_lock_icon},
+    style::PIN,
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     CopyPin(u64),
     ClosePin(u64),
     MenuPin(u64),
+    ToggleLock(u64),
+    Zoom(u64, Vec<Zoom>),
+    Move(u64, [i32; 2]),
 }
 
 const MENU_PADDING: f32 = 8.0;
-pub const MENU_SIZE: egui::Vec2 = egui::vec2(120.0, 72.0);
+const MENU_ROWS: usize = 4;
+pub const MENU_SIZE: egui::Vec2 = egui::vec2(
+    PIN.menu_width,
+    MENU_PADDING * 2.0
+        + METRICS.button * MENU_ROWS as f32
+        + METRICS.button_gap * (MENU_ROWS - 1) as f32,
+);
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Interaction {
+    pub native_edges: bool,
+    pub locked: bool,
+    pub excluded: Option<Rect>,
+}
 
 /// The web sandbox intercepts these requests; desktop hosts handle the gesture.
 /// This view never computes or requests a new window position or size.
@@ -21,12 +40,61 @@ pub fn image_with_host(
     ui: &mut egui::Ui,
     id: u64,
     texture: &TextureHandle,
-    native_edges: bool,
-    excluded: Option<Rect>,
+    interaction: Interaction,
     events: &dyn Fn(Action),
     mut host: impl FnMut(ViewportCommand),
 ) -> bool {
+    let Interaction {
+        native_edges,
+        locked,
+        excluded,
+    } = interaction;
     let bounds = ui.max_rect();
+    let focused = ui.input(|input| input.viewport().focused == Some(true));
+    if !locked && focused && !ui.ctx().text_edit_focused() && ui.ctx().current_pass_index() == 0 {
+        let (zooms, movement) = ui.input(|input| {
+            let mut zooms = Vec::new();
+            let mut movement = [0, 0];
+            for event in &input.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && !modifiers.ctrl
+                    && !modifiers.command
+                    && !modifiers.mac_cmd
+                    && !modifiers.alt
+                {
+                    match key {
+                        egui::Key::Plus | egui::Key::Equals => zooms.push(Zoom::In),
+                        egui::Key::Minus => zooms.push(Zoom::Out),
+                        egui::Key::Num0 => zooms.push(Zoom::Original),
+                        egui::Key::ArrowLeft => movement[0] -= 1,
+                        egui::Key::ArrowRight => movement[0] += 1,
+                        egui::Key::ArrowUp => movement[1] -= 1,
+                        egui::Key::ArrowDown => movement[1] += 1,
+                        _ => {}
+                    }
+                }
+            }
+            (zooms, movement)
+        });
+        if !zooms.is_empty() {
+            events(Action::Zoom(id, zooms));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+        if movement != [0, 0] {
+            events(Action::Move(id, movement));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
+    }
+    let resize_inset = if focused {
+        PIN.focused_resize_inset
+    } else {
+        METRICS.inset
+    };
     let response = ui.interact(
         bounds,
         ui.id().with(("pin-image", id)),
@@ -45,13 +113,14 @@ pub fn image_with_host(
         events(Action::MenuPin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
-    let edge = (!native_edges)
+    let edge = (!native_edges && !locked)
         .then(|| ui.input(|input| input.pointer.interact_pos()))
         .flatten()
         .filter(|point| !excluded.is_some_and(|rect| rect.contains(*point)))
-        .and_then(|point| resize_direction(bounds, point));
+        .and_then(|point| resize_direction(bounds, point, resize_inset));
     if response.hovered()
         && !native_edges
+        && !locked
         && !ui
             .input(|input| input.pointer.interact_pos())
             .is_some_and(|point| excluded.is_some_and(|rect| rect.contains(point)))
@@ -71,16 +140,18 @@ pub fn image_with_host(
             .then(|| input.pointer.press_origin())
             .flatten()
     });
-    if pressed.is_some_and(|point| {
-        bounds.contains(point)
-            && ui.clip_rect().contains(point)
-            && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-            && !excluded.is_some_and(|rect| rect.contains(point))
-    }) {
+    if !locked
+        && pressed.is_some_and(|point| {
+            bounds.contains(point)
+                && ui.clip_rect().contains(point)
+                && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
+                && !excluded.is_some_and(|rect| rect.contains(point))
+        })
+    {
         let pressed_edge = (!native_edges)
             .then_some(pressed)
             .flatten()
-            .and_then(|point| resize_direction(bounds, point));
+            .and_then(|point| resize_direction(bounds, point, resize_inset));
         match pressed_edge {
             Some(direction) => host(ViewportCommand::BeginResize(direction)),
             None => host(ViewportCommand::StartDrag),
@@ -96,60 +167,114 @@ pub fn image_with_host(
         && response.interact_pointer_pos().is_some_and(|point| {
             bounds.contains(point) && !excluded.is_some_and(|rect| rect.contains(point))
         });
-    if double_clicked_image || close_requested(ui) {
+    if !locked && (double_clicked_image || close_requested(ui)) {
         events(Action::ClosePin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
+    if locked && ui.input(|input| input.viewport().close_requested()) {
+        host(ViewportCommand::CancelClose);
     }
     response.contains_pointer()
 }
 
-pub fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+pub fn controls(
+    ui: &mut egui::Ui,
+    id: u64,
+    locked: bool,
+    toolbar: Toolbar,
+    events: &dyn Fn(Action),
+) {
     let locale = crate::i18n::locale(ui.ctx());
-    let bounds = ui.max_rect();
-    let first = Rect::from_min_size(bounds.min, egui::Vec2::splat(METRICS.button));
     let step = METRICS.button + METRICS.button_gap;
-    let (copy_rect, close_rect) = if bounds.height() > bounds.width() {
-        (first.translate(egui::vec2(0.0, step)), first)
-    } else {
-        (first, first.translate(egui::vec2(step, 0.0)))
-    };
-    let copy = ui.put(copy_rect, egui::Button::new("").fill(PIN.button_fill));
-    copy.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            locale.text(crate::i18n::Text::Copy),
-        )
-    });
-    paint_copy_icon(ui, copy.rect);
-    if copy.clicked() {
-        events(Action::CopyPin(id));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-    }
-    let close = ui.put(
-        close_rect,
-        egui::Button::new(egui::RichText::new("×").color(Color32::WHITE)).fill(PIN.button_fill),
-    );
-    close.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            locale.text(crate::i18n::Text::Close),
-        )
-    });
-    if close.clicked() {
-        events(Action::ClosePin(id));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    for (index, control) in Control::ALL
+        .into_iter()
+        .skip(Control::ALL.len().saturating_sub(toolbar.count))
+        .enumerate()
+    {
+        let (label, action) = match control {
+            Control::Copy => (crate::i18n::Text::Copy, Action::CopyPin(id)),
+            Control::Lock => (
+                if locked {
+                    crate::i18n::Text::Unlock
+                } else {
+                    crate::i18n::Text::Lock
+                },
+                Action::ToggleLock(id),
+            ),
+            Control::Close => (crate::i18n::Text::Close, Action::ClosePin(id)),
+        };
+        let rect = Rect::from_min_size(
+            toolbar.bounds.min + egui::vec2(index as f32 * step, 0.0),
+            egui::Vec2::splat(METRICS.button),
+        );
+        let enabled = control != Control::Close || !locked;
+        let response = ui
+            .push_id(("pin-control", id, control), |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    ui.put(
+                        rect,
+                        egui::Button::new(
+                            egui::RichText::new(if control == Control::Close { "×" } else { "" })
+                                .color(if enabled {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::GRAY
+                                }),
+                        )
+                        .fill(PIN.button_fill),
+                    )
+                })
+                .inner
+            })
+            .inner;
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled() && enabled,
+                locale.text(label),
+            )
+        });
+        match control {
+            Control::Copy => paint_copy_icon(ui, response.rect),
+            Control::Lock => paint_lock_icon(ui, response.rect, locked, Color32::WHITE),
+            Control::Close => {}
+        }
+        if response.clicked() {
+            events(action);
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
 }
 
-pub fn menu(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
+pub fn menu(ui: &mut egui::Ui, id: u64, locked: bool, events: &dyn Fn(Action)) {
     let locale = crate::i18n::locale(ui.ctx());
     let bounds = ui.max_rect().shrink(MENU_PADDING);
-    let height = (bounds.height() - METRICS.button_gap) / 2.0;
-    for (index, (label, action)) in [
-        (locale.text(crate::i18n::Text::Copy), Action::CopyPin(id)),
-        (locale.text(crate::i18n::Text::Close), Action::ClosePin(id)),
+    let height = (bounds.height() - METRICS.button_gap * (MENU_ROWS - 1) as f32) / MENU_ROWS as f32;
+    for (index, (label, action, enabled)) in [
+        (
+            locale.text(crate::i18n::Text::Copy),
+            Action::CopyPin(id),
+            true,
+        ),
+        (
+            locale.text(if locked {
+                crate::i18n::Text::Unlock
+            } else {
+                crate::i18n::Text::Lock
+            }),
+            Action::ToggleLock(id),
+            true,
+        ),
+        (
+            locale.text(crate::i18n::Text::RestoreSize),
+            Action::Zoom(id, vec![Zoom::Original]),
+            !locked,
+        ),
+        (
+            locale.text(crate::i18n::Text::Close),
+            Action::ClosePin(id),
+            !locked,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -158,7 +283,11 @@ pub fn menu(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
             bounds.min + egui::vec2(0.0, index as f32 * (height + METRICS.button_gap)),
             egui::vec2(bounds.width(), height),
         );
-        if ui.put(rect, egui::Button::new(label)).clicked() {
+        if ui
+            .add_enabled_ui(enabled, |ui| ui.put(rect, egui::Button::new(label)))
+            .inner
+            .clicked()
+        {
             events(action);
             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
         }
@@ -169,13 +298,13 @@ fn close_requested(ui: &egui::Ui) -> bool {
     ui.input(|input| input.viewport().close_requested() || input.key_pressed(egui::Key::Escape))
 }
 
-fn resize_direction(bounds: Rect, point: Pos2) -> Option<ResizeDirection> {
+fn resize_direction(bounds: Rect, point: Pos2, inset: f32) -> Option<ResizeDirection> {
     if !bounds.contains(point) {
         return None;
     }
     let hit = egui::vec2(
-        METRICS.inset.min(bounds.width() / 3.0),
-        METRICS.inset.min(bounds.height() / 3.0),
+        inset.min(bounds.width() / 3.0),
+        inset.min(bounds.height() / 3.0),
     );
     let horizontal = if point.x < bounds.min.x + hit.x {
         -1

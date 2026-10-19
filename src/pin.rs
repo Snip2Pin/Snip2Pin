@@ -16,9 +16,98 @@ pub const METRICS: Metrics = Metrics {
     inset: 12.0,
 };
 
+/// Each keyboard zoom step scales both axes together.
+pub const KEYBOARD_ZOOM_FACTOR: f32 = 1.25;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zoom {
+    In,
+    Out,
+    Original,
+}
+
+/// Size in native window logical units, derived from its observed content size.
+/// `pixels_per_point` is the native display scale; the host converts egui zoom
+/// at its boundary. macOS windows quantize to whole logical points, so
+/// zoom-in steps use one point there, one physical pixel elsewhere, so tiny
+/// pins can grow again. Original requests source pixels / display scale (100%).
+/// The window system owns native size constraints.
+pub fn zoom_size(
+    current: Vec2,
+    original_pixels: [usize; 2],
+    pixels_per_point: f32,
+    command: Zoom,
+) -> Option<Vec2> {
+    if !current.is_finite() || current.min_elem() <= 0.0 || original_pixels.contains(&0) {
+        return None;
+    }
+    let growth_step = native_step(pixels_per_point)?;
+    let growth_factor = growth_step / current.min_elem();
+    let size = match command {
+        // A one-pixel short edge must grow on the next native size request,
+        // rather than rounding a 25% increase back to the same pixel.
+        Zoom::In => current * KEYBOARD_ZOOM_FACTOR.max(1.0 + growth_factor),
+        Zoom::Out => current * KEYBOARD_ZOOM_FACTOR.recip(),
+        Zoom::Original => {
+            egui::vec2(original_pixels[0] as f32, original_pixels[1] as f32) / pixels_per_point
+        }
+    };
+    (size.is_finite() && size.min_elem() > 0.0).then_some(size)
+}
+
+/// Convert accumulated arrow-key steps into native logical window units.
+/// macOS uses one whole logical point per step; other hosts use one physical
+/// pixel. The caller obtains the current native origin before applying this
+/// delta, without keeping another position or compensating for system limits.
+pub fn movement_delta(steps: [i32; 2], native_scale: f32) -> Option<Vec2> {
+    if steps == [0, 0] {
+        return None;
+    }
+    let delta = egui::vec2(steps[0] as f32, steps[1] as f32) * native_step(native_scale)?;
+    (delta.is_finite() && delta != Vec2::ZERO).then_some(delta)
+}
+
+fn native_step(native_scale: f32) -> Option<f32> {
+    if !native_scale.is_finite() || native_scale <= 0.0 {
+        return None;
+    }
+    let step = if cfg!(target_os = "macos") {
+        1.0
+    } else {
+        native_scale.recip()
+    };
+    (step.is_finite() && step > 0.0).then_some(step)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Control {
+    Copy,
+    Lock,
+    Close,
+}
+
+impl Control {
+    pub const ALL: [Self; 3] = [Self::Copy, Self::Lock, Self::Close];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Toolbar {
+    pub bounds: Rect,
+    pub count: usize,
+}
+
+impl Toolbar {
+    pub fn translate(self, offset: Vec2) -> Self {
+        Self {
+            bounds: self.bounds.translate(offset),
+            ..self
+        }
+    }
+}
+
 impl Metrics {
     pub fn toolbar_width(&self) -> f32 {
-        self.button * 2.0 + self.button_gap
+        self.toolbar_size_for(Control::ALL.len()).x
     }
 
     pub fn toolbar_height(&self) -> f32 {
@@ -27,6 +116,13 @@ impl Metrics {
 
     pub fn toolbar_size(&self) -> Vec2 {
         egui::vec2(self.toolbar_width(), self.toolbar_height())
+    }
+
+    pub fn toolbar_size_for(&self, count: usize) -> Vec2 {
+        egui::vec2(
+            self.button * count as f32 + self.button_gap * count.saturating_sub(1) as f32,
+            self.button,
+        )
     }
 }
 
@@ -42,7 +138,7 @@ pub fn coordinate_ratio(display_scale: f32, zoom: f32, pixels_per_point: f32) ->
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     pub image: Rect,
-    pub controls: Option<Rect>,
+    pub controls: Option<Toolbar>,
 }
 
 /// Preserve the initial image size; only shrink proportionally to fit the screen.
@@ -80,11 +176,14 @@ pub fn menu_position(
 /// Prefer the image's top-right corner, clamped inside a usable display area.
 /// The image is in UI desktop coordinates; monitor bounds are scaled by ratio.
 /// Return None only when no display has enough visible image for the controls.
-pub fn toolbar_geometry(image: Rect, screens: &[Rect], fallback: Rect, ratio: f32) -> Option<Rect> {
-    for size in [
-        METRICS.toolbar_size(),
-        egui::vec2(METRICS.button, METRICS.toolbar_width()),
-    ] {
+pub fn toolbar_geometry(
+    image: Rect,
+    screens: &[Rect],
+    fallback: Rect,
+    ratio: f32,
+) -> Option<Toolbar> {
+    for count in (1..=Control::ALL.len()).rev() {
+        let size = METRICS.toolbar_size_for(count);
         let preferred = image.right_top() + egui::vec2(-METRICS.inset - size.x, METRICS.inset);
         let candidate = screens
             .iter()
@@ -113,12 +212,16 @@ pub fn toolbar_geometry(image: Rect, screens: &[Rect], fallback: Rect, ratio: f3
                 let available = Rect::from_min_max(visible.min + inset, visible.max - inset);
                 let position =
                     preferred.clamp(available.min, (available.max - size).max(available.min));
-                Some(Rect::from_min_size(position, size))
+                Some(Toolbar {
+                    bounds: Rect::from_min_size(position, size),
+                    count,
+                })
             })
             .min_by(|left, right| {
-                left.min
+                left.bounds
+                    .min
                     .distance_sq(preferred)
-                    .total_cmp(&right.min.distance_sq(preferred))
+                    .total_cmp(&right.bounds.min.distance_sq(preferred))
             });
         if candidate.is_some() {
             return candidate;

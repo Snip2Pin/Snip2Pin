@@ -95,6 +95,20 @@ WebAssembly 检查独立编译共享 UI，避免只在网页入口使用的代�
 Rust 视图，使用生成图片，不提供真实截图、系统剪贴板、自启或全局快捷键注册。
 本地 `packaging/macos/build.sh --install` 使用优化构建；这属于开发安装，不是发版。
 
+### 本地 macOS 菜单资源
+
+Dock 菜单使用 `packaging/macos/DockMenu.xib`，打包时由 Xcode 的 `ibtool` 编译，
+通过 NSApplication 的官方 `dockMenu` outlet 连接，不替换窗口后端的 delegate。
+macOS 打包需要安装完整 Xcode，Command Line Tools 本身不包含 `ibtool`。
+完成 Xcode 的首次初始化后确认工具可用，再构建：
+
+```sh
+xcrun --find ibtool
+bash packaging/macos/build.sh --install
+```
+
+打包时从 XIB 源码编译菜单，不提交二进制 NIB，不需要额外的资源下载流程。
+
 ### 本地 GUI 沙箱
 
 安装锁文件匹配的 wasm-bindgen-cli，传入本机 CJK 字体后构建，仅在回环地址访问：

@@ -10,6 +10,7 @@ use std::{
 };
 
 use eframe::egui::{self, ColorImage, TextureHandle, ViewportCommand, ViewportId};
+use raw_window_handle::HasWindowHandle;
 use snip2pin::{
     capture::{self, Display, Snapshot},
     geometry,
@@ -35,6 +36,10 @@ fn pin_id(id: u64) -> ViewportId {
     ViewportId::from_hash_of(("pin", id))
 }
 
+fn pin_hint_state_id(id: u64) -> egui::Id {
+    egui::Id::new(("pin-small-hint", id))
+}
+
 fn pin_menu_id() -> ViewportId {
     ViewportId::from_hash_of("pin-menu")
 }
@@ -49,6 +54,30 @@ fn dispatch_pin(
         ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
         ui::pin::Action::ClosePin(id) => Event::ClosePin(id),
         ui::pin::Action::MenuPin(id) => Event::MenuPin(id, menu_position),
+        ui::pin::Action::ToggleLock(id) => Event::ToggleLock(id),
+        ui::pin::Action::Zoom(id, commands) => {
+            let observed = (ctx.viewport_id() == pin_id(id))
+                .then(|| {
+                    ctx.native_pixels_per_point()
+                        .map(|scale| (ctx.content_rect().size() * ctx.zoom_factor(), scale))
+                })
+                .flatten();
+            Event::ZoomPin(id, commands, observed)
+        }
+        ui::pin::Action::Move(id, steps) => {
+            let observed = (ctx.viewport_id() == pin_id(id))
+                .then(|| {
+                    ctx.input(|input| {
+                        input
+                            .viewport()
+                            .outer_rect
+                            .zip(input.viewport().native_pixels_per_point)
+                    })
+                    .map(|(rect, scale)| (rect.min * ctx.zoom_factor(), scale))
+                })
+                .flatten();
+            Event::MovePin(id, steps, observed)
+        }
     };
     let _ = events.send(event);
     ctx.request_repaint_of(ViewportId::ROOT);
@@ -63,9 +92,13 @@ pub enum Event {
     BeginPinDrag(u64, platform::macos_drag::PressId),
     CopyPin(u64),
     ClosePin(u64),
+    ToggleLock(u64),
+    ZoomPin(u64, Vec<pin::Zoom>, Option<(egui::Vec2, f32)>),
+    MovePin(u64, [i32; 2], Option<(egui::Pos2, f32)>),
     MenuPin(u64, Option<egui::Pos2>),
     ClosePinMenu,
     Tray(crate::tray::Action),
+    QuitDecision(u64, Result<bool, Message>),
 }
 
 enum Phase {
@@ -85,6 +118,7 @@ struct Layer {
 }
 
 struct Pin {
+    name: String,
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
     initial: egui::Rect,
@@ -93,6 +127,7 @@ struct Pin {
     screen_areas: Arc<Vec<egui::Rect>>,
     session: u64,
     ready: Arc<AtomicBool>,
+    locked: bool,
     #[cfg(target_os = "macos")]
     presented: Cell<bool>,
 }
@@ -101,6 +136,18 @@ struct PinMenu {
     pin_id: u64,
     position: Option<egui::Pos2>,
     focused: Arc<AtomicBool>,
+}
+
+struct QuitConfirmation {
+    id: u64,
+    presentation: QuitPresentation,
+}
+
+enum QuitPresentation {
+    AwaitingHost,
+    Ready,
+    Native(platform::quit_prompt::Dialog),
+    Fallback,
 }
 
 pub struct Snip2Pin {
@@ -113,6 +160,8 @@ pub struct Snip2Pin {
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
     pin_menu: Option<PinMenu>,
+    quit_confirmation: Option<QuitConfirmation>,
+    next_quit_request: u64,
     #[cfg(target_os = "macos")]
     pin_drag: platform::macos_drag::DragEvents,
     next_pin: u64,
@@ -128,6 +177,8 @@ pub struct Snip2Pin {
     suppress_shortcut_until: Instant,
     demo: bool,
     tray: Option<crate::tray::Tray>,
+    #[cfg(target_os = "macos")]
+    dock: Option<crate::macos_dock::Dock>,
     startup: Option<crate::startup::Startup>,
     startup_enabled: bool,
     exiting: bool,
@@ -237,6 +288,28 @@ impl Snip2Pin {
                 }
             }
         };
+        #[cfg(target_os = "macos")]
+        let dock = if demo {
+            None
+        } else {
+            let sender = sender.clone();
+            let ctx = cc.egui_ctx.clone();
+            match crate::macos_dock::Dock::new(move |action| {
+                let _ = sender.send(Event::Tray(action));
+                ctx.request_repaint_of(ViewportId::ROOT);
+            }) {
+                Ok(mut dock) => {
+                    if let Err(error) = dock.load_menu() {
+                        message = Some(error);
+                    }
+                    Some(dock)
+                }
+                Err(error) => {
+                    message = Some(error);
+                    None
+                }
+            }
+        };
         let home_visible = !std::env::args().any(|arg| arg == "--background")
             || tray.is_none()
             || layers.is_empty();
@@ -259,6 +332,8 @@ impl Snip2Pin {
             active_display: None,
             pins: BTreeMap::new(),
             pin_menu: None,
+            quit_confirmation: None,
+            next_quit_request: 0,
             #[cfg(target_os = "macos")]
             pin_drag,
             next_pin: 0,
@@ -274,6 +349,8 @@ impl Snip2Pin {
             suppress_shortcut_until: Instant::now(),
             demo,
             tray,
+            #[cfg(target_os = "macos")]
+            dock,
             startup,
             startup_enabled,
             exiting: false,
@@ -285,6 +362,9 @@ impl Snip2Pin {
     }
 
     fn capture_command(&mut self, ctx: &egui::Context) {
+        if self.exiting || self.quit_confirmation.is_some() {
+            return;
+        }
         if matches!(self.phase, Phase::Capturing) {
             self.restore(ctx);
         } else {
@@ -395,17 +475,37 @@ impl Snip2Pin {
         match action {
             Action::Home => {
                 self.home_visible = true;
+                // Only a pending confirmation needs to stay above locked pins.
+                ctx.send_viewport_cmd_to(
+                    ViewportId::ROOT,
+                    ViewportCommand::WindowLevel(if self.quit_confirmation.is_some() {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    }),
+                );
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Decorations(true));
                 ctx.send_viewport_cmd_to(
                     ViewportId::ROOT,
                     ViewportCommand::MousePassthrough(false),
                 );
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+                // Visible(true) can make Home key before egui-winit handles
+                // Focus, causing its key-window guard to skip app activation.
+                #[cfg(target_os = "macos")]
+                if !self.demo
+                    && let Err(error) = platform::activate_application()
+                {
+                    self.message = Some(error);
+                }
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),
             Action::CopyPin(id) => self.copy_pin(id, ctx),
             Action::ClosePin(id) => self.close_pin(id, ctx),
+            Action::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
+            Action::RestorePin(id) => self.zoom_pin(id, &[pin::Zoom::Original], None, ctx),
             Action::ClosePins => {
                 self.close_pins(ctx);
                 if matches!(
@@ -419,10 +519,32 @@ impl Snip2Pin {
                 }
             }
             Action::Quit => {
-                self.exiting = true;
+                if self.exiting {
+                    #[cfg(target_os = "macos")]
+                    if let Some(dock) = &self.dock {
+                        dock.resolve_quit(true);
+                    }
+                    return;
+                }
+                if self.quit_confirmation.is_some() {
+                    return;
+                }
+                self.recording = false;
                 self.restore(ctx);
-                self.close_pins(ctx);
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+                if self.pins.values().any(|pin| pin.locked) {
+                    self.next_quit_request = self.next_quit_request.wrapping_add(1);
+                    self.quit_confirmation = Some(QuitConfirmation {
+                        id: self.next_quit_request,
+                        presentation: if self.demo {
+                            QuitPresentation::Fallback
+                        } else {
+                            QuitPresentation::AwaitingHost
+                        },
+                    });
+                    self.tray_action(Action::Home, ctx);
+                } else {
+                    self.quit(ctx);
+                }
             }
         }
     }
@@ -649,6 +771,7 @@ impl Snip2Pin {
             self.pins.insert(
                 self.next_pin,
                 Pin {
+                    name: String::new(),
                     texture,
                     pixels,
                     initial: {
@@ -665,6 +788,7 @@ impl Snip2Pin {
                     screen_areas,
                     session: id,
                     ready: Arc::new(AtomicBool::new(false)),
+                    locked: false,
                     #[cfg(target_os = "macos")]
                     presented: Cell::new(false),
                 },
@@ -684,13 +808,14 @@ impl Snip2Pin {
     }
 
     fn open_pin_menu(&mut self, id: u64, position: Option<egui::Pos2>, ctx: &egui::Context) {
-        if !self.pins.contains_key(&id) {
+        let Some(pin) = self.pins.get(&id) else {
             return;
-        }
+        };
         if !self.demo {
             match platform::pin_menu::show(
                 id,
                 self.preferences.language.resolve(self.system_locale),
+                pin.locked,
             ) {
                 Ok(true) => return,
                 Ok(false) => {}
@@ -716,13 +841,18 @@ impl Snip2Pin {
     }
 
     fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
+        if self.pins.get(&id).is_some_and(|pin| pin.locked) {
+            return;
+        }
         if self.pin_menu.as_ref().is_some_and(|menu| menu.pin_id == id) {
             self.close_pin_menu(ctx);
         }
-        if let Some(pin) = self.pins.remove(&id)
-            && pin.ready.load(Ordering::Acquire)
-        {
-            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+        if let Some(pin) = self.pins.remove(&id) {
+            launcher::forget_pin_name(ctx, id);
+            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
+            if pin.ready.load(Ordering::Acquire) {
+                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+            }
         }
         if matches!(&self.phase, Phase::Selecting { pending_pin: Some(pending), .. } if *pending == id)
         {
@@ -735,6 +865,230 @@ impl Snip2Pin {
         for id in self.pins.keys().copied().collect::<Vec<_>>() {
             self.close_pin(id, ctx);
         }
+    }
+
+    fn toggle_pin_lock(&mut self, id: u64, ctx: &egui::Context) {
+        let Some(pin) = self.pins.get_mut(&id) else {
+            return;
+        };
+        pin.locked = !pin.locked;
+        ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Resizable(!pin.locked));
+        #[cfg(target_os = "macos")]
+        if !self.demo
+            && let Err(error) = platform::set_pin_movable(id, !pin.locked)
+        {
+            self.message = Some(error);
+        }
+        self.close_pin_menu(ctx);
+        ctx.request_repaint_of(pin_id(id));
+        ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    fn select_pin(&mut self, id: u64, ctx: &egui::Context) {
+        if !self.pins.contains_key(&id) {
+            return;
+        }
+        if !self.demo
+            && let Err(error) = platform::pin_window::activate(id)
+        {
+            self.message = Some(error);
+        }
+        ctx.request_repaint_of(pin_id(id));
+    }
+
+    fn zoom_pin(
+        &mut self,
+        id: u64,
+        commands: &[pin::Zoom],
+        observed: Option<(egui::Vec2, f32)>,
+        ctx: &egui::Context,
+    ) {
+        let Some(pin) = self
+            .pins
+            .get(&id)
+            .filter(|pin| !pin.locked && !commands.is_empty())
+        else {
+            return;
+        };
+        let zoom = ctx.zoom_factor();
+        let geometry = observed.or_else(|| {
+            ctx.input(|input| {
+                let viewport = input.raw.viewports.get(&pin_id(id))?;
+                let scale = viewport.native_pixels_per_point?;
+                let current = match viewport.inner_rect {
+                    Some(rect) => rect.size() * zoom,
+                    // Restoring source size does not need a global position.
+                    None if commands.first() == Some(&pin::Zoom::Original) => {
+                        egui::vec2(pin.pixels.size[0] as f32, pin.pixels.size[1] as f32) / scale
+                    }
+                    None => return None,
+                };
+                Some((current, scale))
+            })
+        });
+        if let Some((current, scale)) = geometry
+            && let Some(size) = commands.iter().try_fold(current, |size, &command| {
+                pin::zoom_size(size, pin.pixels.size, scale, command)
+            })
+        {
+            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::InnerSize(size / zoom));
+        }
+        self.close_pin_menu(ctx);
+    }
+
+    fn move_pin(
+        &self,
+        id: u64,
+        steps: [i32; 2],
+        observed: Option<(egui::Pos2, f32)>,
+        ctx: &egui::Context,
+    ) {
+        if !self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+            return;
+        }
+        let zoom = ctx.zoom_factor();
+        let geometry = observed.or_else(|| {
+            ctx.input(|input| {
+                let viewport = input.raw.viewports.get(&pin_id(id))?;
+                Some((
+                    viewport.outer_rect?.min * zoom,
+                    viewport.native_pixels_per_point?,
+                ))
+            })
+        });
+        if let Some((position, scale)) = geometry
+            && position.is_finite()
+            && let Some(delta) = pin::movement_delta(steps, scale)
+            && (position + delta).is_finite()
+        {
+            ctx.send_viewport_cmd_to(
+                pin_id(id),
+                ViewportCommand::OuterPosition((position + delta) / zoom),
+            );
+        }
+    }
+
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.exiting = true;
+        let _ = self.quit_confirmation.take();
+        #[cfg(target_os = "macos")]
+        if let Some(dock) = &self.dock {
+            dock.resolve_quit(true);
+        }
+        self.close_pin_menu(ctx);
+        for (id, pin) in std::mem::take(&mut self.pins) {
+            launcher::forget_pin_name(ctx, id);
+            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
+            if pin.ready.load(Ordering::Acquire) {
+                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+            }
+        }
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+    }
+
+    fn cancel_quit(&mut self, ctx: &egui::Context) {
+        // Invalidate the request before dropping a sheet: dismissal may deliver
+        // its completion synchronously, but that queued result is now stale.
+        let _ = self.quit_confirmation.take();
+        #[cfg(target_os = "macos")]
+        if let Some(dock) = &self.dock {
+            dock.resolve_quit(false);
+        }
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            ViewportCommand::WindowLevel(egui::WindowLevel::Normal),
+        );
+        if let Ok(mut command) = self.relaunch.lock() {
+            command.take();
+        }
+    }
+
+    fn close_home(&mut self, ctx: &egui::Context) {
+        if self.exiting {
+            return;
+        }
+        if self.quit_confirmation.as_ref().is_some_and(|confirmation| {
+            matches!(&confirmation.presentation, QuitPresentation::Native(dialog) if !dialog.can_dismiss())
+        }) {
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+            return;
+        }
+        if self.tray.is_some() {
+            self.cancel_quit(ctx);
+            self.home_visible = false;
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
+        } else {
+            if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked) {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+            }
+            self.tray_action(crate::tray::Action::Quit, ctx);
+        }
+    }
+
+    fn quit_decision(&mut self, id: u64, result: Result<bool, Message>, ctx: &egui::Context) {
+        let Some(pending) = &mut self.quit_confirmation else {
+            return;
+        };
+        if pending.id != id {
+            return;
+        }
+        match result {
+            Ok(true) => self.quit(ctx),
+            Ok(false) => self.cancel_quit(ctx),
+            Err(error) => {
+                pending.presentation = QuitPresentation::Fallback;
+                self.message = Some(error);
+                ctx.request_repaint_of(ViewportId::ROOT);
+            }
+        }
+    }
+
+    fn prepare_quit_prompt(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let Some(confirmation) = &mut self.quit_confirmation else {
+            return;
+        };
+        match confirmation.presentation {
+            QuitPresentation::AwaitingHost => {
+                // Let Home's visibility/focus commands reach the native host
+                // before attaching a sheet. This is a single event-driven step.
+                confirmation.presentation = QuitPresentation::Ready;
+                ctx.request_repaint_of(ViewportId::ROOT);
+                return;
+            }
+            QuitPresentation::Ready => {
+                // A discarded egui pass can call logic again in the same native
+                // frame. Start only on a later frame's first pass.
+                if ctx.current_pass_index() != 0 {
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                    return;
+                }
+            }
+            _ => return,
+        }
+        let id = confirmation.id;
+        let sender = self.sender.clone();
+        let wake = ctx.clone();
+        let result = move |outcome| {
+            let _ = sender.send(Event::QuitDecision(id, outcome));
+            wake.request_repaint_of(ViewportId::ROOT);
+        };
+        let opened = match frame.window_handle() {
+            Ok(owner) => platform::quit_prompt::show(
+                owner,
+                self.preferences.language.resolve(self.system_locale),
+                result,
+            ),
+            Err(_) => Ok(None),
+        };
+        confirmation.presentation = match opened {
+            Ok(Some(dialog)) => QuitPresentation::Native(dialog),
+            Ok(None) => QuitPresentation::Fallback,
+            Err(error) => {
+                self.message = Some(error);
+                QuitPresentation::Fallback
+            }
+        };
     }
 
     fn change_binding(&mut self, binding: Binding, ctx: &egui::Context) {
@@ -852,6 +1206,15 @@ impl Snip2Pin {
     }
 
     fn update_icon(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        if self.preferences.icon == settings::Icon::Auto
+            && self.preferences.theme == settings::Theme::System
+            && ctx.system_theme().is_none()
+        {
+            // A logic-only startup pass has no theme yet. Keep the bundle icon
+            // until the normal theme event supplies an authoritative choice.
+            return;
+        }
         let variant = self.preferences.icon_variant(ctx.system_theme());
         if self.applied_icon == Some(variant) {
             return;
@@ -993,6 +1356,7 @@ impl Snip2Pin {
             let screen = pin.screen;
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
+            let locked = pin.locked;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
@@ -1003,7 +1367,7 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
-                .with_resizable(true)
+                .with_resizable(!locked)
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false);
@@ -1025,12 +1389,6 @@ impl Snip2Pin {
                 builder.with_visible(false)
             };
             ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
-                if ui.input(|input| {
-                    input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
-                }) {
-                    dispatch_pin(ui::pin::Action::ClosePin(id), &events, ui.ctx(), None);
-                    return;
-                }
                 let ratio = pin::coordinate_ratio(
                     display_scale,
                     ui.ctx().zoom_factor(),
@@ -1039,7 +1397,7 @@ impl Snip2Pin {
                 // Native geometry is authoritative; painting never changes it.
                 let controls = if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
                     pin::toolbar_geometry(image, &areas, screen, ratio)
-                        .map(|rect| rect.translate(-image.min.to_vec2()))
+                        .map(|toolbar| toolbar.translate(-image.min.to_vec2()))
                 } else {
                     // Wayland may not expose global positions. Keep controls
                     // inside the observed content instead of guessing one.
@@ -1076,8 +1434,11 @@ impl Snip2Pin {
                     ui,
                     id,
                     &texture,
-                    cfg!(target_os = "macos"),
-                    controls,
+                    ui::pin::Interaction {
+                        native_edges: cfg!(target_os = "macos"),
+                        locked,
+                        excluded: controls.map(|toolbar| toolbar.bounds),
+                    },
                     &dispatch,
                     |command| {
                         #[cfg(target_os = "macos")]
@@ -1097,9 +1458,38 @@ impl Snip2Pin {
                         ctx.send_viewport_cmd(command);
                     },
                 );
+                if pin_focused(&ctx, id) {
+                    ui.painter().rect_stroke(
+                        ui.max_rect(),
+                        0,
+                        egui::Stroke::new(
+                            ui::style::PIN.highlight_stroke_pixels / ctx.pixels_per_point(),
+                            ui::style::PIN.highlight,
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let small = launcher::pin_is_small(ui.max_rect().size());
+                let changed = ctx.data_mut(|data| {
+                    let key = pin_hint_state_id(id);
+                    let previous = data.get_temp::<bool>(key);
+                    data.insert_temp(key, small);
+                    previous != Some(small)
+                });
+                if changed {
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                }
+                if ui.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::WindowFocused(_)))
+                }) {
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                }
                 if hovered && let Some(row) = controls {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
-                        ui::pin::controls(ui, id, &dispatch);
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
+                        ui::pin::controls(ui, id, locked, row, &dispatch);
                     });
                 }
                 if !ready.swap(true, Ordering::AcqRel) {
@@ -1115,6 +1505,7 @@ impl Snip2Pin {
             return;
         };
         let id = menu.pin_id;
+        let locked = self.pins.get(&id).is_some_and(|pin| pin.locked);
         let focused = menu.focused.clone();
         let events = self.sender.clone();
         let mut builder = self
@@ -1145,7 +1536,7 @@ impl Snip2Pin {
                 return;
             }
             let ctx = ui.ctx().clone();
-            ui::pin::menu(ui, id, &|action| {
+            ui::pin::menu(ui, id, locked, &|action| {
                 dispatch_pin(action, &events, &ctx, None);
                 let _ = events.send(Event::ClosePinMenu);
             });
@@ -1158,7 +1549,7 @@ impl eframe::App for Snip2Pin {
         [0.0; 4]
     }
 
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_locale(ctx, self.preferences.language.resolve(self.system_locale));
         if !matches!(self.phase, Phase::Idle)
             && ctx.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1188,7 +1579,7 @@ impl eframe::App for Snip2Pin {
                 }
                 #[cfg(target_os = "macos")]
                 Event::BeginPinDrag(id, press) => {
-                    if self.pins.contains_key(&id) {
+                    if self.pins.get(&id).is_some_and(|pin| !pin.locked) {
                         self.pin_drag.begin(id, press);
                     }
                 }
@@ -1197,23 +1588,41 @@ impl eframe::App for Snip2Pin {
                     self.close_pin_menu(ctx);
                 }
                 Event::ClosePin(id) => self.close_pin(id, ctx),
+                Event::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
+                Event::ZoomPin(id, commands, observed) => {
+                    self.zoom_pin(id, &commands, observed, ctx)
+                }
                 Event::MenuPin(id, anchor) => self.open_pin_menu(id, anchor, ctx),
+                Event::MovePin(id, steps, observed) => self.move_pin(id, steps, observed, ctx),
                 Event::ClosePinMenu => self.close_pin_menu(ctx),
                 Event::Tray(action) => self.tray_action(action, ctx),
+                Event::QuitDecision(id, outcome) => self.quit_decision(id, outcome, ctx),
             }
         }
         if let Some(tray) = &mut self.tray {
             tray.update(
                 self.preferences.language.resolve(self.system_locale),
-                matches!(self.phase, Phase::Idle | Phase::Capturing) && !self.recording,
-                !self.pins.is_empty(),
+                matches!(self.phase, Phase::Idle | Phase::Capturing)
+                    && !self.recording
+                    && self.quit_confirmation.is_none(),
+                self.pins.values().any(|pin| !pin.locked),
                 matches!(self.phase, Phase::Capturing),
             );
-            if !self.exiting && ctx.input(|input| input.viewport().close_requested()) {
-                self.home_visible = false;
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
-            }
+        }
+        if ctx.input(|input| input.viewport().close_requested()) {
+            self.close_home(ctx);
+        }
+        self.prepare_quit_prompt(ctx, frame);
+        #[cfg(target_os = "macos")]
+        if let Some(dock) = &mut self.dock {
+            dock.update(
+                self.preferences.language.resolve(self.system_locale),
+                matches!(self.phase, Phase::Idle | Phase::Capturing)
+                    && !self.recording
+                    && self.quit_confirmation.is_none(),
+                self.pins.values().any(|pin| !pin.locked),
+                matches!(self.phase, Phase::Capturing),
+            );
         }
         self.show_pins(ctx);
         self.show_pin_menu(ctx);
@@ -1229,23 +1638,49 @@ impl eframe::App for Snip2Pin {
         let idle = matches!(self.phase, Phase::Idle);
         let locale = self.preferences.language.resolve(self.system_locale);
         let message = self.message.as_ref().map(|message| message.render(locale));
-        let action = launcher::show(
-            ui,
-            launcher::Model {
-                locale,
-                pin_count: self.pins.len(),
-                message: message.as_deref(),
-                global_shortcut: self.shortcut.is_some(),
-                preferences: self.preferences,
-                icon_texture: self.icon_texture.as_ref(),
-                recording: self.recording,
-                idle,
-                capturing: matches!(self.phase, Phase::Capturing),
-                demo: self.demo,
-                startup: self.startup.as_ref().map(|_| self.startup_enabled),
-                permission_required: self.permission == ScreenPermission::Required,
-            },
-        );
+        let pins = self
+            .pins
+            .iter()
+            .rev()
+            .filter(|(_, pin)| pin.ready.load(Ordering::Acquire))
+            .map(|(&id, pin)| launcher::PinEntry {
+                id,
+                name: &pin.name,
+                texture: &pin.texture,
+                size: pin.pixels.size,
+                display_size: ctx.input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&pin_id(id))?
+                        .inner_rect
+                        .map(|rect| rect.size())
+                }),
+                locked: pin.locked,
+                selected: pin_focused(&ctx, id),
+            })
+            .collect::<Vec<_>>();
+        let action = ui
+            .add_enabled_ui(self.quit_confirmation.is_none(), |ui| {
+                launcher::show(
+                    ui,
+                    launcher::Model {
+                        locale,
+                        pins: &pins,
+                        message: message.as_deref(),
+                        global_shortcut: self.shortcut.is_some(),
+                        preferences: self.preferences,
+                        icon_texture: self.icon_texture.as_ref(),
+                        recording: self.recording,
+                        idle,
+                        capturing: matches!(self.phase, Phase::Capturing),
+                        demo: self.demo,
+                        startup: self.startup.as_ref().map(|_| self.startup_enabled),
+                        permission_required: self.permission == ScreenPermission::Required,
+                    },
+                )
+            })
+            .inner;
         match action {
             Some(launcher::Action::Capture) => self.capture_command(&ctx),
             Some(launcher::Action::ClosePins) => self.close_pins(&ctx),
@@ -1264,11 +1699,43 @@ impl eframe::App for Snip2Pin {
                 }
             }
             Some(launcher::Action::Restart) => self.restart(&ctx),
+            Some(launcher::Action::SelectPin(id)) => self.select_pin(id, &ctx),
+            Some(launcher::Action::RenamePin(id, name)) => {
+                if let Some(pin) = self.pins.get_mut(&id) {
+                    pin.name = name;
+                }
+            }
+            Some(launcher::Action::Pin(action)) => dispatch_pin(action, &self.sender, &ctx, None),
             None => {}
         }
-        if self.recording {
+        if self.quit_confirmation.as_ref().is_some_and(|confirmation| {
+            matches!(confirmation.presentation, QuitPresentation::Fallback)
+        }) {
+            let response = egui::Modal::new(egui::Id::new("quit-locked-pins")).show(&ctx, |ui| {
+                ui.heading(locale.text(Text::QuitLockedTitle));
+                ui.label(locale.text(Text::QuitLockedHelp));
+                let mut confirm = false;
+                ui.horizontal(|ui| {
+                    if ui.button(locale.text(Text::Cancel)).clicked() {
+                        self.cancel_quit(&ctx);
+                    }
+                    if ui.button(locale.text(Text::QuitConfirm)).clicked() {
+                        confirm = true;
+                    }
+                });
+                confirm
+            });
+            if response.inner {
+                self.quit(&ctx);
+            } else if response.should_close() {
+                self.cancel_quit(&ctx);
+            }
+        }
+        if self.recording && self.quit_confirmation.is_none() {
             self.record_key(ui);
         } else if idle
+            && self.quit_confirmation.is_none()
+            && !ctx.egui_wants_keyboard_input()
             && ui.input(|input| {
                 input
                     .events
@@ -1283,6 +1750,17 @@ impl eframe::App for Snip2Pin {
 
 fn layer_id(display_id: u32) -> ViewportId {
     ViewportId::from_hash_of(("selection", display_id))
+}
+
+fn pin_focused(ctx: &egui::Context, id: u64) -> bool {
+    ctx.input(|input| {
+        input
+            .raw
+            .viewports
+            .get(&pin_id(id))
+            .and_then(|viewport| viewport.focused)
+            == Some(true)
+    })
 }
 
 fn texture(ctx: &egui::Context, name: &str, pixels: &image::RgbaImage) -> TextureHandle {
