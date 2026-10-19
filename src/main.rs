@@ -99,7 +99,7 @@ fn startup_options(background: bool) -> Result<eframe::NativeOptions, snip2pin::
             .with_active(!background)
             .with_mouse_passthrough(background)
             .with_icon(startup_window_icon()?)
-            .with_resizable(false),
+            .with_resizable(true),
         centered: true,
         ..Default::default()
     })
@@ -127,11 +127,10 @@ mod tests {
     #[test]
     fn home_startup_uses_normal_window_level() {
         for background in [false, true] {
+            let options = super::startup_options(background).expect("native options");
+            assert_eq!(options.viewport.resizable, Some(true));
             assert_eq!(
-                super::startup_options(background)
-                    .expect("native options")
-                    .viewport
-                    .window_level,
+                options.viewport.window_level,
                 Some(eframe::egui::WindowLevel::Normal)
             );
         }

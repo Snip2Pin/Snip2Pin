@@ -360,6 +360,7 @@ fn pin_list_thumbnail_and_buttons_emit_actions_in_narrow_homes() {
                     egui::TextureOptions::default(),
                 );
                 let pins = [PinEntry {
+                    display_size: None,
                     id: 17,
                     name: "",
                     texture: &texture,
@@ -471,6 +472,7 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
         );
         let pins = (0..8)
             .map(|id| PinEntry {
+                display_size: None,
                 id,
                 name: "",
                 texture: &texture,
@@ -517,52 +519,226 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
 }
 
 #[test]
-fn pin_zoom_hint_follows_selected_unlocked_focus_without_checking_source_pixels() {
+fn pin_list_defaults_to_three_and_a_half_font_rows_and_resizes_with_real_pointer_input() {
+    for large in [false, true] {
+        let ctx = egui::Context::default();
+        if large {
+            ctx.global_style_mut(|style| {
+                for font in style.text_styles.values_mut() {
+                    font.size *= 2.0;
+                }
+            });
+        }
+        let texture = ctx.load_texture(
+            "generated-resizable-list",
+            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+            Default::default(),
+        );
+        let pins = (1..=20)
+            .map(|id| PinEntry {
+                id,
+                display_size: None,
+                name: "",
+                texture: &texture,
+                size: [2, 2],
+                locked: false,
+                selected: false,
+            })
+            .collect::<Vec<_>>();
+        let size = egui::vec2(
+            LAUNCHER.window[0],
+            if large { 1000.0 } else { LAUNCHER.window[1] },
+        );
+        let frame = |size, events, pins: &[PinEntry<'_>]| {
+            frame_with_pins(&ctx, size, events, false, Locale::English, pins)
+        };
+        let _ = frame(size, vec![], &pins[..1]);
+        let few = frame(size, vec![], &pins[..1]).0;
+        let few_theme = visible_text(&few, "Theme");
+        let handle_id = egui::Id::new("pin-list-resize").with("__resize_corner");
+        assert!(
+            ctx.read_response(handle_id).is_none(),
+            "one pin needs no empty resize region"
+        );
+        let _ = frame(size, vec![], &pins);
+        let output = frame(size, vec![], &pins).0;
+        let well = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let row_height = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, .. }
+                    if (points[0].x - well.left()).abs() <= 1.0 && points[0].y > well.bottom() =>
+                {
+                    Some((points[0].y - well.center().y) * 2.0)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let image_clip = |output: &FullOutput| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+                        Some(shape.clip_rect)
+                    }
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => {
+                        Some(shape.clip_rect)
+                    }
+                    _ => None,
+                })
+                .expect("list viewport")
+        };
+        let initial_clip = image_clip(&output);
+        let mut idle_clip = initial_clip;
+        for _ in 0..20 {
+            idle_clip = image_clip(&frame(size, vec![], &pins).0);
+        }
+        assert!(
+            (idle_clip.height() - initial_clip.height()).abs() <= 1.0,
+            "an idle list must keep its height: before={initial_clip:?}, after={idle_clip:?}"
+        );
+        assert!((initial_clip.height() - row_height * LAUNCHER.pin_list_visible_rows).abs() <= 1.0);
+        assert!(visible_text(&output, "Theme").min.y - few_theme.min.y > row_height);
+        let handle = ctx
+            .read_response(handle_id)
+            .expect("built-in resize handle")
+            .rect;
+        assert!(
+            handle.top() >= initial_clip.bottom(),
+            "the handle has a separate band below row actions"
+        );
+        let grown_window = size + egui::vec2(80.0, 200.0);
+        for _ in 0..3 {
+            let _ = frame(grown_window, vec![], &pins);
+        }
+        let from = ctx.read_response(handle_id).unwrap().rect.center();
+        let to = from + egui::vec2(0.0, row_height * 1.5);
+        let pointer = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for events in [
+            vec![Event::PointerMoved(from)],
+            vec![pointer(from, true)],
+            vec![Event::PointerMoved(to)],
+            vec![pointer(to, false)],
+        ] {
+            assert!(
+                frame(grown_window, events, &pins).1.is_none(),
+                "resizing must not route a pin action"
+            );
+        }
+        let _ = frame(grown_window, vec![], &pins);
+        let expanded = frame(grown_window, vec![], &pins).0;
+        assert!(
+            image_clip(&expanded).height() > initial_clip.height() + row_height,
+            "large={large}, initial={initial_clip:?}, expanded={:?}, from={from:?}, to={to:?}, handle={:?}",
+            image_clip(&expanded),
+            ctx.read_response(handle_id).map(|response| response.rect)
+        );
+        let from = ctx.read_response(handle_id).unwrap().rect.center();
+        let to = from - egui::vec2(0.0, row_height * 8.0);
+        for events in [
+            vec![Event::PointerMoved(from)],
+            vec![pointer(from, true)],
+            vec![Event::PointerMoved(to)],
+            vec![pointer(to, false)],
+        ] {
+            assert!(frame(grown_window, events, &pins).1.is_none());
+        }
+        let _ = frame(grown_window, vec![], &pins);
+        let compact = frame(grown_window, vec![], &pins).0;
+        assert!(
+            (image_clip(&compact).height() - row_height).abs() <= 1.0,
+            "the user can shrink the list to one row"
+        );
+        let narrow = egui::vec2(210.0, LAUNCHER.window[1]);
+        let _ = frame(narrow, vec![], &pins);
+        let output = frame(narrow, vec![], &pins).0;
+        let close = visible_text(&output, "×").center();
+        let _ = frame(narrow, vec![Event::PointerMoved(close)], &pins);
+        assert!(frame(narrow, vec![pointer(close, true)], &pins).1.is_none());
+        assert!(matches!(
+            frame(narrow, vec![pointer(close, false)], &pins).1,
+            Some(Action::Pin(super::super::pin::Action::ClosePin(1)))
+        ));
+    }
+}
+
+#[test]
+fn pin_zoom_hint_uses_only_observed_display_size_and_unlocked_focus() {
     for locale in [Locale::Chinese, Locale::English] {
         for selected in [false, true] {
             for locked in [false, true] {
                 for pixels in [[1, 1], [4096, 4096]] {
-                    let ctx = egui::Context::default();
-                    let texture = ctx.load_texture(
-                        "generated-zoom-hint",
-                        egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
-                        Default::default(),
-                    );
-                    let pins = [PinEntry {
-                        id: 17,
-                        name: "",
-                        texture: &texture,
-                        size: pixels,
-                        locked,
-                        selected,
-                    }];
-                    let size = Vec2::from(LAUNCHER.window);
-                    let _ = frame_with_pins(&ctx, size, vec![], false, locale, &pins);
-                    let (output, action) =
-                        frame_with_pins(&ctx, size, vec![], false, locale, &pins);
-                    assert!(action.is_none());
-                    let hint = output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text)
-                            if text.galley.text() == locale.text(Text::PinZoomHint) =>
-                        {
-                            Some(text)
+                    for (display_size, small) in [
+                        (None, false),
+                        (Some(egui::vec2(10.0, 400.0)), true),
+                        (Some(egui::vec2(400.0, 10.0)), true),
+                        (Some(Vec2::splat(snip2pin::pin::METRICS.button)), false),
+                        (Some(Vec2::splat(400.0)), false),
+                        (Some(egui::vec2(f32::NAN, 10.0)), false),
+                        (Some(egui::vec2(0.0, 10.0)), false),
+                        (Some(egui::vec2(-1.0, 10.0)), false),
+                    ] {
+                        let ctx = egui::Context::default();
+                        let texture = ctx.load_texture(
+                            "generated-zoom-hint",
+                            egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                            Default::default(),
+                        );
+                        let pins = [PinEntry {
+                            display_size,
+                            id: 17,
+                            name: "",
+                            texture: &texture,
+                            size: pixels,
+                            locked,
+                            selected,
+                        }];
+                        let size = Vec2::from(LAUNCHER.window);
+                        let _ = frame_with_pins(&ctx, size, vec![], false, locale, &pins);
+                        let (output, action) =
+                            frame_with_pins(&ctx, size, vec![], false, locale, &pins);
+                        assert!(action.is_none());
+                        let hint = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text)
+                                if text.galley.text() == locale.text(Text::PinZoomHint) =>
+                            {
+                                Some(text)
+                            }
+                            _ => None,
+                        });
+                        assert_eq!(hint.is_some(), selected && !locked && small);
+                        if let Some(hint) = hint {
+                            let warning = ctx.global_style().visuals.warn_fg_color;
+                            assert!(
+                                hint.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|section| section.format.color == warning)
+                            );
+                            assert!(
+                                hint.pos.y
+                                    >= visible_text(&output, locale.text(Text::ClosePins)).bottom()
+                            );
                         }
-                        _ => None,
-                    });
-                    assert_eq!(hint.is_some(), selected && !locked);
-                    if let Some(hint) = hint {
-                        let warning = ctx.global_style().visuals.warn_fg_color;
-                        assert!(
-                            hint.galley
-                                .job
-                                .sections
-                                .iter()
-                                .all(|section| section.format.color == warning)
-                        );
-                        assert!(
-                            hint.pos.y
-                                >= visible_text(&output, locale.text(Text::ClosePins)).bottom()
-                        );
                     }
                 }
             }
@@ -590,6 +766,7 @@ fn pin_zoom_hint_wraps_and_remains_reachable_in_narrow_homes_with_large_fonts() 
                 );
                 let pins = (1..=60)
                     .map(|id| PinEntry {
+                        display_size: Some(egui::vec2(10.0, 400.0)),
                         id,
                         name: "Reference",
                         texture: &texture,
@@ -666,6 +843,7 @@ fn lightweight_rows_keep_extreme_previews_padded_and_names_clear_of_controls() {
                         }
                     };
                     let pins = [PinEntry {
+                        display_size: None,
                         id: 17,
                         name,
                         texture: &texture,
@@ -795,6 +973,7 @@ fn lightweight_rows_use_focus_fill_and_distinguish_duplicate_names() {
                     Default::default(),
                 );
                 let pins = [17, 18].map(|id| PinEntry {
+                    display_size: None,
                     id,
                     name: "Reference",
                     texture: &texture,
@@ -811,7 +990,9 @@ fn lightweight_rows_use_focus_fill_and_distinguish_duplicate_names() {
                     .filter_map(|shape| match &shape.shape {
                         egui::Shape::Rect(rect)
                             if rect.rect.height() >= LAUNCHER.pin_row_min_height
-                                && rect.rect.height() < LAUNCHER.pin_list_height
+                                && rect.rect.height()
+                                    < LAUNCHER.pin_row_min_height
+                                        * LAUNCHER.pin_list_visible_rows
                                 && rect.fill != egui::Color32::TRANSPARENT =>
                         {
                             Some(rect.fill)
@@ -870,6 +1051,7 @@ fn lightweight_rows_disambiguate_default_names_in_both_languages() {
         let name = Text::PinLabel.with(17).render(locale);
         let pins = [
             PinEntry {
+                display_size: None,
                 id: 17,
                 name: "",
                 texture: &texture,
@@ -878,6 +1060,7 @@ fn lightweight_rows_disambiguate_default_names_in_both_languages() {
                 selected: false,
             },
             PinEntry {
+                display_size: None,
                 id: 18,
                 name: &name,
                 texture: &texture,
@@ -915,6 +1098,7 @@ fn lightweight_narrow_rows_with_large_fonts_keep_duplicate_ids_and_actions_reach
                 "Reference 🧭 — duplicate long names at two hundred percent font size"
             };
             let pins = [17, 18].map(|id| PinEntry {
+                display_size: None,
                 id,
                 name,
                 texture: &texture,
@@ -1024,6 +1208,7 @@ fn lightweight_inner_list_reaches_the_sixtieth_pin_and_outer_settings() {
             );
             let pins = (1..=60)
                 .map(|id| PinEntry {
+                    display_size: None,
                     id,
                     name: "",
                     texture: &texture,
@@ -1174,6 +1359,7 @@ fn lightweight_rows_grow_for_large_fonts_and_long_lists_stay_bounded() {
         );
         let pins = (0..60)
             .map(|id| PinEntry {
+                display_size: None,
                 id,
                 name: "Reference 🧭",
                 texture: &texture,
@@ -1182,7 +1368,7 @@ fn lightweight_rows_grow_for_large_fonts_and_long_lists_stay_bounded() {
                 selected: false,
             })
             .collect::<Vec<_>>();
-        let size = egui::vec2(LAUNCHER.window[0], 700.0);
+        let size = egui::vec2(LAUNCHER.window[0], 1000.0);
         let frame = |events, pins: &[PinEntry<'_>]| {
             frame_with_pins(&ctx, size, events, false, Locale::English, pins)
         };
@@ -1192,7 +1378,6 @@ fn lightweight_rows_grow_for_large_fonts_and_long_lists_stay_bounded() {
         let many = frame(vec![], &pins).0;
         let theme_one = visible_text(&one, "Theme");
         let theme_many = visible_text(&many, "Theme");
-        assert!(theme_many.min.y - theme_one.min.y <= LAUNCHER.pin_list_height);
         let well = one
             .shapes
             .iter()
@@ -1217,6 +1402,7 @@ fn lightweight_rows_grow_for_large_fonts_and_long_lists_stay_bounded() {
                 _ => None,
             })
             .expect("row boundary");
+        assert!(theme_many.min.y - theme_one.min.y <= row_height * LAUNCHER.pin_list_visible_rows);
         if large {
             assert!(row_height > LAUNCHER.pin_row_min_height);
         } else {
@@ -1258,6 +1444,7 @@ fn pin_rows_center_different_aspect_ratios_in_one_thumbnail_column() {
     });
     let names = ["Wide", "Tall", "Square"];
     let pins = std::array::from_fn::<_, 3, _>(|index| PinEntry {
+        display_size: None,
         id: index as u64,
         name: names[index],
         texture: &textures[index],
@@ -1346,6 +1533,7 @@ fn pin_row_background_thumbnail_and_name_select_without_entering_edit_mode() {
                     Default::default(),
                 );
                 let pins = [PinEntry {
+                    display_size: None,
                     id: 41,
                     name: "Name",
                     texture: &texture,
@@ -1449,6 +1637,7 @@ fn duplicate_pin_names_double_click_and_edit_by_identity() {
     );
     let frame = |events, names: &[String; 2]| {
         let pins = std::array::from_fn::<_, 2, _>(|index| PinEntry {
+            display_size: None,
             id: 17 + index as u64,
             name: &names[index],
             texture: &texture,
@@ -1569,6 +1758,7 @@ fn pin_names_double_click_to_edit_and_keep_spaces_and_unicode() {
                     false,
                     locale,
                     &[PinEntry {
+                        display_size: None,
                         id: 17,
                         name,
                         texture: &texture,
@@ -1658,6 +1848,7 @@ fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
         egui::TextureOptions::default(),
     );
     let pins = [17, 18].map(|id| PinEntry {
+        display_size: None,
         id,
         name: "",
         texture: &texture,

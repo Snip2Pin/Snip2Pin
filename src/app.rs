@@ -36,6 +36,10 @@ fn pin_id(id: u64) -> ViewportId {
     ViewportId::from_hash_of(("pin", id))
 }
 
+fn pin_hint_state_id(id: u64) -> egui::Id {
+    egui::Id::new(("pin-small-hint", id))
+}
+
 fn pin_menu_id() -> ViewportId {
     ViewportId::from_hash_of("pin-menu")
 }
@@ -836,6 +840,7 @@ impl Snip2Pin {
         }
         if let Some(pin) = self.pins.remove(&id) {
             launcher::forget_pin_name(ctx, id);
+            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
             }
@@ -964,6 +969,7 @@ impl Snip2Pin {
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
             launcher::forget_pin_name(ctx, id);
+            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
             }
@@ -1454,6 +1460,16 @@ impl Snip2Pin {
                         egui::StrokeKind::Inside,
                     );
                 }
+                let small = launcher::pin_is_small(ui.max_rect().size());
+                let changed = ctx.data_mut(|data| {
+                    let key = pin_hint_state_id(id);
+                    let previous = data.get_temp::<bool>(key);
+                    data.insert_temp(key, small);
+                    previous != Some(small)
+                });
+                if changed {
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                }
                 if ui.input(|input| {
                     input
                         .events
@@ -1623,6 +1639,14 @@ impl eframe::App for Snip2Pin {
                 name: &pin.name,
                 texture: &pin.texture,
                 size: pin.pixels.size,
+                display_size: ctx.input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&pin_id(id))?
+                        .inner_rect
+                        .map(|rect| rect.size())
+                }),
                 locked: pin.locked,
                 selected: pin_focused(&ctx, id),
             })

@@ -19,7 +19,7 @@ pub struct LauncherStyle {
     pub row_height: f32,
     pub footer_margin: i8,
     pub pin_thumbnail: [f32; 2],
-    pub pin_list_height: f32,
+    pub pin_list_visible_rows: f32,
     pub pin_row_min_height: f32,
     pub pin_row_padding: [f32; 2],
     pub pin_column_gap: f32,
@@ -28,7 +28,7 @@ pub struct LauncherStyle {
 }
 
 pub const LAUNCHER: LauncherStyle = LauncherStyle {
-    window: [390.0, 480.0],
+    window: [390.0, 640.0],
     margin: 24,
     compact_margin: 12,
     brand: 16.0,
@@ -45,7 +45,7 @@ pub const LAUNCHER: LauncherStyle = LauncherStyle {
     row_height: 40.0,
     footer_margin: 12,
     pin_thumbnail: [48.0, 40.0],
-    pin_list_height: 144.0,
+    pin_list_visible_rows: 3.5,
     pin_row_min_height: 64.0,
     pin_row_padding: [12.0, 12.0],
     pin_column_gap: 8.0,

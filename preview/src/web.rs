@@ -317,6 +317,7 @@ impl eframe::App for Sandbox {
                 name: &pin.name,
                 texture: &pin.texture,
                 size: pin.texture.size(),
+                display_size: Some(pin.image.size()),
                 locked: pin.locked,
                 selected: self.focused_pin == Some(pin.id),
             })
@@ -325,7 +326,8 @@ impl eframe::App for Sandbox {
             .id(egui::Id::new("home"))
             .title_bar(false)
             .fixed_pos(egui::pos2(24.0, 24.0))
-            .fixed_size(snip2pin::ui::style::LAUNCHER.window)
+            .default_size(snip2pin::ui::style::LAUNCHER.window)
+            .resizable(true)
             .show(ui.ctx(), |ui| {
                 action = launcher::show(
                     ui,

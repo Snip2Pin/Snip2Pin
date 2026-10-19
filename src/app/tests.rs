@@ -2241,6 +2241,110 @@ fn pin_dpi_and_ui_zoom_never_impose_an_application_minimum_size() {
     }
 }
 
+#[test]
+fn home_zoom_hint_uses_current_native_content_size_instead_of_source_or_initial_size() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.pins[&1].ready.store(true, Ordering::Release);
+    for (display_size, focused, locked, expected) in [
+        (None, true, false, false),
+        (Some(egui::vec2(320.0, 240.0)), true, false, false),
+        (Some(egui::vec2(1.0, 240.0)), true, false, true),
+        (Some(egui::vec2(240.0, 1.0)), true, false, true),
+        (
+            Some(egui::Vec2::splat(pin::METRICS.button)),
+            true,
+            false,
+            false,
+        ),
+        (Some(egui::Vec2::splat(1.0)), false, false, false),
+        (Some(egui::Vec2::splat(1.0)), true, true, false),
+    ] {
+        app.pins.get_mut(&1).expect("pin").locked = locked;
+        for _ in 0..2 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(390.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                pin_id(1),
+                egui::ViewportInfo {
+                    inner_rect: display_size
+                        .map(|size| egui::Rect::from_min_size(egui::pos2(100.0, 100.0), size)),
+                    focused: Some(focused),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                app.show_pins(ui.ctx());
+                eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+            });
+            output.textures_delta.clear();
+            assert_eq!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Locale::Chinese.text(Text::PinZoomHint))), expected);
+        }
+    }
+}
+
+#[test]
+fn pin_size_classification_wakes_home_only_on_changes_and_is_released_on_close() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.pins[&1].ready.store(true, Ordering::Release);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let paint = setup.viewport_output[&pin_id(1)]
+        .viewport_ui_cb
+        .as_ref()
+        .expect("pin callback")
+        .clone();
+    let wakes = Arc::new(AtomicBool::new(false));
+    let observed_wakes = wakes.clone();
+    ctx.set_request_repaint_callback(move |request| {
+        if request.viewport_id == ViewportId::ROOT {
+            observed_wakes.store(true, Ordering::Relaxed);
+        }
+    });
+    for (size, small, changed) in [
+        (egui::vec2(100.0, 100.0), false, true),
+        (egui::vec2(120.0, 100.0), false, false),
+        (egui::vec2(1.0, 100.0), true, true),
+        (egui::vec2(2.0, 100.0), true, false),
+        (egui::vec2(100.0, 100.0), false, true),
+    ] {
+        // Consume previously queued root paints before observing this child frame.
+        for _ in 0..3 {
+            let mut drained = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+            drained.textures_delta.clear();
+        }
+        wakes.store(false, Ordering::Relaxed);
+        let mut input = egui::RawInput {
+            viewport_id: pin_id(1),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(pin_id(1), egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| paint(ui));
+        output.textures_delta.clear();
+        assert_eq!(wakes.load(Ordering::Relaxed), changed);
+        assert_eq!(
+            ctx.data_mut(|data| data.get_temp::<bool>(pin_hint_state_id(1))),
+            Some(small)
+        );
+    }
+    app.close_pin(1, &ctx);
+    assert!(
+        ctx.data_mut(|data| data.get_temp::<bool>(pin_hint_state_id(1)))
+            .is_none()
+    );
+}
+
 fn home_frame(
     app: &mut Snip2Pin,
     ctx: &egui::Context,

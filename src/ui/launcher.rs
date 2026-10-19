@@ -23,6 +23,8 @@ pub struct PinEntry<'a> {
     pub name: &'a str,
     pub texture: &'a egui::TextureHandle,
     pub size: [usize; 2],
+    /// Observed native content size converted to egui points; never source pixels.
+    pub display_size: Option<egui::Vec2>,
     pub locked: bool,
     pub selected: bool,
 }
@@ -40,6 +42,10 @@ pub struct Model<'a> {
     pub demo: bool,
     pub startup: Option<bool>,
     pub permission_required: bool,
+}
+
+pub fn pin_is_small(size: egui::Vec2) -> bool {
+    size.is_finite() && size.min_elem() > 0.0 && size.min_elem() < snip2pin::pin::METRICS.button
 }
 
 pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
@@ -130,39 +136,41 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                         .id_salt("pin-list")
                         .default_open(true)
                         .show_unindented(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("pin-list-scroll")
-                                .max_height(LAUNCHER.pin_list_height)
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    let names = model
-                                        .pins
-                                        .iter()
-                                        .map(|pin| {
-                                            if pin.name.is_empty() {
-                                                Text::PinLabel.with(pin.id).render(locale)
-                                            } else {
-                                                pin.name.to_owned()
-                                            }
+                            let row_height = pin_row_height(ui);
+                            let default_height = row_height * LAUNCHER.pin_list_visible_rows;
+                            let selected =
+                                if model.pins.len() as f32 <= LAUNCHER.pin_list_visible_rows {
+                                    pin_list_rows(ui, model.pins, locale, default_height)
+                                } else {
+                                    let handle = ui.visuals().resize_corner_size;
+                                    let min_height = row_height + handle;
+                                    let max_height = (ui.ctx().content_rect().height()
+                                        - f32::from(LAUNCHER.margin) * 2.0)
+                                        .max(min_height)
+                                        .min(model.pins.len() as f32 * row_height + handle);
+                                    let width = ui.available_width();
+                                    egui::Resize::default()
+                                        .id(egui::Id::new("pin-list-resize"))
+                                        .resizable([false, true])
+                                        .with_stroke(false)
+                                        .default_size(egui::vec2(width, default_height + handle))
+                                        .min_size(egui::vec2(width, min_height))
+                                        .max_size(egui::vec2(width, max_height))
+                                        .show(ui, |ui| {
+                                            ui.spacing_mut().item_spacing.y = 0.0;
+                                            let selected = pin_list_rows(
+                                                ui,
+                                                model.pins,
+                                                locale,
+                                                (ui.available_height() - handle).max(row_height),
+                                            );
+                                            ui.add_space(handle);
+                                            selected
                                         })
-                                        .collect::<Vec<_>>();
-                                    for (pin, name) in model.pins.iter().zip(&names) {
-                                        let duplicate = names
-                                            .iter()
-                                            .filter(|other| *other == name)
-                                            .take(2)
-                                            .count()
-                                            > 1;
-                                        if let Some(selected) = ui
-                                            .push_id(("pin-row", pin.id), |ui| {
-                                                pin_row(ui, pin, locale, name, duplicate)
-                                            })
-                                            .inner
-                                        {
-                                            action = Some(selected);
-                                        }
-                                    }
-                                });
+                                };
+                            if selected.is_some() {
+                                action = selected;
+                            }
                             if ui
                                 .add_enabled(
                                     model.pins.iter().any(|pin| !pin.locked),
@@ -172,7 +180,11 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                             {
                                 action = Some(Action::ClosePins);
                             }
-                            if model.pins.iter().any(|pin| pin.selected && !pin.locked) {
+                            if model.pins.iter().any(|pin| {
+                                pin.selected
+                                    && !pin.locked
+                                    && pin.display_size.is_some_and(pin_is_small)
+                            }) {
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(text(Text::PinZoomHint))
@@ -281,6 +293,57 @@ fn pin_name_id(id: u64) -> egui::Id {
     egui::Id::new(("pin-name", id))
 }
 
+fn pin_list_rows(
+    ui: &mut egui::Ui,
+    pins: &[PinEntry<'_>],
+    locale: Locale,
+    height: f32,
+) -> Option<Action> {
+    let mut action = None;
+    egui::ScrollArea::vertical()
+        .id_salt("pin-list-scroll")
+        .max_height(height)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let names = pins
+                .iter()
+                .map(|pin| {
+                    if pin.name.is_empty() {
+                        Text::PinLabel.with(pin.id).render(locale)
+                    } else {
+                        pin.name.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>();
+            for (pin, name) in pins.iter().zip(&names) {
+                let duplicate = names.iter().filter(|other| *other == name).take(2).count() > 1;
+                if let Some(selected) = ui
+                    .push_id(("pin-row", pin.id), |ui| {
+                        pin_row(ui, pin, locale, name, duplicate)
+                    })
+                    .inner
+                {
+                    action = Some(selected);
+                }
+            }
+        });
+    action
+}
+
+fn pin_text_height(ui: &egui::Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().button_padding.y * 2.0)
+        .max(ui.spacing().interact_size.y)
+}
+
+fn pin_row_height(ui: &egui::Ui) -> f32 {
+    let text_height = pin_text_height(ui)
+        + LAUNCHER.pin_metadata_gap
+        + ui.text_style_height(&egui::TextStyle::Small);
+    LAUNCHER
+        .pin_row_min_height
+        .max(LAUNCHER.pin_thumbnail[1].max(text_height) + LAUNCHER.pin_row_padding[1] * 2.0)
+}
+
 /// Release the closed pin's editor, including its in-memory undo history.
 pub fn forget_pin_name(ctx: &egui::Context, id: u64) {
     let editor = pin_name_id(id);
@@ -296,14 +359,10 @@ fn pin_row(
     duplicate: bool,
 ) -> Option<Action> {
     let mut action = None;
-    let text_height = (ui.text_style_height(&egui::TextStyle::Body)
-        + ui.spacing().button_padding.y * 2.0)
-        .max(ui.spacing().interact_size.y);
+    let text_height = pin_text_height(ui);
     let metadata_height = ui.text_style_height(&egui::TextStyle::Small);
     let text_block_height = text_height + LAUNCHER.pin_metadata_gap + metadata_height;
-    let height = LAUNCHER
-        .pin_row_min_height
-        .max(LAUNCHER.pin_thumbnail[1].max(text_block_height) + LAUNCHER.pin_row_padding[1] * 2.0);
+    let height = pin_row_height(ui);
     let (row, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
