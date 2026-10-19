@@ -16,6 +16,7 @@ fn app() -> Snip2Pin {
         active_display: None,
         pins: BTreeMap::new(),
         pin_menu: None,
+        unlock_hint: None,
         quit_confirmation: None,
         next_quit_request: 0,
         #[cfg(target_os = "macos")]
@@ -1980,6 +1981,112 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
     let mut selected = ctx.run_ui(egui::RawInput::default(), |_| {});
     selected.textures_delta.clear();
     app
+}
+
+#[test]
+fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.layers.clear();
+    for display in [
+        Display {
+            id: 1,
+            origin: [-1600.0, 0.0],
+            size: [1600.0, 900.0],
+            scale: 2.0,
+        },
+        Display {
+            id: 2,
+            origin: [0.0, -200.0],
+            size: [2560.0, 1440.0],
+            scale: 1.25,
+        },
+    ] {
+        app.layers.insert(
+            display.id,
+            Layer {
+                display,
+                selection: None,
+                positioned: Arc::new(AtomicBool::new(true)),
+            },
+        );
+    }
+    app.toggle_pin_lock(1, &ctx);
+    let original = app.pins[&1].pixels.clone();
+    let initial = app.pins[&1].initial;
+    for (point, target) in [
+        (Some([-600.0, 100.0]), Some(1)),
+        (Some([900.0, 600.0]), Some(2)),
+        (None, None),
+    ] {
+        app.show_unlock_hint(1, point, &ctx);
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        setup.textures_delta.clear();
+        for (&id, layer) in &app.layers {
+            let viewport = &setup.viewport_output[&layer_id(id)];
+            assert_eq!(viewport.builder.mouse_passthrough, Some(true));
+            assert_eq!(viewport.builder.active, Some(false));
+            let paint = viewport
+                .viewport_ui_cb
+                .as_ref()
+                .expect("existing screen layer");
+            let size = egui::Vec2::from(layer.display.logical_size());
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut input = egui::RawInput {
+                viewport_id: layer_id(id),
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                layer_id(id),
+                egui::ViewportInfo {
+                    native_pixels_per_point: Some(layer.display.scale),
+                    inner_rect: Some(bounds),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| paint(ui));
+            output.textures_delta.clear();
+            let text = ui::screen_hint::unlock_text(&ctx);
+            let shape = output.shapes.iter().find(|shape| matches!(&shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text));
+            assert_eq!(shape.is_some(), target.is_none_or(|target| target == id));
+            if let Some(shape) = shape {
+                assert!(
+                    shape
+                        .clip_rect
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+            }
+            assert!(output.platform_output.commands.is_empty());
+            assert!(
+                output
+                    .viewport_output
+                    .values()
+                    .flat_map(|viewport| &viewport.commands)
+                    .all(|command| !matches!(
+                        command,
+                        ViewportCommand::Focus | ViewportCommand::MousePassthrough(false)
+                    ))
+            );
+        }
+    }
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+    assert_eq!(initial, app.pins[&1].initial);
+    assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
+    app.unlock_pins(&ctx);
+    assert!(app.unlock_hint.is_none());
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, Some([900.0, 600.0]), &ctx);
+    app.unlock_hint.as_mut().expect("active reminder").until = Instant::now();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
+    });
+    assert!(
+        app.unlock_hint.is_none(),
+        "scheduled repaint expires the notice without polling"
+    );
 }
 
 fn add_second_test_pin(app: &mut Snip2Pin) {

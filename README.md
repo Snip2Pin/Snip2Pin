@@ -25,7 +25,7 @@ keep it above other windows, drag to move, and double-click to close.
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
 
-解锁全部贴图：macOS **⌘⌥⇧L**，Windows / Linux X11 **Ctrl+Alt+Shift+L**，也可使用菜单中的「解锁全部贴图」。此操作保留图片和位置；锁定图片上按下鼠标时会提示组合键。Wayland 仅支持窗口内快捷键。
+解锁全部贴图：macOS **⌘⌥⇧L**，Windows / Linux X11 **Ctrl+Alt+Shift+L**，也可使用菜单中的「解锁全部贴图」。此操作保留图片和位置；尝试拖动锁定图片时，屏幕中上方会短暂提示组合键。Wayland 仅支持窗口内快捷键。
 
 界面默认按系统首选语言选择中英文，无匹配时使用英文；可在「语言」中手动选择。主题默认跟随系统，图标默认跟随主题；设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
 
@@ -59,7 +59,7 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **Change shortcut** to change it.
 
-Unlock all pins with **Command+Option+Shift+L** on macOS or **Ctrl+Alt+Shift+L** on Windows / Linux X11, or use **Unlock all pins** in the menu. Images and positions are preserved. Pressing a locked image shows the shortcut. On Wayland, shortcuts work within the app only.
+Unlock all pins with **Command+Option+Shift+L** on macOS or **Ctrl+Alt+Shift+L** on Windows / Linux X11, or use **Unlock all pins** in the menu. Images and positions are preserved. Trying to drag a locked image briefly shows the shortcut near the top center of the screen. On Wayland, shortcuts work within the app only.
 
 The interface follows your system's preferred languages (Chinese or English),
 falling back to English. Override it under **Language**. Theme follows the system

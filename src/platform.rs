@@ -253,6 +253,14 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
     Ok(())
 }
 
+/// Raise this process's existing transparent layers without focus or geometry changes.
+pub fn raise_screen_hint() -> Result<(), Message> {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pin_window::raise_selection()?;
+    // macOS selection layers already have a higher native level than pins.
+    Ok(())
+}
+
 pub fn finish_capture(ctx: &egui::Context) {
     #[cfg(target_os = "macos")]
     {

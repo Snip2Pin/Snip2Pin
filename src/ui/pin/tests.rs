@@ -42,6 +42,51 @@ fn pointer(point: Pos2, pressed: bool) -> Event {
     }
 }
 
+#[test]
+fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
+    let ctx = egui::Context::default();
+    let texture = texture(&ctx);
+    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(160.0, 80.0));
+    let actions = RefCell::new(Vec::new());
+    for frame in 0..3 {
+        let point = bounds.center();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(bounds),
+                events: if frame == 1 {
+                    vec![Event::PointerMoved(point), pointer(point, true)]
+                } else {
+                    vec![Event::PointerMoved(point)]
+                },
+                time: Some(frame as f64),
+                ..Default::default()
+            },
+            |ui| {
+                image_with_host(
+                    ui,
+                    7,
+                    &texture,
+                    Interaction {
+                        locked: true,
+                        ..Default::default()
+                    },
+                    &|action| actions.borrow_mut().push(action),
+                    |_| {},
+                );
+            },
+        );
+        output.textures_delta.clear();
+        assert!(
+            output
+                .shapes
+                .iter()
+                .all(|shape| !matches!(&shape.shape, egui::Shape::Text(_))),
+            "a screen-level recovery hint must not be clipped inside a tiny image window"
+        );
+    }
+    assert_eq!(*actions.borrow(), [Action::UnlockHint(7)]);
+}
+
 fn texture(ctx: &egui::Context) -> TextureHandle {
     ctx.load_texture(
         "generated-pin",
@@ -1690,6 +1735,8 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                     actions.into_inner(),
                     if index == 7 {
                         vec![Action::MenuPin(7)]
+                    } else if index == 1 || index == 3 {
+                        vec![Action::UnlockHint(7)]
                     } else {
                         vec![]
                     }

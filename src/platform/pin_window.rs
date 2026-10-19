@@ -40,8 +40,16 @@ pub fn activate(id: u64) -> Result<(), Message> {
 }
 
 #[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
 pub(super) fn find(id: u64) -> Result<windows_sys::Win32::Foundation::HWND, Message> {
+    windows_named(&title(id))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Text::PinNotFound.into())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn windows_named(title: &str) -> Result<Vec<windows_sys::Win32::Foundation::HWND>, Message> {
     use windows_sys::{
         Win32::{
             Foundation::{HWND, LPARAM},
@@ -54,7 +62,7 @@ pub(super) fn find(id: u64) -> Result<windows_sys::Win32::Foundation::HWND, Mess
 
     struct Search {
         title: Vec<u16>,
-        window: HWND,
+        windows: Vec<HWND>,
     }
 
     unsafe extern "system" fn visit(window: HWND, data: LPARAM) -> BOOL {
@@ -75,24 +83,46 @@ pub(super) fn find(id: u64) -> Result<windows_sys::Win32::Foundation::HWND, Mess
         // SAFETY: title includes space for the terminator and lives for this call.
         let written = unsafe { GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32) };
         if written as usize == search.title.len() && title[..written as usize] == search.title {
-            search.window = window;
-            return 0;
+            search.windows.push(window);
         }
         1
     }
 
     let mut search = Search {
-        title: title(id).encode_utf16().collect(),
-        window: std::ptr::null_mut(),
+        title: title.encode_utf16().collect(),
+        windows: Vec::new(),
     };
     // SAFETY: Search stays at a stable address during synchronous enumeration.
-    // Only a handle owned by this process is returned, for immediate UI-thread use.
+    // Only this process's handles are returned, for immediate UI-thread use.
     unsafe { EnumWindows(Some(visit), (&mut search as *mut Search) as LPARAM) };
-    if search.window.is_null() {
-        Err(Text::PinNotFound.into())
-    } else {
-        Ok(search.window)
+    Ok(search.windows)
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub(super) fn raise_selection() -> Result<(), Message> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SetWindowPos,
+    };
+    for window in windows_named(snip2pin::SELECTION_WINDOW_TITLE)? {
+        // SAFETY: Only this process's live selection windows are returned, used
+        // synchronously on their UI thread. Preserve geometry and focus.
+        if unsafe {
+            SetWindowPos(
+                window,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string().into());
+        }
     }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -171,18 +201,11 @@ pub fn activate(id: u64) -> Result<(), Message> {
             .map_err(|error| error.to_string())?
             .atom)
     };
-    let clients = atom(b"_NET_CLIENT_LIST")?;
     let pid = atom(b"_NET_WM_PID")?;
-    let name = atom(b"_NET_WM_NAME")?;
-    let utf8 = atom(b"UTF8_STRING")?;
-    if [clients, pid, name, utf8].contains(&0) {
+    if pid == 0 {
         return Err(Text::PinNotFound.into());
     }
-    let windows = connection
-        .get_property(false, root, clients, AtomEnum::WINDOW, 0, u32::MAX)
-        .map_err(|error| error.to_string())?
-        .reply()
-        .map_err(|error| error.to_string())?;
+    let windows = named_x11_windows(&connection, root, &title(id))?;
     let property_value = |window, property, property_type| {
         connection
             .get_property(false, window, property, property_type, 0, 1)
@@ -212,24 +235,7 @@ pub fn activate(id: u64) -> Result<(), Message> {
     let sibling = property_value(root, active, AtomEnum::WINDOW).filter(|window| {
         property_value(*window, pid, AtomEnum::CARDINAL) == Some(std::process::id())
     });
-    let title = title(id);
-    for window in windows.value32().into_iter().flatten() {
-        // A client may disappear during enumeration. Skip stale entries and
-        // match both process and fixed identity, never a user-editable pin name.
-        let process = property_value(window, pid, AtomEnum::CARDINAL);
-        if process != Some(std::process::id()) {
-            continue;
-        }
-        let named = connection
-            .get_property(false, window, name, utf8, 0, title.len().div_ceil(4) as u32)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some_and(|reply| {
-                reply.format == 8 && reply.bytes_after == 0 && reply.value == title.as_bytes()
-            });
-        if !named {
-            continue;
-        }
+    for window in windows {
         let sibling = sibling.filter(|sibling| *sibling != window);
         let restack = atom(b"_NET_RESTACK_WINDOW")?;
         if sibling.is_some() && !supports(restack) {
@@ -277,4 +283,82 @@ pub fn activate(id: u64) -> Result<(), Message> {
         return Ok(());
     }
     Err(Text::PinNotFound.into())
+}
+
+#[cfg(target_os = "linux")]
+fn named_x11_windows(
+    connection: &impl x11rb::connection::Connection,
+    root: u32,
+    title: &str,
+) -> Result<Vec<u32>, Message> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+    let atom = |name: &[u8]| -> Result<u32, Message> {
+        Ok(connection
+            .intern_atom(true, name)
+            .map_err(|error| error.to_string())?
+            .reply()
+            .map_err(|error| error.to_string())?
+            .atom)
+    };
+    let clients = atom(b"_NET_CLIENT_LIST")?;
+    let pid = atom(b"_NET_WM_PID")?;
+    let name = atom(b"_NET_WM_NAME")?;
+    let utf8 = atom(b"UTF8_STRING")?;
+    if [clients, pid, name, utf8].contains(&0) {
+        return Err(Text::PinNotFound.into());
+    }
+    let clients = connection
+        .get_property(false, root, clients, AtomEnum::WINDOW, 0, u32::MAX)
+        .map_err(|error| error.to_string())?
+        .reply()
+        .map_err(|error| error.to_string())?;
+    let mut windows = Vec::new();
+    for window in clients.value32().into_iter().flatten() {
+        let own = connection
+            .get_property(false, window, pid, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| {
+                reply.value32().and_then(|mut values| values.next()) == Some(std::process::id())
+            });
+        if !own {
+            continue;
+        }
+        let named = connection
+            .get_property(false, window, name, utf8, 0, title.len().div_ceil(4) as u32)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| {
+                reply.format == 8 && reply.bytes_after == 0 && reply.value == title.as_bytes()
+            });
+        if named {
+            windows.push(window);
+        }
+    }
+    Ok(windows)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn raise_selection() -> Result<(), Message> {
+    use x11rb::{
+        connection::Connection,
+        protocol::xproto::{ConfigureWindowAux, ConnectionExt, StackMode},
+    };
+    if std::env::var_os("DISPLAY").is_none() {
+        return Ok(());
+    }
+    let (connection, screen) = x11rb::connect(None).map_err(|error| error.to_string())?;
+    let root = connection.setup().roots[screen].root;
+    for window in named_x11_windows(&connection, root, snip2pin::SELECTION_WINDOW_TITLE)? {
+        connection
+            .configure_window(
+                window,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )
+            .map_err(|error| error.to_string())?
+            .check()
+            .map_err(|error| error.to_string())?;
+    }
+    connection.flush().map_err(|error| error.to_string())?;
+    Ok(())
 }

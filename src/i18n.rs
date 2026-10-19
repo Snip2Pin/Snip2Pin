@@ -127,6 +127,7 @@ catalogue! {
     ClosePins => ("Close unlocked pins", "关闭未锁定贴图"),
     UnlockPins => ("Unlock all pins", "解锁全部贴图"),
     UnlockHint => ("Locked · {value} to unlock all", "已锁定 · {value} 解锁全部贴图"),
+    ScreenHintError => ("Could not raise the unlock hint: {value}", "无法显示解锁提醒：{value}"),
     ReservedUnlockShortcut => ("This combination is reserved for unlocking all pins.", "此组合键用于解锁全部贴图，请选择其他截图快捷键。"),
     UnlockShortcutError => ("Could not register the unlock shortcut: {value}", "无法注册全局解锁快捷键：{value}"),
     PinZoomHint => ("Pin too small? Press + to enlarge.", "贴图太小？按 + 放大"),
