@@ -14,6 +14,21 @@ pub mod pin_menu;
 #[path = "platform/pin_window.rs"]
 pub mod pin_window;
 
+/// Lay out controls using the native window's presentation constraints.
+pub fn pin_toolbar(
+    _id: u64,
+    image: egui::Rect,
+    screens: &[egui::Rect],
+    fallback: egui::Rect,
+    ratio: f32,
+) -> Option<snip2pin::pin::Toolbar> {
+    #[cfg(target_os = "macos")]
+    if let Some(area) = macos::pin_presentation_area(_id) {
+        return snip2pin::pin::toolbar_geometry(image, &[], area, ratio);
+    }
+    snip2pin::pin::toolbar_geometry(image, screens, fallback, ratio)
+}
+
 #[path = "platform/pin_zoom.rs"]
 pub mod pin_zoom;
 
@@ -166,14 +181,7 @@ pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
                     (desktop_top - frame.origin.y - frame.size.height) as f32,
                 );
                 if origin.distance(bounds.min) < DISPLAY_ORIGIN_TOLERANCE {
-                    let visible = screen.visibleFrame();
-                    return egui::Rect::from_min_size(
-                        egui::pos2(
-                            visible.origin.x as f32,
-                            (desktop_top - visible.origin.y - visible.size.height) as f32,
-                        ),
-                        egui::vec2(visible.size.width as f32, visible.size.height as f32),
-                    );
+                    return macos::work_area(&screen).unwrap_or(bounds);
                 }
             }
         }

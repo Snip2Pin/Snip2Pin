@@ -114,6 +114,100 @@ fn main() {
                     let original = native.frame();
                     let mut frames = vec![original];
                     let screens = objc2_app_kit::NSScreen::screens(thread);
+                    if objc2_app_kit::NSScreen::screensHaveSeparateSpaces(thread) {
+                        let primary = screens.firstObject().expect("primary screen");
+                        let desktop_top = primary.frame().origin.y + primary.frame().size.height;
+                        let usable = |screen: &objc2_app_kit::NSScreen| {
+                            let area = screen.visibleFrame();
+                            egui::Rect::from_min_size(
+                                egui::pos2(
+                                    area.origin.x as f32,
+                                    (desktop_top - area.origin.y - area.size.height) as f32,
+                                ),
+                                egui::vec2(area.size.width as f32, area.size.height as f32),
+                            )
+                        };
+                        let areas = screens
+                            .iter()
+                            .map(|screen| usable(&screen))
+                            .collect::<Vec<_>>();
+                        for a in screens.iter() {
+                            for b in screens.iter() {
+                                let left = a.frame();
+                                let right = b.frame();
+                                if left.origin.x + left.size.width != right.origin.x {
+                                    continue;
+                                }
+                                let low = a.visibleFrame().origin.y.max(b.visibleFrame().origin.y);
+                                let high = (a.visibleFrame().origin.y
+                                    + a.visibleFrame().size.height)
+                                    .min(b.visibleFrame().origin.y + b.visibleFrame().size.height);
+                                if high - low < initial_height {
+                                    continue;
+                                }
+                                for offset in [0.6, 0.4] {
+                                    native.setFrame_display(
+                                        objc2_foundation::NSRect::new(
+                                            objc2_foundation::NSPoint::new(
+                                                right.origin.x - initial_width * offset,
+                                                (low + high - initial_height) / 2.0,
+                                            ),
+                                            initial.size,
+                                        ),
+                                        false,
+                                    );
+                                    let before = native.frame();
+                                    let owner =
+                                        usable(&native.screen().expect("native presenting screen"));
+                                    let image = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            before.origin.x as f32,
+                                            (desktop_top - before.origin.y - before.size.height)
+                                                as f32,
+                                        ),
+                                        egui::vec2(
+                                            before.size.width as f32,
+                                            before.size.height as f32,
+                                        ),
+                                    );
+                                    for zoom in [1.0, 1.25, 2.0] {
+                                        let ratio = 1.0 / zoom;
+                                        let row = platform::pin_toolbar(
+                                            index as u64,
+                                            egui::Rect::from_min_max(
+                                                image.min * ratio,
+                                                image.max * ratio,
+                                            ),
+                                            &areas,
+                                            areas[0],
+                                            ratio,
+                                        )
+                                        .expect("visible controls on presenting screen");
+                                        assert_eq!(row.count, pin::Control::ALL.len());
+                                        assert!(
+                                            egui::Rect::from_min_max(
+                                                owner.min * ratio,
+                                                owner.max * ratio
+                                            )
+                                            .contains_rect(row.bounds),
+                                            "controls escaped the native presenting screen: image={image:?}, owner={owner:?}, row={row:?}"
+                                        );
+                                    }
+                                    assert_eq!(
+                                        native.frame(),
+                                        before,
+                                        "presentation query must not move the window"
+                                    );
+                                    assert!(
+                                        !native.isVisible()
+                                            && !native.isKeyWindow()
+                                            && !app.isActive()
+                                    );
+                                }
+                            }
+                        }
+                        native.setFrame_display(original, false);
+                    }
                     if let Some(first) = screens.iter().next() {
                         let a = first.frame();
                         for other in screens.iter().skip(1) {

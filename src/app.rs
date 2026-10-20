@@ -1580,6 +1580,7 @@ impl Snip2Pin {
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
             let locked = pin.locked;
+            let demo = self.demo;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
@@ -1619,8 +1620,12 @@ impl Snip2Pin {
                 );
                 // Native geometry is authoritative; painting never changes it.
                 let controls = if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
-                    pin::toolbar_geometry(image, &areas, screen, ratio)
-                        .map(|toolbar| toolbar.translate(-image.min.to_vec2()))
+                    (if demo {
+                        pin::toolbar_geometry(image, &areas, screen, ratio)
+                    } else {
+                        platform::pin_toolbar(id, image, &areas, screen, ratio)
+                    })
+                    .map(|toolbar| toolbar.translate(-image.min.to_vec2()))
                 } else {
                     // Wayland may not expose global positions. Keep controls
                     // inside the observed content instead of guessing one.
