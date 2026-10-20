@@ -382,6 +382,25 @@ fn keyboard_movement_rejects_invalid_scales_without_an_origin_guess() {
 }
 
 #[test]
+fn direct_gesture_units_do_not_change_with_display_density() {
+    use snip2pin::pin::Movement;
+    let delta = egui::vec2(1.25, -2.5);
+    for scale in [0.75, 1.0, 1.25, 2.0, 3.0] {
+        assert_eq!(Movement::Points(delta).delta(scale), Some(delta));
+    }
+    for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(Movement::Points(delta).delta(scale), None);
+    }
+    for delta in [
+        egui::Vec2::ZERO,
+        egui::Vec2::splat(f32::NAN),
+        egui::Vec2::splat(f32::INFINITY),
+    ] {
+        assert_eq!(Movement::Points(delta).delta(2.0), None);
+    }
+}
+
+#[test]
 fn restoring_legal_originals_preserves_one_to_one_pixels_and_aspect() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         for pixels in [[1, 1], [1, 120], [120, 1], [2, 2], [640, 480]] {

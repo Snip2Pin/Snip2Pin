@@ -66,7 +66,12 @@ fn dispatch_pin(
                 .flatten();
             Event::ZoomPin(id, commands, observed)
         }
-        ui::pin::Action::Move(id, steps) => {
+        ui::pin::Action::Move(id, _) | ui::pin::Action::Pan(id, _) => {
+            let movement = match action {
+                ui::pin::Action::Move(_, steps) => pin::Movement::Steps(steps),
+                ui::pin::Action::Pan(_, delta) => pin::Movement::Points(delta * ctx.zoom_factor()),
+                _ => unreachable!("matched movement action"),
+            };
             let observed = (ctx.viewport_id() == pin_id(id))
                 .then(|| {
                     ctx.input(|input| {
@@ -78,7 +83,7 @@ fn dispatch_pin(
                     .map(|(rect, scale)| (rect.min * ctx.zoom_factor(), scale))
                 })
                 .flatten();
-            Event::MovePin(id, steps, observed)
+            Event::MovePin(id, movement, observed)
         }
     };
     let _ = events.send(event);
@@ -98,7 +103,7 @@ pub enum Event {
     ClosePin(u64),
     ToggleLock(u64),
     ZoomPin(u64, Vec<pin::Zoom>, Option<(egui::Vec2, f32)>),
-    MovePin(u64, [i32; 2], Option<(egui::Pos2, f32)>),
+    MovePin(u64, pin::Movement, Option<(egui::Pos2, f32)>),
     MenuPin(u64, Option<egui::Pos2>),
     ClosePinMenu,
     Tray(crate::tray::Action),
@@ -1034,7 +1039,7 @@ impl Snip2Pin {
     fn move_pin(
         &self,
         id: u64,
-        steps: [i32; 2],
+        movement: pin::Movement,
         observed: Option<(egui::Pos2, f32)>,
         ctx: &egui::Context,
     ) {
@@ -1053,7 +1058,7 @@ impl Snip2Pin {
         });
         if let Some((position, scale)) = geometry
             && position.is_finite()
-            && let Some(delta) = pin::movement_delta(steps, scale)
+            && let Some(delta) = movement.delta(scale)
             && (position + delta).is_finite()
         {
             ctx.send_viewport_cmd_to(

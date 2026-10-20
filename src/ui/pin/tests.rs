@@ -3,6 +3,8 @@ use std::cell::RefCell;
 use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Vec2};
 
+mod gestures;
+
 fn image(
     ui: &mut egui::Ui,
     id: u64,
@@ -1006,6 +1008,10 @@ fn wheel_units_and_precision_are_independent_of_ui_zoom() {
                 output.textures_delta.clear();
                 assert_no_geometry(&output);
                 let actions = actions.into_inner();
+                if unit == egui::MouseWheelUnit::Point {
+                    assert_eq!(actions, [Action::Pan(7, egui::vec2(0.0, delta))]);
+                    continue;
+                }
                 let [Action::Zoom(7, commands)] = actions.as_slice() else {
                     panic!("expected one wheel adjustment: {actions:?}")
                 };
@@ -1127,6 +1133,10 @@ fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
         } else if blocked == "reset" {
             assert!(
                 matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(before), Zoom::Original, Zoom::Scale(after)] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
+            );
+        } else if blocked == "ctrl" {
+            assert!(
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(factor)] if *factor > 1.0))
             );
         } else {
             assert!(actions.is_empty(), "blocked={blocked}: {actions:?}");

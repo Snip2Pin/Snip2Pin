@@ -8,9 +8,10 @@ fn reserved(modifiers: Modifiers) -> bool {
     modifiers.ctrl || modifiers.command || modifiers.mac_cmd || modifiers.alt
 }
 
-fn flush_scroll(steps: &mut [f32; 2], zooms: &mut Vec<Zoom>) {
-    let factor = FINE_ZOOM_FACTOR.powf(steps[0]) * FAST_ZOOM_FACTOR.powf(steps[1]);
+fn flush_scroll(steps: &mut [f32; 2], pinch: &mut f32, zooms: &mut Vec<Zoom>) {
+    let factor = FINE_ZOOM_FACTOR.powf(steps[0]) * FAST_ZOOM_FACTOR.powf(steps[1]) * *pinch;
     *steps = [0.0; 2];
+    *pinch = 1.0;
     if factor.is_finite() && factor > 0.0 && factor != 1.0 {
         zooms.push(Zoom::Scale(factor));
     }
@@ -52,10 +53,19 @@ pub(super) fn adjust(
         .ctx()
         .options(|options| options.input_options.line_scroll_speed);
     let zoom = ui.ctx().zoom_factor();
-    let (zooms, movement) = ui.input(|input| {
+    let scroll_zoom_speed = ui
+        .ctx()
+        .options(|options| options.input_options.scroll_zoom_speed);
+    let (zooms, movement, pan) = ui.input(|input| {
         let mut zooms = Vec::new();
         let mut movement = [0_i32; 2];
         let mut scroll = [0.0; 2];
+        let mut pinch = 1.0;
+        let mut pan = egui::Vec2::ZERO;
+        let explicit_zoom = input
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Zoom(_)));
         for event in &input.events {
             match event {
                 Event::Key {
@@ -96,7 +106,7 @@ pub(super) fn adjust(
                         _ => None,
                     };
                     if let Some(command) = command {
-                        flush_scroll(&mut scroll, &mut zooms);
+                        flush_scroll(&mut scroll, &mut pinch, &mut zooms);
                         zooms.push(command);
                     }
                 }
@@ -106,16 +116,34 @@ pub(super) fn adjust(
                     modifiers,
                     phase,
                 } if wheel_target
-                    && !reserved(*modifiers)
+                    && (!reserved(*modifiers)
+                        || (modifiers.ctrl && !modifiers.alt && !modifiers.mac_cmd))
                     && *phase != egui::TouchPhase::Cancel =>
                 {
+                    if modifiers.ctrl {
+                        // Precision touchpads and browsers can synthesize pinch
+                        // as Ctrl+wheel. Prefer a native zoom event if supplied.
+                        if !explicit_zoom {
+                            let points = match unit {
+                                MouseWheelUnit::Line => *delta * points_per_line,
+                                MouseWheelUnit::Point => *delta * zoom,
+                                MouseWheelUnit::Page => *delta * bounds.size() * zoom,
+                            };
+                            let factor = ((points.x + points.y) * scroll_zoom_speed).exp();
+                            if factor.is_finite() && factor > 0.0 {
+                                pinch *= factor;
+                            }
+                        }
+                        continue;
+                    }
+                    if *unit == MouseWheelUnit::Point {
+                        if delta.is_finite() && !explicit_zoom {
+                            pan += *delta;
+                        }
+                        continue;
+                    }
                     let steps = match unit {
                         MouseWheelUnit::Line => delta.y,
-                        MouseWheelUnit::Point
-                            if points_per_line.is_finite() && points_per_line > 0.0 =>
-                        {
-                            delta.y * zoom / points_per_line
-                        }
                         MouseWheelUnit::Page
                             if points_per_line.is_finite() && points_per_line > 0.0 =>
                         {
@@ -127,11 +155,21 @@ pub(super) fn adjust(
                         scroll[usize::from(modifiers.shift)] += steps;
                     }
                 }
+                Event::Zoom(factor)
+                    if wheel_target
+                        && !input.modifiers.alt
+                        && !input.modifiers.mac_cmd
+                        && (!input.modifiers.command || input.modifiers.ctrl)
+                        && factor.is_finite()
+                        && *factor > 0.0 =>
+                {
+                    pinch *= factor;
+                }
                 _ => {}
             }
         }
-        flush_scroll(&mut scroll, &mut zooms);
-        (zooms, movement)
+        flush_scroll(&mut scroll, &mut pinch, &mut zooms);
+        (zooms, movement, pan)
     });
     if !zooms.is_empty() {
         emit(Action::Zoom(id, zooms));
@@ -139,6 +177,10 @@ pub(super) fn adjust(
     }
     if movement != [0, 0] {
         emit(Action::Move(id, movement));
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
+    if pan.is_finite() && pan != egui::Vec2::ZERO {
+        emit(Action::Pan(id, pan));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
 }

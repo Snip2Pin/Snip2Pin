@@ -192,6 +192,13 @@ impl Sandbox {
                     pin.image = pin.image.translate(delta / ui.ctx().zoom_factor());
                 }
             }
+            pin_view::Action::Pan(id, delta) => {
+                if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
+                    && delta.is_finite()
+                {
+                    pin.image = pin.image.translate(delta);
+                }
+            }
             pin_view::Action::Zoom(id, commands) => {
                 if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
                     && let Some(size) = commands.iter().try_fold(
