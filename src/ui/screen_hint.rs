@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::style::OVERLAY;
 use eframe::egui::{self, Color32, Pos2, Rect};
 
-pub const UNLOCK_DURATION: Duration = Duration::from_secs(3);
+pub const UNLOCK_DURATION: Duration = Duration::from_secs(1);
 
 pub fn unlock_text(ctx: &egui::Context) -> String {
     crate::i18n::Text::UnlockHint
@@ -21,20 +21,19 @@ pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) {
         ))
         .with_clip_rect(bounds);
     let padding = egui::Vec2::from(OVERLAY.hint_padding);
-    let width = OVERLAY.hint_size[0].min(bounds.width());
     let galley = painter.layout(
         text.into(),
         egui::FontId::proportional(OVERLAY.hint_font),
         Color32::WHITE,
-        (width - padding.x * 2.0).max(1.0),
+        (bounds.width() - padding.x * 2.0).max(1.0),
     );
     let size = egui::vec2(
-        width,
-        (galley.size().y + padding.y * 2.0).max(OVERLAY.hint_size[1]),
+        (galley.size().x + padding.x * 2.0).min(bounds.width()),
+        (galley.size().y + padding.y * 2.0).max(OVERLAY.hint_min_height),
     );
     let rect = Rect::from_min_size(
         Pos2::new(
-            bounds.center().x - width / 2.0,
+            bounds.center().x - size.x / 2.0,
             bounds.min.y + OVERLAY.hint_top,
         ),
         size,
@@ -45,6 +44,33 @@ pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_long_notice_uses_available_width_before_wrapping() {
+        use eframe::egui::{self, Pos2, Rect};
+        let ctx = egui::Context::default();
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let text = "A screen notice should stay on one line when the available screen width can fit the complete message.";
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(bounds),
+                ..Default::default()
+            },
+            |ui| super::show(ui, bounds, text),
+        );
+        output.textures_delta.clear();
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == text => {
+                    Some(&text_shape.galley)
+                }
+                _ => None,
+            })
+            .expect("complete notice");
+        assert_eq!(galley.rows.len(), 1);
+    }
+
     #[test]
     fn recovery_text_wraps_inside_the_screen_work_area_in_both_languages() {
         use eframe::egui::{self, Pos2, Rect};
@@ -72,6 +98,17 @@ mod tests {
                         .clip_rect
                         .contains_rect(shape.shape.visual_bounding_rect())
                 );
+                let egui::Shape::Text(text_shape) = &shape.shape else {
+                    unreachable!("matched text shape");
+                };
+                if width == 1440.0 {
+                    assert_eq!(text_shape.galley.rows.len(), 1, "wide screen: {locale:?}");
+                } else if width == 180.0 {
+                    assert!(
+                        text_shape.galley.rows.len() > 1,
+                        "narrow screen: {locale:?}"
+                    );
+                }
                 let panel = output
                     .shapes
                     .iter()
