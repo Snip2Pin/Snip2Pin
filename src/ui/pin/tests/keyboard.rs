@@ -89,6 +89,52 @@ fn a_held_arrow_accelerates_without_system_repeat_events_and_stops_on_release() 
 }
 
 #[test]
+fn a_held_arrow_stays_slow_before_accelerating() {
+    for shift in [false, true] {
+        let mut fixture = Fixture::new();
+        let modifiers = if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        };
+        let mut press = key(egui::Key::ArrowRight, true);
+        if let Event::Key {
+            modifiers: value, ..
+        } = &mut press
+        {
+            *value = modifiers;
+        }
+        let tap = frame(
+            &mut fixture,
+            0.0,
+            vec![Event::ModifiersChanged(modifiers), press],
+            true,
+            false,
+        );
+        assert_eq!(tap.x, if shift { 10.0 } else { 1.0 });
+        let mut held = 0.0;
+        for i in 1..=24 {
+            let delta = frame(&mut fixture, f64::from(i) / 60.0, vec![], true, false);
+            assert!(delta.x <= 1.0, "fine adjustment jumped: {delta:?}");
+            held += delta.x;
+        }
+        let expected = if shift { 6.0 } else { 3.0 };
+        assert_eq!(held, expected, "first 0.4 seconds must remain slow");
+        assert_eq!(
+            frame(
+                &mut fixture,
+                0.41,
+                vec![key(egui::Key::ArrowRight, false)],
+                true,
+                false,
+            ),
+            Vec2::ZERO
+        );
+        assert_eq!(frame(&mut fixture, 1.0, vec![], true, false), Vec2::ZERO);
+    }
+}
+
+#[test]
 fn system_repeat_frequency_cannot_change_the_movement_speed() {
     let mut quiet = Fixture::new();
     let mut repeated = Fixture::new();
@@ -200,9 +246,9 @@ fn shift_raises_the_speed_cap_and_a_stalled_frame_never_catches_up_in_one_jump()
         egui::vec2(10.0, 0.0)
     );
     let mut capped = 0.0;
-    for i in 1..=120 {
+    for i in 1..=180 {
         let delta = frame(&mut fixture, f64::from(i) / 60.0, vec![], true, false);
-        if i > 60 {
+        if i > 120 {
             capped += delta.x;
         }
     }
@@ -248,8 +294,21 @@ fn opposite_arrows_stop_motion_and_release_resumes_at_the_initial_pace() {
         ),
         Vec2::ZERO
     );
-    let resumed = frame(&mut fixture, 2.03, vec![], true, false);
-    assert!(resumed.x > 0.0 && resumed.x < 5.0);
+    let mut resumed = 0.0;
+    for i in 1..=24 {
+        resumed += frame(
+            &mut fixture,
+            2.01 + f64::from(i) / 60.0,
+            vec![],
+            true,
+            false,
+        )
+        .x;
+    }
+    assert_eq!(
+        resumed, 3.0,
+        "resumed direction must start at the fine pace"
+    );
 }
 
 #[test]

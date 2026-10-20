@@ -12,24 +12,28 @@ struct Pace {
 
 // Speeds use the same native steps as a fine arrow-key tap, per second.
 const NORMAL: Pace = Pace {
-    initial: 60.0,
+    initial: 8.0,
     acceleration: 1200.0,
     maximum: 900.0,
 };
 const FAST: Pace = Pace {
-    initial: 120.0,
+    initial: 16.0,
     acceleration: 2400.0,
     maximum: 1800.0,
 };
+// Leave time for a few fine steps before a sustained hold accelerates.
+const FINE_HOLD_SECONDS: f64 = 0.4;
 // Discard catch-up after a stalled frame, rather than teleporting the window.
 const MAX_FRAME_GAP: f64 = 0.1;
 
 impl Pace {
     fn distance(&self, seconds: f64) -> f64 {
-        let accelerating = seconds.min((self.maximum - self.initial) / self.acceleration);
-        self.initial * accelerating
+        let after_fine = (seconds - FINE_HOLD_SECONDS).max(0.0);
+        let accelerating = after_fine.min((self.maximum - self.initial) / self.acceleration);
+        self.initial * seconds.min(FINE_HOLD_SECONDS)
+            + self.initial * accelerating
             + 0.5 * self.acceleration * accelerating.powi(2)
-            + self.maximum * (seconds - accelerating)
+            + self.maximum * (after_fine - accelerating)
     }
 }
 
