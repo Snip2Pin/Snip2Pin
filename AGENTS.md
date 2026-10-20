@@ -24,7 +24,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 主页列出当前贴图的缩略图、定位、锁定和关闭操作；定位将键盘焦点交给对应贴图。列表与图片高亮只依据真实窗口焦点，直接点击图片同样生效，失焦即取消；不保留额外选中状态或高亮计时，不新增截图历史。选中且未锁定的贴图实际显示尺寸不足以容纳一个操作按钮时，列表显示橙色提示“贴图太小？按 + 放大”；使用已观测的内容区尺寸，不以原图像素或初始尺寸猜测，未知时不提示，不恢复图片最小尺寸限制。尺寸跨提示阈值时通过事件重绘主页，不轮询或形成重绘循环，贴图关闭时释放提示状态。列表可折叠并限高滚动，默认至少显示 3.5 行（行高随字体推导），可独立纵向拖长，少量贴图按内容收缩；复用已有纹理。
 - 列表采用轻量行布局，保留左右内距；缩略图在带底色、细边框与内留白的固定区域居中，完整展示，不裁切原图。名称起点对齐，长名称截断并可查看全文，重名须可区分；操作按钮弱化，不能紧贴边缘或挤压名称。行高随字体增长，覆盖窄窗、大字体、极端图片比例、空列表和长列表滚动。单击行内非操作按钮区域选中并定位，双击名称进入标准文本编辑器，清空后显示随语言变化的默认编号。主页采用普通窗口层级，不能为定位或管理贴图而永久置顶；只有等待退出确认时可临时提升，取消须恢复。定位不改变几何，不用焦点往返、定时或层级降升补偿；名称编辑不触发定位或截图，锁定不妨碍命名。名称及编辑撤销状态随贴图关闭释放，不写入设置、日志或磁盘，不改变原生窗口身份及原图。
 - 聚焦且未锁定的贴图支持方向键微调位置、`+`／`=` 放大、`-` 缩小、`0` 恢复原始显示尺寸；右键菜单同样提供恢复操作。移动步长使用系统可表达的最小单位，只从实际外框位置发出一次移动请求，不猜测 Wayland 缺失的全局坐标；边界由系统处理。键盘缩放保持当前比例，最短边放大时须实际增长，尺寸边界遵循原生系统和宿主；恢复原始尺寸不施加应用下限。文本编辑或 Ctrl／Command／Alt 组合不触发键盘移动与缩放。保持窗口与图片同尺寸，不为点击热区自动放大或增加透明外边框；非 macOS 聚焦时可加宽图内缩放热区，同时保留中心拖动区域。
-- 普通方向键点按保留原生微调步长，长按先保持一段低速，之后按实际时间加速并限制最高速度，不依赖系统按键重复频率或帧率，斜向移动归一化。Shift＋方向键按键触发大步直接位移，长按由系统重复按键继续步进，不按帧平滑移动、不加速、不自行请求持续重绘；松开 Shift 回到低速微调，无须松开方向键。低速时长、初速、加速度、上限及停顿保护集中在 `src/ui/pin/keyboard.rs`，步长复用 `src/pin.rs`。只积累普通长按的输入时间与不足一个原生步长的余量，不缓存预计窗口坐标；每帧合并一次移动请求。松手、失焦、锁定、菜单、文本编辑、截图或关闭即清理，不产生空闲轮询；中断后须重新按下，不能靠重复事件恢复。延迟帧不追赶整段停顿造成跳变。
+- 普通方向键每次轻按只移动一个原生最小步长，长按仅在系统重复按键事件到达时步进；随有效长按时长逐步增加每次步长并封顶，不按帧平滑移动，也不在无输入帧中继续移动。Shift＋方向键使用更大的固定步长，长按沿用相同的系统重复节拍；松开 Shift 回到微调，无须松开方向键。步长增长参数集中在 `src/ui/pin/keyboard.rs`，快速步长复用 `src/pin.rs`。UI 只保留按键会话与时长，不缓存预计窗口坐标，不自行请求持续重绘、计时器或轮询；每帧合并一次移动请求。松手、失焦、锁定、菜单、文本编辑、截图或关闭即清理；中断后须重新按下，不能靠重复事件恢复。普通方向键和 Shift 的步进节奏均由系统负责，不追赶无输入期间的位移。
 - 锁定贴图不可移动、缩放、双击／Esc／菜单关闭，关闭全部跳过锁定项；复制、定位与解锁仍可用。所有关闭和手势入口在消费事件时检查锁定，不能只禁用按钮。有锁定贴图时主动退出须确认，取消保留全部图片且取消待执行重启；确认后才释放图片并退出。
 - macOS 锁定保留原生窗口样式、位置、内容尺寸和跨屏呈现；以当前内容尺寸的原生 min/max 约束及 movable 状态阻止移动缩放，解锁恢复原配置。不通过切换 resizable 样式、重建窗口、定位或 DPI 补偿实现锁定。原生跨屏显示须实际验收，隐藏窗口的几何测试不能证明合成器完整显示。
 - 全局解锁全部贴图使用 macOS Command+Option+Shift+L、Windows/Linux X11 Ctrl+Alt+Shift+L；同一快捷键管理器分派截图与恢复命令，截图配置不能覆盖恢复组合键，注册失败须明确提示。菜单保留解锁入口；Wayland 保留窗口内回退，不宣称全局可用。恢复只解锁，不关闭图片、移动、缩放或抢焦点，重复操作幂等；锁定图尝试拖动时提示组合键。
@@ -36,6 +36,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 截图模式只突出当前截图目标：悬停显示识别窗口的蓝框，未识别到窗口或尚无指针位置时默认选中当前整屏，拖动后仅显示框选边界；目标保持原亮度，其余区域（包括其他显示器）统一略微变暗。不在窗口或选区边界之外叠加屏幕蓝框，不用活动显示器状态决定整屏明暗。显示器切换仅更新输入目标和焦点，不在后台轮询鼠标。
 - 截图模式悬停识别最前面的可见窗口，单击截取当前目标（窗口或整屏）、拖动仍自由框选；按下和松开须命中同一目标。窗口边界与屏幕画面在同一截图任务中收集，鼠标移动只做内存命中检测，不逐帧查询系统；识别失败仍支持整屏选择与框选。识别框与裁剪共用像素矩形和原生坐标网格，只截当前屏幕的可见画面，不补拍被遮挡内容。元数据仅保留边界和顺序，随截图会话释放，不保留或记录其他应用窗口标题。原生 Wayland 没有通用窗口枚举能力，不用 XWayland 的不完整窗口列表猜测被遮挡窗口。
 - 完成或取消截图时恢复普通光标；演示和自动化测试不得修改系统光标或抢占用户焦点。
+- macOS 贴图双击关闭采用既有应用内鼠标事件通道传递的 `NSEvent.clickCount`，仅系统判定的第二次按下触发；匹配贴图及按下位置，元数据只消费一次，新按下清掉旧结果。原生拖动可能吞掉松开事件，不能等待松开或用框架自行累计的点击次数补判。关闭仍须命中图片非按钮区域、通过锁定检查且只在首个 UI pass 分派；双击关闭不再启动窗口拖动。没有匹配原生事件时不关闭，不能回退到框架计数；演示和其他平台保留框架行为，不声称已有统一的原生双击接口。不新增全局监听或双击计时器，自动合成事件验证不能代替真实拖动后点击验收。
 - 识别窗口内沿用界面框架的单击容差，轻微手抖仍按单击处理，长按后可框选极小区域；空白处直接接受任意非空框选。复用框架手势分类，不自行硬编码距离或时间阈值。
 - 贴图采用系统阴影，不为旧边框样式增加透明边距或坐标补偿。复制、锁定、关闭在图片内部悬停横排显示，窄图从左起逐个隐藏完整按钮，不竖排、不放大图片；列表和右键菜单保留全部操作。复制使用双层照片图标。按钮点击不得触发窗口拖动或缩放。视觉样式可为更流畅的交互调整。
 - 成功框选后自动复制图片到系统剪贴板，复制按钮可再次复制；取消、无效或过期选区不能改动剪贴板。测试只检查复制命令，不写入真实系统剪贴板。
@@ -100,11 +101,11 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: explicit application activation and floating levels, preserving backend classes and observation lifecycle.
-- `src/platform/macos_drag.rs`: retain one original press and bind deferred native drag requests to it, without computing movement.
+- `src/platform/macos_drag.rs`: retain the original press for native drag and route one-shot AppKit click counts, without computing movement or click timing.
 - `src/platform/pin_window.rs`: same-process native pin lookup and explicit keyboard-focus activation without geometry changes.
 - `src/platform/pin_zoom.rs`: atomic native anchored zoom using observed content bounds and per-pin native handles.
 - `src/ui/pin/session.rs`: continuous input ownership and fixed zoom anchors, without window geometry prediction.
-- `src/ui/pin/keyboard.rs`: frame-rate-independent held-arrow acceleration and speed limits, emitting native movement steps without predicting geometry.
+- `src/ui/pin/keyboard.rs`: system-repeat-driven arrow steps with bounded stride growth, without animation or geometry prediction.
 - `src/platform/macos_dock.rs`, `packaging/macos/DockMenu.xib`: native Dock menu, system Quit and Reopen routing, independent of optional menu resource loading; Xcode compiles the NIB at bundle time.
 - `src/platform/quit_prompt.rs`: asynchronous native quit confirmation with an application-UI fallback.
 - `src/settings.rs`: shortcut validation, theme/icon preferences, and local storage.

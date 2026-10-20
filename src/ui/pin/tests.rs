@@ -376,6 +376,119 @@ fn batched_pointer_motion_keeps_the_pressed_resize_edge() {
 }
 
 #[test]
+fn native_single_click_is_not_reinterpreted_after_a_native_window_drag() {
+    let ctx = egui::Context::default();
+    let texture = texture(&ctx);
+    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+    let point = bounds.center();
+    let actions = RefCell::new(Vec::new());
+    let paint = |time, window_origin, events| {
+        let mut input = egui::RawInput {
+            screen_rect: Some(bounds),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .outer_rect = Some(Rect::from_min_size(window_origin, bounds.size()));
+        let mut output = ctx.run_ui(input, |ui| {
+            image_with_host(
+                ui,
+                7,
+                &texture,
+                Interaction {
+                    native_edges: true,
+                    native_double_click: Some(false),
+                    ..Default::default()
+                },
+                &|action| actions.borrow_mut().push(action),
+                |_| {},
+            );
+        });
+        output.textures_delta.clear();
+    };
+    paint(
+        0.0,
+        egui::pos2(100.0, 100.0),
+        vec![Event::PointerMoved(point)],
+    );
+    paint(0.05, egui::pos2(100.0, 100.0), vec![pointer(point, true)]);
+    // A native window drag can keep the same local grab point throughout.
+    paint(0.10, egui::pos2(400.0, 300.0), vec![pointer(point, false)]);
+    paint(0.15, egui::pos2(400.0, 300.0), vec![pointer(point, true)]);
+    paint(0.20, egui::pos2(400.0, 300.0), vec![pointer(point, false)]);
+    assert!(
+        actions.borrow().is_empty(),
+        "a drag followed by one click must not close the pin: {:?}",
+        actions.borrow()
+    );
+}
+
+#[test]
+fn native_double_clicks_respect_locking_controls_and_multipass_dispatch() {
+    for locked in [false, true] {
+        for on_control in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            let controls = Rect::from_min_size(
+                bounds.min + Vec2::splat(METRICS.inset),
+                METRICS.toolbar_size(),
+            );
+            let point = if on_control {
+                controls.center()
+            } else {
+                bounds.center()
+            };
+            let actions = RefCell::new(Vec::new());
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true), pointer(point, false)],
+            ] {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        image_with_host(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                native_edges: true,
+                                locked,
+                                excluded: Some(controls),
+                                native_double_click: Some(true),
+                                ..Default::default()
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |command| assert_ne!(command, ViewportCommand::StartDrag),
+                        );
+                        if ui.ctx().current_pass_index() == 0 {
+                            ui.ctx().request_discard("native clicks dispatch once");
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                actions
+                    .borrow()
+                    .iter()
+                    .filter(|action| matches!(action, Action::ClosePin(7)))
+                    .count(),
+                usize::from(!locked && !on_control)
+            );
+        }
+    }
+}
+
+#[test]
 fn body_double_click_and_escape_close_the_pin() {
     let ctx = egui::Context::default();
     let texture = texture(&ctx);
@@ -883,6 +996,7 @@ fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
                             locked,
                             excluded: Some(toolbar.bounds),
                             keyboard_focus: None,
+                            ..Default::default()
                         },
                         &|action| actions.borrow_mut().push(action),
                         |command| ctx.send_viewport_cmd(command),
@@ -1247,7 +1361,7 @@ fn shift_arrow_taps_accumulate_fast_movement_once() {
     });
     output.textures_delta.clear();
     assert_no_geometry(&output);
-    assert_eq!(actions.into_inner(), vec![Action::Move(7, [20, 0])]);
+    assert_eq!(actions.into_inner(), vec![Action::Move(7, [100, 0])]);
 }
 
 #[test]
@@ -1295,6 +1409,7 @@ fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
                                 locked,
                                 excluded: None,
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1470,7 +1585,7 @@ fn keyboard_zoom_and_movement_leave_text_editing_and_command_shortcuts_alone() {
                     if modifiers.shift {
                         vec![
                             Action::Zoom(7, vec![Zoom::Scale(snip2pin::pin::FAST_ZOOM_FACTOR)]),
-                            Action::Move(7, [-10, 0]),
+                            Action::Move(7, [-50, 0]),
                         ]
                     } else {
                         vec![Action::Zoom(7, vec![Zoom::In]), Action::Move(7, [-1, 0])]
@@ -1725,6 +1840,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                                 locked: true,
                                 excluded: None,
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1776,6 +1892,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                         locked: true,
                         excluded: None,
                         keyboard_focus: None,
+                        ..Default::default()
                     },
                     &|action| actions.borrow_mut().push(action),
                     |command| ctx.send_viewport_cmd(command),
@@ -1838,6 +1955,7 @@ fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
                                 locked: true,
                                 excluded: Some(row),
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),

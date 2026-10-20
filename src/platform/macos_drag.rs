@@ -1,4 +1,4 @@
-//! Keep the initiating AppKit press until its native drag request is handled.
+//! Observe application-local AppKit presses for native dragging and click counts.
 use std::{
     cell::RefCell,
     ptr::NonNull,
@@ -24,27 +24,57 @@ struct PressLocation {
 struct PressSnapshot {
     id: PressId,
     location: PressLocation,
+    double_click: bool,
+}
+
+impl PressSnapshot {
+    fn matches(self, pin: u64, origin: egui::Pos2, pixels_per_point: f32) -> bool {
+        let point = egui::pos2(
+            self.location.physical[0] as f32 / pixels_per_point,
+            self.location.physical[1] as f32 / pixels_per_point,
+        );
+        self.location.pin == pin && point == origin
+    }
+}
+
+#[derive(Default)]
+struct MouseSnapshot {
+    press: Option<PressSnapshot>,
+    click: Option<PressSnapshot>,
 }
 
 /// Sendable metadata for deferred egui callbacks; native events stay on the UI thread.
 #[derive(Clone, Default)]
-pub struct DragRequests(Arc<Mutex<Option<PressSnapshot>>>);
+pub struct DragRequests(Arc<Mutex<MouseSnapshot>>);
 
 impl DragRequests {
     pub fn matching(&self, pin: u64, origin: egui::Pos2, pixels_per_point: f32) -> Option<PressId> {
-        let snapshot = (*self.0.lock().ok()?)?;
+        let snapshot = self.0.lock().ok()?.press?;
         // Match egui-winit's physical f64 -> f32 -> UI-point conversion exactly.
         // This validates input identity; it never calculates a window position.
-        let point = egui::pos2(
-            snapshot.location.physical[0] as f32 / pixels_per_point,
-            snapshot.location.physical[1] as f32 / pixels_per_point,
-        );
-        (snapshot.location.pin == pin && point == origin).then_some(snapshot.id)
+        snapshot
+            .matches(pin, origin, pixels_per_point)
+            .then_some(snapshot.id)
+    }
+
+    /// AppKit counts clicks on mouse-down. Keep only this metadata after Up:
+    /// native window dragging may consume Up before egui receives it.
+    pub fn take_double_click(&self, pin: u64, point: egui::Pos2, pixels_per_point: f32) -> bool {
+        let Ok(mut state) = self.0.lock() else {
+            return false;
+        };
+        if !state
+            .click
+            .is_some_and(|click| click.matches(pin, point, pixels_per_point))
+        {
+            return false;
+        }
+        state.click.take().is_some_and(|click| click.double_click)
     }
 
     #[cfg(test)]
     pub(crate) fn current(&self) -> Option<PressId> {
-        (*self.0.lock().ok()?).map(|snapshot| snapshot.id)
+        self.0.lock().ok()?.press.map(|snapshot| snapshot.id)
     }
 }
 
@@ -66,10 +96,14 @@ impl PendingPress {
                         PressSnapshot {
                             id: PressId(self.generation),
                             location,
+                            double_click: event.clickCount() == 2,
                         },
                         event,
                     )
                 });
+                if let Ok(mut state) = self.requests.0.lock() {
+                    state.click = self.press.as_ref().map(|(snapshot, _)| *snapshot);
+                }
             }
             NSEventType::LeftMouseUp => self.press = None,
             _ => {}
@@ -79,7 +113,7 @@ impl PendingPress {
 
     fn publish(&self) {
         if let Ok(mut snapshot) = self.requests.0.lock() {
-            *snapshot = self.press.as_ref().map(|(snapshot, _)| *snapshot);
+            snapshot.press = self.press.as_ref().map(|(snapshot, _)| *snapshot);
         }
     }
 
@@ -247,10 +281,61 @@ mod tests {
     }
 
     fn event(kind: NSEventType, window: isize, number: isize) -> Retained<NSEvent> {
+        counted_event(kind, window, number, 1)
+    }
+
+    fn counted_event(
+        kind: NSEventType,
+        window: isize,
+        number: isize,
+        count: isize,
+    ) -> Retained<NSEvent> {
         NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
             kind, NSPoint::new(111.7, 62.9), NSEventModifierFlags::Shift, 123.0,
-            window, None, number, 1, 1.0,
+            window, None, number, count, 1.0,
         ).expect("synthetic event; never posted to AppKit")
+    }
+
+    #[test]
+    fn native_click_counts_survive_drag_handoff_and_up_but_are_consumed_once() {
+        for count in [0, 1, 2, 3] {
+            let drag = DragEvents::default();
+            record(
+                &drag,
+                counted_event(NSEventType::LeftMouseDown, 22, 1, count),
+            );
+            let token = drag.requests().current().expect("press");
+            let _original = drag.take(token, 22, true).expect("native handoff");
+            record(&drag, event(NSEventType::LeftMouseUp, 22, 1));
+            let requests = drag.requests();
+            // Mismatched metadata must remain available to its owning pin.
+            assert!(!requests.take_double_click(999, egui::pos2(50.0, 60.0), 2.0));
+            let snapshot = requests.0.lock().expect("metadata").click.expect("click");
+            let point = egui::pos2(
+                snapshot.location.physical[0] as f32 / 2.0,
+                snapshot.location.physical[1] as f32 / 2.0,
+            );
+            assert!(!requests.take_double_click(
+                snapshot.location.pin,
+                point + egui::vec2(1.0, 0.0),
+                2.0
+            ));
+            assert_eq!(
+                requests.take_double_click(snapshot.location.pin, point, 2.0),
+                count == 2
+            );
+            assert!(!requests.take_double_click(snapshot.location.pin, point, 2.0));
+        }
+    }
+
+    #[test]
+    fn a_new_mouse_down_invalidates_unconsumed_click_metadata() {
+        let drag = DragEvents::default();
+        record(&drag, counted_event(NSEventType::LeftMouseDown, 22, 1, 2));
+        drag.pending
+            .borrow_mut()
+            .record(event(NSEventType::LeftMouseDown, 33, 2), None);
+        assert!(drag.requests().0.lock().expect("metadata").click.is_none());
     }
 
     #[test]

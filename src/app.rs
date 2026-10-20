@@ -1659,6 +1659,28 @@ impl Snip2Pin {
                 ui::pin::route_gesture(ui, &dispatch);
                 #[cfg(target_os = "macos")]
                 let press_origin = ui.input(|input| input.pointer.press_origin());
+                #[cfg(not(target_os = "macos"))]
+                let native_double_click = None;
+                #[cfg(target_os = "macos")]
+                let native_double_click = native_drag.as_ref().map(|requests| {
+                    if ctx.current_pass_index() != 0 {
+                        return false;
+                    }
+                    ui.input(|input| {
+                        input.events.iter().rev().find_map(|event| match event {
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                ..
+                            } => Some(*pos),
+                            _ => None,
+                        })
+                    })
+                    .is_some_and(|point| {
+                        requests.take_double_click(id, point, ctx.pixels_per_point())
+                    })
+                });
                 ui::pin::image_with_host(
                     ui,
                     id,
@@ -1668,6 +1690,7 @@ impl Snip2Pin {
                         locked,
                         excluded: controls.map(|toolbar| toolbar.bounds),
                         keyboard_focus: None,
+                        native_double_click,
                     },
                     &dispatch,
                     |command| {

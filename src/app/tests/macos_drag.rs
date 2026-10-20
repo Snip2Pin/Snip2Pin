@@ -9,9 +9,19 @@ fn native_event(
     number: isize,
     point: NSPoint,
 ) -> Retained<NSEvent> {
+    counted_event(kind, window, number, point, 1)
+}
+
+fn counted_event(
+    kind: NSEventType,
+    window: isize,
+    number: isize,
+    point: NSPoint,
+    count: isize,
+) -> Retained<NSEvent> {
     NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         kind, point, NSEventModifierFlags::Shift, 123.0,
-        window, None, number, 1, 1.0,
+        window, None, number, count, 1.0,
     ).expect("synthetic event; never posted to AppKit")
 }
 
@@ -20,6 +30,8 @@ struct Fixture {
     ctx: egui::Context,
     paint: BTreeMap<u64, Arc<egui::viewport::DeferredViewportUiCallback>>,
     size: egui::Vec2,
+    time: Cell<f64>,
+    framework_double_click: Cell<bool>,
 }
 
 impl Fixture {
@@ -74,6 +86,8 @@ impl Fixture {
             ctx,
             paint,
             size,
+            time: Cell::new(0.0),
+            framework_double_click: Cell::new(false),
         }
     }
 
@@ -106,7 +120,14 @@ impl Fixture {
                 modifiers: egui::Modifiers::NONE,
             });
         }
+        self.paint_events(id, events, multipass)
+    }
+
+    fn paint_events(&self, id: u64, events: Vec<egui::Event>, multipass: bool) -> egui::FullOutput {
+        let time = self.time.get();
+        self.time.set(time + 0.02);
         let mut input = egui::RawInput {
+            time: Some(time),
             viewport_id: pin_id(id),
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
             events,
@@ -125,6 +146,13 @@ impl Fixture {
             },
         );
         self.ctx.run_ui(input, |ui| {
+            if ui.ctx().current_pass_index() == 0 {
+                self.framework_double_click.set(ui.input(|input| {
+                    input
+                        .pointer
+                        .button_double_clicked(egui::PointerButton::Primary)
+                }));
+            }
             (self.paint[&id])(ui);
             if multipass && ui.ctx().current_pass_index() == 0 {
                 ui.ctx().request_discard("repeat native press frame");
@@ -141,6 +169,117 @@ impl Fixture {
                 _ => None,
             })
             .collect()
+    }
+}
+
+#[test]
+fn native_single_clicks_do_not_inherit_the_frameworks_double_click_history() {
+    let fixture = Fixture::new();
+    let point = egui::pos2(111.7, 74.1);
+    fixture.paint(1, point, None, false).textures_delta.clear();
+    for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+        fixture.observe(
+            if pressed {
+                NSEventType::LeftMouseDown
+            } else {
+                NSEventType::LeftMouseUp
+            },
+            22,
+            index as isize,
+            point,
+        );
+        fixture
+            .paint(1, point, Some(pressed), true)
+            .textures_delta
+            .clear();
+        assert!(
+            fixture
+                .app
+                .events
+                .try_iter()
+                .all(|event| !matches!(event, Event::ClosePin(_)))
+        );
+    }
+    assert!(
+        fixture.framework_double_click.get(),
+        "the test must reproduce egui's conflicting double-click classification"
+    );
+}
+
+#[test]
+fn a_native_double_click_survives_down_and_up_in_the_same_ui_batch() {
+    let fixture = Fixture::new();
+    let point = egui::pos2(111.7, 74.1);
+    fixture.paint(1, point, None, false).textures_delta.clear();
+    fixture.app.pin_drag.record_for_test(
+        counted_event(
+            NSEventType::LeftMouseDown,
+            22,
+            2,
+            NSPoint::new(111.7, 62.9),
+            2,
+        ),
+        1,
+        [f64::from(point.x) * 2.0, f64::from(point.y) * 2.0],
+    );
+    fixture.observe(NSEventType::LeftMouseUp, 22, 2, point);
+    let events = [true, false]
+        .into_iter()
+        .map(|pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        })
+        .collect();
+    fixture.paint_events(1, events, true).textures_delta.clear();
+    assert_eq!(
+        fixture
+            .app
+            .events
+            .try_iter()
+            .filter(|event| matches!(event, Event::ClosePin(1)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn native_click_count_controls_closing_without_starting_a_second_drag() {
+    for count in [0, 1, 2, 3] {
+        let fixture = Fixture::new();
+        let point = egui::pos2(111.7, 74.1);
+        fixture.paint(1, point, None, false).textures_delta.clear();
+        fixture.app.pin_drag.record_for_test(
+            counted_event(
+                NSEventType::LeftMouseDown,
+                22,
+                1,
+                NSPoint::new(111.7, 62.9),
+                count,
+            ),
+            1,
+            [f64::from(point.x) * 2.0, f64::from(point.y) * 2.0],
+        );
+        fixture
+            .paint(1, point, Some(true), true)
+            .textures_delta
+            .clear();
+        let events: Vec<_> = fixture.app.events.try_iter().collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::ClosePin(1)))
+                .count(),
+            usize::from(count == 2)
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::BeginPinDrag(1, _)))
+                .count(),
+            usize::from(count != 2)
+        );
     }
 }
 

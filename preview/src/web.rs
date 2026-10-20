@@ -458,6 +458,7 @@ impl eframe::App for Sandbox {
                             locked: pin.locked,
                             excluded: controls.map(|toolbar| toolbar.bounds),
                             keyboard_focus: Some(self.focused_pin == Some(pin.id)),
+                            ..Default::default()
                         },
                         &|action| {
                             events.borrow_mut().push(action);
