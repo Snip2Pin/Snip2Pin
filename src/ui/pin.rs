@@ -8,8 +8,12 @@ use super::{
     style::PIN,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+mod input;
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    UnlockAll,
+    UnlockHint(u64),
     CopyPin(u64),
     ClosePin(u64),
     MenuPin(u64),
@@ -32,6 +36,8 @@ pub struct Interaction {
     pub native_edges: bool,
     pub locked: bool,
     pub excluded: Option<Rect>,
+    /// Virtual hosts supply per-image focus; native hosts use viewport focus.
+    pub keyboard_focus: Option<bool>,
 }
 
 /// The web sandbox intercepts these requests; desktop hosts handle the gesture.
@@ -48,48 +54,12 @@ pub fn image_with_host(
         native_edges,
         locked,
         excluded,
+        keyboard_focus,
     } = interaction;
     let bounds = ui.max_rect();
-    let focused = ui.input(|input| input.viewport().focused == Some(true));
-    if !locked && focused && !ui.ctx().text_edit_focused() && ui.ctx().current_pass_index() == 0 {
-        let (zooms, movement) = ui.input(|input| {
-            let mut zooms = Vec::new();
-            let mut movement = [0, 0];
-            for event in &input.events {
-                if let egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = event
-                    && !modifiers.ctrl
-                    && !modifiers.command
-                    && !modifiers.mac_cmd
-                    && !modifiers.alt
-                {
-                    match key {
-                        egui::Key::Plus | egui::Key::Equals => zooms.push(Zoom::In),
-                        egui::Key::Minus => zooms.push(Zoom::Out),
-                        egui::Key::Num0 => zooms.push(Zoom::Original),
-                        egui::Key::ArrowLeft => movement[0] -= 1,
-                        egui::Key::ArrowRight => movement[0] += 1,
-                        egui::Key::ArrowUp => movement[1] -= 1,
-                        egui::Key::ArrowDown => movement[1] += 1,
-                        _ => {}
-                    }
-                }
-            }
-            (zooms, movement)
-        });
-        if !zooms.is_empty() {
-            events(Action::Zoom(id, zooms));
-            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-        }
-        if movement != [0, 0] {
-            events(Action::Move(id, movement));
-            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-        }
-    }
+    let focused =
+        keyboard_focus.unwrap_or_else(|| ui.input(|input| input.viewport().focused == Some(true)));
+    input::adjust(ui, id, focused, locked, excluded, events);
     let resize_inset = if focused {
         PIN.focused_resize_inset
     } else {
@@ -163,6 +133,18 @@ pub fn image_with_host(
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
+    if locked
+        && ui.ctx().current_pass_index() == 0
+        && pressed.is_some_and(|point| {
+            bounds.contains(point)
+                && ui.clip_rect().contains(point)
+                && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
+                && !excluded.is_some_and(|rect| rect.contains(point))
+        })
+    {
+        events(Action::UnlockHint(id));
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
     let double_clicked_image = response.double_clicked()
         && response.interact_pointer_pos().is_some_and(|point| {
             bounds.contains(point) && !excluded.is_some_and(|rect| rect.contains(point))

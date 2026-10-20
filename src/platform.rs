@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 
 use eframe::egui;
@@ -35,8 +35,12 @@ pub fn activate_application() -> Result<(), Message> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn set_pin_movable(id: u64, movable: bool) -> Result<(), Message> {
-    pin_window::find(id)?.setMovable(movable);
+pub use macos::PinLock;
+
+#[cfg(target_os = "macos")]
+pub fn set_pin_locked(id: u64, locked: bool, saved: &mut Option<PinLock>) -> Result<(), Message> {
+    let window = pin_window::find(id)?;
+    macos::set_locked(&window, locked, saved);
     Ok(())
 }
 
@@ -249,6 +253,14 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
     Ok(())
 }
 
+/// Raise this process's existing transparent layers without focus or geometry changes.
+pub fn raise_screen_hint() -> Result<(), Message> {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pin_window::raise_selection()?;
+    // macOS selection layers already have a higher native level than pins.
+    Ok(())
+}
+
 pub fn finish_capture(ctx: &egui::Context) {
     #[cfg(target_os = "macos")]
     {
@@ -295,8 +307,9 @@ pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
 
 pub struct Shortcut {
     manager: GlobalHotKeyManager,
-    key: HotKey,
-    active_id: Arc<AtomicU32>,
+    key: Option<HotKey>,
+    recovery: Option<HotKey>,
+    active_id: Arc<AtomicU64>,
 }
 
 pub fn global_shortcuts_supported() -> bool {
@@ -304,53 +317,137 @@ pub fn global_shortcuts_supported() -> bool {
 }
 
 impl Shortcut {
+    pub fn capture_registered(&self) -> bool {
+        self.key.is_some()
+    }
     pub fn register(
         binding: Binding,
         action: impl Fn() + Send + Sync + 'static,
-    ) -> Result<Self, Message> {
+        unlock: impl Fn() + Send + Sync + 'static,
+    ) -> Result<(Self, Option<Message>), Message> {
         if !global_shortcuts_supported() {
             return Err(Text::WaylandShortcut.into());
         }
         let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
-        let key = binding.0;
-        manager.register(key).map_err(|error| error.to_string())?;
-        let active_id = Arc::new(AtomicU32::new(key.id()));
+        // Independent registration: a conflict must never disable the other
+        // shortcut, especially the recovery path for inaccessible locked pins.
+        let (key, recovery, warning) = register_shortcuts(binding, |key| {
+            manager.register(key).map_err(|error| error.to_string())
+        });
+        let active_id = Arc::new(AtomicU64::new(
+            key.map_or(u64::MAX, |key| u64::from(key.id())),
+        ));
         let handler_id = active_id.clone();
         GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-            if event.id == handler_id.load(Ordering::Acquire) && event.state == HotKeyState::Pressed
-            {
+            if event.state != HotKeyState::Pressed {
+                return;
+            }
+            if recovery.is_some_and(|key| event.id == key.id()) {
+                unlock();
+            } else if u64::from(event.id) == handler_id.load(Ordering::Acquire) {
                 action();
             }
         }));
-        Ok(Self {
-            manager,
-            key,
-            active_id,
-        })
+        Ok((
+            Self {
+                manager,
+                key,
+                recovery,
+                active_id,
+            },
+            warning,
+        ))
     }
 
     pub fn replace(&mut self, binding: Binding) -> Result<(), Message> {
+        binding.validate_capture()?;
         let key = binding.0;
-        if key == self.key {
+        if Some(key) == self.key {
             return Ok(());
         }
         // Register first so a conflict leaves the existing shortcut working.
         self.manager
             .register(key)
             .map_err(|error| Text::ShortcutError.with(error))?;
-        if let Err(error) = self.manager.unregister(self.key) {
+        if let Some(previous) = self.key
+            && let Err(error) = self.manager.unregister(previous)
+        {
             let _ = self.manager.unregister(key);
             return Err(Text::UpdateShortcutError.with(error));
         }
-        self.key = key;
-        self.active_id.store(key.id(), Ordering::Release);
+        self.key = Some(key);
+        self.active_id.store(u64::from(key.id()), Ordering::Release);
         Ok(())
     }
 }
 
 impl Drop for Shortcut {
     fn drop(&mut self) {
-        let _ = self.manager.unregister(self.key);
+        for key in [self.key, self.recovery].into_iter().flatten() {
+            let _ = self.manager.unregister(key);
+        }
+        GlobalHotKeyEvent::set_event_handler(None::<fn(GlobalHotKeyEvent)>);
+    }
+}
+
+fn register_shortcuts(
+    binding: Binding,
+    mut register: impl FnMut(HotKey) -> Result<(), String>,
+) -> (Option<HotKey>, Option<HotKey>, Option<Message>) {
+    let mut warnings = Vec::new();
+    let capture = binding
+        .validate_capture()
+        .and_then(|()| register(binding.0).map_err(|error| Text::ShortcutError.with(error)));
+    let key = match capture {
+        Ok(()) => Some(binding.0),
+        Err(error) => {
+            warnings.push(error);
+            None
+        }
+    };
+    let recovery = Binding::unlock_all().0;
+    let recovery = match register(recovery) {
+        Ok(()) => Some(recovery),
+        Err(error) => {
+            warnings.push(Text::UnlockShortcutError.with(error));
+            None
+        }
+    };
+    let warning = (!warnings.is_empty()).then_some(Message::Combined(warnings));
+    (key, recovery, warning)
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+
+    #[test]
+    fn registration_conflicts_never_disable_the_other_shortcut() {
+        use super::*;
+        for (capture_fails, recovery_fails) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let mut attempted = Vec::new();
+            let (capture, recovery, warning) = register_shortcuts(Binding::default(), |key| {
+                attempted.push(key);
+                if (key == Binding::default().0 && capture_fails)
+                    || (key == Binding::unlock_all().0 && recovery_fails)
+                {
+                    Err("generated conflict".into())
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(attempted, [Binding::default().0, Binding::unlock_all().0]);
+            assert_eq!(capture.is_none(), capture_fails);
+            assert_eq!(recovery.is_none(), recovery_fails);
+            assert_eq!(warning.is_some(), capture_fails || recovery_fails);
+            if capture_fails && recovery_fails {
+                let Message::Combined(errors) = warning.expect("both failures") else {
+                    panic!("typed failures")
+                };
+                assert_eq!(errors.len(), 2);
+            }
+        }
     }
 }
 

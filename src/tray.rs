@@ -9,6 +9,7 @@ pub enum Action {
     Home,
     Capture,
     ClosePins,
+    UnlockPins,
     CopyPin(u64),
     ClosePin(u64),
     ToggleLock(u64),
@@ -21,8 +22,9 @@ pub struct Tray {
     capture: MenuItem,
     home: MenuItem,
     close_pins: MenuItem,
+    unlock_pins: MenuItem,
     quit: MenuItem,
-    state: Option<(Locale, bool, bool, bool)>,
+    state: Option<(Locale, bool, bool, bool, bool)>,
 }
 
 impl Tray {
@@ -63,11 +65,14 @@ impl Tray {
         let home = MenuItem::with_id("home", locale.text(Text::Home), true, None);
         let capture = MenuItem::with_id("capture", locale.text(Text::Capture), true, None);
         let close_pins = MenuItem::with_id("close-pins", locale.text(Text::ClosePins), false, None);
+        let unlock_pins =
+            MenuItem::with_id("unlock-pins", locale.text(Text::UnlockPins), false, None);
         let quit = MenuItem::with_id("quit", locale.text(Text::Quit), true, None);
         menu.append_items(&[
             &home,
             &capture,
             &close_pins,
+            &unlock_pins,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -93,13 +98,21 @@ impl Tray {
             capture,
             home,
             close_pins,
+            unlock_pins,
             quit,
             state: None,
         })
     }
 
-    pub fn update(&mut self, locale: Locale, capture: bool, has_pins: bool, capturing: bool) {
-        if self.state == Some((locale, capture, has_pins, capturing)) {
+    pub fn update(
+        &mut self,
+        locale: Locale,
+        capture: bool,
+        has_pins: bool,
+        has_locked: bool,
+        capturing: bool,
+    ) {
+        if self.state == Some((locale, capture, has_pins, has_locked, capturing)) {
             return;
         }
         self.capture.set_enabled(capture);
@@ -112,7 +125,9 @@ impl Tray {
             Text::Capture
         }));
         self.close_pins.set_enabled(has_pins);
-        self.state = Some((locale, capture, has_pins, capturing));
+        self.unlock_pins.set_text(locale.text(Text::UnlockPins));
+        self.unlock_pins.set_enabled(has_locked);
+        self.state = Some((locale, capture, has_pins, has_locked, capturing));
     }
 }
 
@@ -127,6 +142,7 @@ fn action(id: &str) -> Option<Action> {
         "home" => Some(Action::Home),
         "capture" => Some(Action::Capture),
         "close-pins" => Some(Action::ClosePins),
+        "unlock-pins" => Some(Action::UnlockPins),
         "quit" => Some(Action::Quit),
         _ => pin_action(id),
     }
@@ -156,6 +172,7 @@ mod tests {
             ("home", Action::Home),
             ("capture", Action::Capture),
             ("close-pins", Action::ClosePins),
+            ("unlock-pins", Action::UnlockPins),
             ("quit", Action::Quit),
         ] {
             assert_eq!(action(id), Some(expected));

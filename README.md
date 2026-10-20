@@ -18,12 +18,14 @@ keep it above other windows, drag to move, and double-click to close.
 
 - 点击「截图并置顶」或按快捷键，悬停识别窗口后单击，或在任意显示器上拖动框选；完成后原位置顶，并自动复制到剪贴板。
 - 蓝框标识识别到的窗口，拖动时仅显示框选边界；未选区域略微变暗。按 Esc 取消。
-- 拖动贴图移动，拖动边缘缩放，双击关闭；缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
-- 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，用方向键移动、`+`／`-` 缩放、`0` 恢复原始尺寸，右键菜单也可恢复。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
+- 拖动贴图移动，拖动边缘或滚动鼠标缩放，双击关闭；边缘缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
+- 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，用方向键微调位置、`=`／`-` 微调缩放、`0` 恢复原始尺寸；按住 Shift 快速调整，滚轮同样支持。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
 - 菜单栏／托盘和 macOS Dock 提供主页、截图和关闭未锁定贴图等操作。有托盘时关闭主页会留在后台；「开机自启」默认关闭。
 
 默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
 点击「修改快捷键」可更换。
+
+解锁全部贴图：macOS **⌘⌥⇧L**，Windows / Linux X11 **Ctrl+Alt+Shift+L**，也可使用菜单中的「解锁全部贴图」。此操作保留图片和位置；尝试拖动锁定图片时，屏幕中上方会短暂提示组合键。Wayland 仅支持窗口内快捷键。
 
 界面默认按系统首选语言选择中英文，无匹配时使用英文；可在「语言」中手动选择。主题默认跟随系统，图标默认跟随主题；设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
 
@@ -40,13 +42,13 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
   a region on any monitor, to pin it in place and copy it to the clipboard.
 - A blue border marks the recognized window; dragging shows only the selected
   region's border. Unselected areas are dimmed. Press **Esc** to cancel.
-- Drag a pin to move it and its edges to resize; proportions, **Shift** and anchors
+- Drag a pin to move it, drag its edges to resize, or scroll over it to zoom; proportions, **Shift** and anchors for edge resizing
   follow the operating system. Double-click to close. Copy always uses the original
   screenshot. Hover for copy, lock and close controls. Narrow pins hide leftmost
   buttons; the right-click menu retains every action without enlarging the image.
 - Click a pin's row in Home to focus it; double-click its name to edit.
-  Focused pins stay highlighted. Use arrow keys to move, `+` / `-` to zoom and `0` to restore the
-  original size; restore is also in the right-click menu.
+  Focused pins stay highlighted. Use arrow keys for fine movement, `=` / `-` for fine zoom and `0` to restore the
+  original size. Hold **Shift** for faster adjustments, including wheel zoom.
   Names last until the pin closes. The list also offers lock
   and close. Locked pins cannot move, resize or close; quitting
   with locked pins requires confirmation.
@@ -56,6 +58,8 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 
 Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
 Click **Change shortcut** to change it.
+
+Unlock all pins with **Command+Option+Shift+L** on macOS or **Ctrl+Alt+Shift+L** on Windows / Linux X11, or use **Unlock all pins** in the menu. Images and positions are preserved. Trying to drag a locked image briefly shows the shortcut near the top center of the screen. On Wayland, shortcuts work within the app only.
 
 The interface follows your system's preferred languages (Chinese or English),
 falling back to English. Override it under **Language**. Theme follows the system

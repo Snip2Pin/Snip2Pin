@@ -288,3 +288,40 @@ fn language_defaults_migrates_and_round_trips_without_changing_other_preferences
     std::fs::write(&path, "language = 'unknown'\n").expect("invalid language");
     assert!(Preferences::load(&path).is_err());
 }
+#[test]
+fn recovery_shortcut_requires_exact_modifiers_and_is_reserved_for_unlocking() {
+    use eframe::egui::{Event, Key, Modifiers};
+    let binding = Binding::unlock_all();
+    let modifiers = Modifiers {
+        alt: true,
+        shift: true,
+        ctrl: !cfg!(target_os = "macos"),
+        mac_cmd: cfg!(target_os = "macos"),
+        command: true,
+    };
+    let event = |modifiers, repeat| Event::Key {
+        key: Key::L,
+        physical_key: Some(Key::L),
+        pressed: true,
+        repeat,
+        modifiers,
+    };
+    assert!(binding.matches(&event(modifiers, false)));
+    assert!(!binding.matches(&event(modifiers, true)));
+    assert!(!binding.matches(&event(
+        Modifiers {
+            shift: false,
+            ..modifiers
+        },
+        false
+    )));
+    assert!(!binding.matches(&event(
+        Modifiers {
+            alt: false,
+            ..modifiers
+        },
+        false
+    )));
+    assert!(binding.validate_capture().is_err());
+    assert!(Binding::default().validate_capture().is_ok());
+}

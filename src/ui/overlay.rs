@@ -254,31 +254,11 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         selection.press = None;
     }
     if active && selection.start.is_none() {
-        let padding = egui::Vec2::from(OVERLAY.hint_padding);
-        let width = OVERLAY.hint_size[0].min(bounds.width());
-        let galley = ui.painter().layout(
-            crate::i18n::locale(ui.ctx())
-                .text(crate::i18n::Text::SelectionHelp)
-                .into(),
-            egui::FontId::proportional(OVERLAY.hint_font),
-            Color32::WHITE,
-            (width - padding.x * 2.0).max(1.0),
+        super::screen_hint::show(
+            ui,
+            bounds,
+            crate::i18n::locale(ui.ctx()).text(crate::i18n::Text::SelectionHelp),
         );
-        let hint_size = egui::vec2(
-            width,
-            (galley.size().y + padding.y * 2.0).max(OVERLAY.hint_size[1]),
-        );
-        let hint = Rect::from_min_size(
-            Pos2::new(
-                bounds.center().x - width / 2.0,
-                bounds.min.y + OVERLAY.hint_top,
-            ),
-            hint_size,
-        );
-        ui.painter()
-            .rect_filled(hint, OVERLAY.hint_radius, OVERLAY.hint_fill);
-        ui.painter()
-            .galley(hint.center() - galley.size() / 2.0, galley, Color32::WHITE);
     }
     activate.then_some(Action::Activate)
 }

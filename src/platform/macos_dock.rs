@@ -23,6 +23,7 @@ const NIB_NAME: &str = "DockMenu";
 const HOME_TAG: isize = 1;
 const CAPTURE_TAG: isize = 2;
 const CLOSE_PINS_TAG: isize = 3;
+const UNLOCK_PINS_TAG: isize = 4;
 // Public AppleEvents.h / AEDataModel.h wire identifiers.
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
 const QUIT_APPLICATION: u32 = u32::from_be_bytes(*b"quit");
@@ -68,6 +69,11 @@ define_class!(
         #[unsafe(method(snip2pinClosePins:))]
         fn close_pins(&self, _sender: Option<&AnyObject>) {
             (self.ivars().callback)(Action::ClosePins);
+        }
+
+        #[unsafe(method(snip2pinUnlockPins:))]
+        fn unlock_pins(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().callback)(Action::UnlockPins);
         }
 
         #[unsafe(method(snip2pinQuit:))]
@@ -128,7 +134,8 @@ struct DockMenu {
     home: Retained<NSMenuItem>,
     capture: Retained<NSMenuItem>,
     close_pins: Retained<NSMenuItem>,
-    state: Option<(Locale, bool, bool, bool)>,
+    unlock_pins: Retained<NSMenuItem>,
+    state: Option<(Locale, bool, bool, bool, bool)>,
 }
 
 impl Dock {
@@ -211,15 +218,20 @@ impl Dock {
         let close_pins = menu
             .itemWithTag(CLOSE_PINS_TAG)
             .ok_or(Text::DockMenuLoadFailed)?;
+        let unlock_pins = menu
+            .itemWithTag(UNLOCK_PINS_TAG)
+            .ok_or(Text::DockMenuLoadFailed)?;
         menu.setAutoenablesItems(false);
         bind(&home, &self.target, sel!(snip2pinOpenHome:));
         bind(&capture, &self.target, sel!(snip2pinCapture:));
         bind(&close_pins, &self.target, sel!(snip2pinClosePins:));
+        bind(&unlock_pins, &self.target, sel!(snip2pinUnlockPins:));
         self.menu = Some(DockMenu {
             _menu: menu,
             home,
             capture,
             close_pins,
+            unlock_pins,
             state: None,
         });
         Ok(())
@@ -258,12 +270,19 @@ impl Dock {
         locale: Locale,
         capture_enabled: bool,
         has_unlocked_pins: bool,
+        has_locked_pins: bool,
         capturing: bool,
     ) {
         let Some(menu) = &mut self.menu else {
             return;
         };
-        let state = (locale, capture_enabled, has_unlocked_pins, capturing);
+        let state = (
+            locale,
+            capture_enabled,
+            has_unlocked_pins,
+            has_locked_pins,
+            capturing,
+        );
         if menu.state == Some(state) {
             return;
         }
@@ -280,6 +299,9 @@ impl Dock {
         menu.close_pins
             .setTitle(&NSString::from_str(locale.text(Text::ClosePins)));
         menu.close_pins.setEnabled(has_unlocked_pins);
+        menu.unlock_pins
+            .setTitle(&NSString::from_str(locale.text(Text::UnlockPins)));
+        menu.unlock_pins.setEnabled(has_locked_pins);
         menu.state = Some(state);
     }
 }
@@ -354,7 +376,12 @@ impl Drop for Dock {
         // NSApplication may retain the connected menu beyond this owner. Leave
         // no callbacks pointing at a released target during application teardown.
         if let Some(menu) = &self.menu {
-            for item in [&menu.home, &menu.capture, &menu.close_pins] {
+            for item in [
+                &menu.home,
+                &menu.capture,
+                &menu.close_pins,
+                &menu.unlock_pins,
+            ] {
                 item.setEnabled(false);
                 // SAFETY: Removing target/action links is valid on the main thread;
                 // the MainThreadOnly target prevents Dock from moving off-thread.

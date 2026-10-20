@@ -74,6 +74,7 @@ struct Sandbox {
     selection: Option<overlay::Selection>,
     pins: Vec<Pin>,
     menu: Option<(u64, Pos2)>,
+    unlock_hint: Option<(u64, f64)>,
     next_id: u64,
     // Simulated native focus; browser Areas do not have OS window focus.
     focused_pin: Option<u64>,
@@ -117,6 +118,7 @@ impl Sandbox {
             selection: None,
             pins: Vec::new(),
             menu: None,
+            unlock_hint: None,
             next_id: 0,
             focused_pin: None,
         }
@@ -125,6 +127,7 @@ impl Sandbox {
     fn capture(&mut self) {
         self.message = None;
         self.menu = None;
+        self.unlock_hint = None;
         self.selection = Some(overlay::Selection {
             texture: self.texture.clone(),
             pixels: self.source.size.map(|n| n as u32),
@@ -138,6 +141,19 @@ impl Sandbox {
 
     fn pin_action(&mut self, action: pin_view::Action, ui: &egui::Ui, bounds: Rect) {
         match action {
+            pin_view::Action::UnlockHint(id) => {
+                if self.pins.iter().any(|pin| pin.id == id && pin.locked) {
+                    let duration = snip2pin::ui::screen_hint::UNLOCK_DURATION;
+                    self.unlock_hint =
+                        Some((id, ui.input(|input| input.time) + duration.as_secs_f64()));
+                    ui.ctx().request_repaint_after(duration);
+                }
+            }
+            pin_view::Action::UnlockAll => {
+                for pin in &mut self.pins {
+                    pin.locked = false;
+                }
+            }
             pin_view::Action::ClosePin(id) => {
                 if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
                     launcher::forget_pin_name(ui.ctx(), id);
@@ -235,7 +251,9 @@ impl eframe::App for Sandbox {
                         self.recording = false;
                         break;
                     }
-                    match Binding::from_key(key, modifiers) {
+                    match Binding::from_key(key, modifiers)
+                        .and_then(|binding| binding.validate_capture().map(|()| binding))
+                    {
                         Ok(binding) => {
                             self.preferences.binding = binding;
                             self.recording = false;
@@ -249,10 +267,9 @@ impl eframe::App for Sandbox {
         } else if self.selection.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
-                input
-                    .events
-                    .iter()
-                    .any(|event| self.preferences.binding.matches(event))
+                input.events.iter().any(|event| {
+                    self.preferences.binding.matches(event) && !Binding::unlock_all().matches(event)
+                })
             })
         {
             self.capture();
@@ -434,22 +451,24 @@ impl eframe::App for Sandbox {
                             native_edges: false,
                             locked: pin.locked,
                             excluded: controls.map(|toolbar| toolbar.bounds),
+                            keyboard_focus: Some(self.focused_pin == Some(pin.id)),
                         },
                         &|action| {
-                            if !matches!(action, pin_view::Action::Zoom(id, _) | pin_view::Action::Move(id, _) if self.focused_pin != Some(id)) {
-                                events.borrow_mut().push(action);
-                            }
+                            events.borrow_mut().push(action);
                         },
                         |command| requested = Some(command),
                     );
                     if self.focused_pin == Some(pin.id) {
-                            let style = &snip2pin::ui::style::PIN;
-                            ui.painter().rect_stroke(
-                                ui.max_rect(),
-                                0,
-                                egui::Stroke::new(style.highlight_stroke_pixels / ui.ctx().pixels_per_point(), style.highlight),
-                                egui::StrokeKind::Inside,
-                            );
+                        let style = &snip2pin::ui::style::PIN;
+                        ui.painter().rect_stroke(
+                            ui.max_rect(),
+                            0,
+                            egui::Stroke::new(
+                                style.highlight_stroke_pixels / ui.ctx().pixels_per_point(),
+                                style.highlight,
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
                     }
                     if hovered && let Some(row) = controls {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
@@ -478,6 +497,23 @@ impl eframe::App for Sandbox {
         }
         for event in events.into_inner() {
             self.pin_action(event, ui, bounds);
+        }
+        if let Some((id, until)) = self.unlock_hint {
+            if ui.input(|input| input.time) < until
+                && self.pins.iter().any(|pin| pin.id == id && pin.locked)
+            {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(
+                        until - ui.input(|input| input.time),
+                    ));
+                snip2pin::ui::screen_hint::show(
+                    ui,
+                    bounds,
+                    &snip2pin::ui::screen_hint::unlock_text(ui.ctx()),
+                );
+            } else {
+                self.unlock_hint = None;
+            }
         }
         if let Some((id, position)) = self.menu {
             let menu_rect = Rect::from_min_size(position, pin_view::MENU_SIZE);
