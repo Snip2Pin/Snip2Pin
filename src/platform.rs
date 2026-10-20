@@ -211,7 +211,7 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
         for window in application.windows() {
             let title = window.title().to_string();
             let pin_or_menu = title.starts_with("Snip2Pin · 贴图") || title == "Snip2Pin · 操作";
-            if title == "Snip2Pin · 框选" || pin_or_menu {
+            if title == snip2pin::SELECTION_WINDOW_TITLE || pin_or_menu {
                 let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary
                     | NSWindowCollectionBehavior::IgnoresCycle
@@ -222,7 +222,7 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
                 if pin_or_menu {
                     macos::prepare_pin(&window)?;
                 }
-                if title == "Snip2Pin · 框选" {
+                if title == snip2pin::SELECTION_WINDOW_TITLE {
                     // The demo is a regular small test window; it need not
                     // cover system UI or block other apps during development.
                     let level = if std::env::args().any(|argument| argument == "--demo") {
@@ -257,7 +257,9 @@ pub fn finish_capture(ctx: &egui::Context) {
             objc2_app_kit::NSCursor::arrowCursor().set();
             let application = objc2_app_kit::NSApplication::sharedApplication(main_thread);
             for window in application.windows() {
-                if window.title().to_string() == "Snip2Pin · 框选" && window.isKeyWindow() {
+                if window.title().to_string() == snip2pin::SELECTION_WINDOW_TITLE
+                    && window.isKeyWindow()
+                {
                     window.resignKeyWindow();
                 }
             }

@@ -404,11 +404,7 @@ impl Snip2Pin {
             match capture::Worker::new(
                 move |origin, cancelled| {
                     if demo {
-                        let mut snapshot = capture::demo();
-                        if let Some(origin) = origin {
-                            snapshot.display.origin = origin;
-                        }
-                        Ok(vec![snapshot])
+                        Ok(vec![capture::demo_windows(origin)])
                     } else {
                         capture::desktop(cancelled)
                     }
@@ -651,6 +647,9 @@ impl Snip2Pin {
                             texture,
                             pixels: snapshot.pixel_size(),
                             pixel_step: platform::selection_pixel_step(snapshot),
+                            windows: snapshot
+                                .window_regions(platform::selection_pixel_step(snapshot)),
+                            press: None,
                             start: None,
                             focus_requested: false,
                         };
@@ -1294,7 +1293,7 @@ impl Snip2Pin {
             ctx.show_viewport_deferred(
                 layer_id(display_id),
                 self.window_icon(egui::ViewportBuilder::default())
-                    .with_title("Snip2Pin · 框选")
+                    .with_title(snip2pin::SELECTION_WINDOW_TITLE)
                     .with_decorations(false)
                     .with_transparent(true)
                     .with_has_shadow(false)

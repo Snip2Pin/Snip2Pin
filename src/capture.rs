@@ -7,8 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use xcap::Monitor;
 
 use crate::geometry::PixelRect;
+mod windows;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::i18n::{Message, Text};
+pub use windows::WindowBounds;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod worker;
@@ -27,6 +29,7 @@ pub struct Display {
 pub struct Snapshot {
     pub display: Display,
     pub pixels: Arc<ColorImage>,
+    pub windows: Arc<[WindowBounds]>,
 }
 
 impl Snapshot {
@@ -36,10 +39,18 @@ impl Snapshot {
         Self {
             display,
             pixels: Arc::new(ColorImage::from_rgba_unmultiplied(size, pixels.as_raw())),
+            windows: Arc::from([]),
         }
     }
     pub fn pixel_size(&self) -> [u32; 2] {
         self.pixels.size.map(|length| length as u32)
+    }
+
+    pub fn window_regions(&self, pixel_step: [u32; 2]) -> Vec<PixelRect> {
+        self.windows
+            .iter()
+            .filter_map(|window| window.region(&self.display, self.pixel_size(), pixel_step))
+            .collect()
     }
 }
 
@@ -124,12 +135,19 @@ pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, Message> {
         .iter()
         .map(describe)
         .collect::<Result<Vec<_>, _>>()?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err(Text::CaptureCanceled.into());
+    }
+    let windows: Arc<[WindowBounds]> = windows::visible(cancelled).into();
     if let ([monitor], [display]) = (monitors.as_slice(), displays.as_slice()) {
-        return capture_monitor(monitor, display.clone(), cancelled).map(|snapshot| vec![snapshot]);
+        return capture_monitor(monitor, display.clone(), cancelled).map(|mut snapshot| {
+            snapshot.windows = windows;
+            vec![snapshot]
+        });
     }
     // Portal capture on Linux is coordinated by the desktop; do not request
     // concurrent permission dialogs. Windows/macOS capture independent displays.
-    collect_displays(
+    let mut snapshots = collect_displays(
         displays,
         !cfg!(target_os = "linux"),
         |display| {
@@ -141,7 +159,11 @@ pub fn desktop(cancelled: &AtomicBool) -> Result<Vec<Snapshot>, Message> {
             capture_monitor(&monitor, display, cancelled)
         },
         cancelled,
-    )
+    )?;
+    for snapshot in &mut snapshots {
+        snapshot.windows = windows.clone();
+    }
+    Ok(snapshots)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -244,6 +266,7 @@ pub fn demo() -> Snapshot {
     ];
     Snapshot {
         display: DISPLAY,
+        windows: Arc::from([]),
         pixels: Arc::new(ColorImage::new(
             PIXELS.map(|size| size as usize),
             (0..PIXELS[1])
@@ -255,6 +278,67 @@ pub fn demo() -> Snapshot {
                 .collect(),
         )),
     }
+}
+
+/// Generated window scene for the native demo and shared-UI browser sandbox.
+pub fn demo_windows(origin: Option<[f32; 2]>) -> Snapshot {
+    let mut snapshot = demo();
+    if let Some(origin) = origin {
+        snapshot.display.origin = origin;
+    }
+    let rectangles = [
+        PixelRect {
+            x: 260,
+            y: 160,
+            width: 520,
+            height: 340,
+        },
+        PixelRect {
+            x: 80,
+            y: 80,
+            width: 420,
+            height: 320,
+        },
+    ];
+    let image = Arc::make_mut(&mut snapshot.pixels);
+    for (index, rect) in rectangles.iter().enumerate().rev() {
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                let border = x == rect.x
+                    || x == rect.x + rect.width - 1
+                    || y == rect.y
+                    || y == rect.y + rect.height - 1;
+                image[(x as usize, y as usize)] = if border {
+                    eframe::egui::Color32::from_gray(32)
+                } else if y < rect.y + 28 {
+                    eframe::egui::Color32::from_rgb(48, 66 + index as u8 * 30, 90)
+                } else {
+                    let color = image[(x as usize, y as usize)];
+                    eframe::egui::Color32::from_rgb(
+                        color.r() / 3 * 2,
+                        color.g() / 3 * 2,
+                        color.b() / 3 * 2,
+                    )
+                };
+            }
+        }
+    }
+    let units: [f64; 2] = std::array::from_fn(|axis| {
+        f64::from(snapshot.display.size[axis]) / f64::from(snapshot.pixel_size()[axis])
+    });
+    snapshot.windows = rectangles
+        .map(|rect| WindowBounds {
+            origin: [
+                f64::from(snapshot.display.origin[0]) + f64::from(rect.x) * units[0],
+                f64::from(snapshot.display.origin[1]) + f64::from(rect.y) * units[1],
+            ],
+            size: [
+                f64::from(rect.width) * units[0],
+                f64::from(rect.height) * units[1],
+            ],
+        })
+        .into();
+    snapshot
 }
 
 #[cfg(test)]
@@ -299,6 +383,7 @@ mod tests {
                     wait.lock().expect("wait").recv().expect("release");
                     Ok(Snapshot {
                         display,
+                        windows: Arc::from([]),
                         pixels: Arc::new(ColorImage::filled([1, 1], eframe::egui::Color32::BLACK)),
                     })
                 },
@@ -336,6 +421,7 @@ mod tests {
                 cancelled.store(true, Ordering::Release);
                 Ok(Snapshot {
                     display,
+                    windows: Arc::from([]),
                     pixels: Arc::new(ColorImage::filled([1, 1], eframe::egui::Color32::BLACK)),
                 })
             },

@@ -174,6 +174,7 @@ fn capture_handoff_generated_4k_benchmark() {
         let mut app = app();
         let snapshots = (0..2)
             .map(|id| Snapshot {
+                windows: Arc::from([]),
                 display: Display {
                     id,
                     origin: [id as f32 * 3840.0, 0.0],
@@ -598,6 +599,105 @@ fn successful_selection_copies_only_cropped_pixels_once_and_can_copy_again() {
 }
 
 #[test]
+fn clicking_a_recognized_window_pins_and_copies_the_frozen_region_once() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let mut snapshot = capture::demo();
+    snapshot.display.origin = [-1000.0, 200.0];
+    snapshot.display.size = [480.0, 300.0];
+    snapshot.display.scale = 2.0;
+    snapshot.windows = vec![capture::WindowBounds {
+        origin: [-950.5, 225.5],
+        size: [100.0, 75.0],
+    }]
+    .into();
+    let metadata = Arc::downgrade(&snapshot.windows);
+    let expected_rect = if cfg!(target_os = "macos") {
+        geometry::PixelRect {
+            x: 98,
+            y: 50,
+            width: 202,
+            height: 152,
+        }
+    } else {
+        geometry::PixelRect {
+            x: 99,
+            y: 51,
+            width: 200,
+            height: 150,
+        }
+    };
+    let expected = capture::crop(&snapshot.pixels, expected_rect).expect("known source crop");
+    let bounds =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
+    let session = app.gate.begin().expect("capture");
+    app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+    let mut layers = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    layers.textures_delta.clear();
+    let viewport = layer_id(0);
+    let paint = layers.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .expect("real selection callback");
+    let point = bounds.min + bounds.size() * egui::vec2(160.0 / 960.0, 100.0 / 600.0);
+    for (index, events) in [
+        vec![egui::Event::PointerMoved(point)],
+        vec![egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        vec![egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(bounds),
+            events,
+            ..Default::default()
+        };
+        input.viewports.insert(
+            viewport,
+            egui::ViewportInfo {
+                inner_rect: Some(bounds),
+                native_pixels_per_point: Some(2.0),
+                ..Default::default()
+            },
+        );
+        let mut layer = ctx.run_ui(input, |ui| paint(ui));
+        layer.textures_delta.clear();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+        });
+        output.textures_delta.clear();
+        if index == 2 {
+            assert_eq!(app.pins.len(), 1);
+            assert_eq!(app.pins[&1].pixels.as_ref(), &expected);
+            assert!(
+                matches!(output.platform_output.commands.as_slice(), [egui::OutputCommand::CopyImage(image)] if image == &expected)
+            );
+        } else {
+            assert!(app.pins.is_empty());
+            assert!(output.platform_output.commands.is_empty());
+        }
+    }
+    app.restore(&ctx);
+    assert!(
+        metadata.upgrade().is_none(),
+        "window metadata lasts only for its capture session"
+    );
+}
+
+#[test]
 fn canceled_and_invalid_selections_leave_the_clipboard_untouched() {
     for rect in [
         None,
@@ -738,12 +838,9 @@ fn menu_bar_constrained_layer_waits_before_painting_the_full_desktop() {
             })
             .collect();
         if should_paint {
-            assert_eq!(
-                images,
-                vec![egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0)
-                )],
+            let expected = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+            assert!(
+                !images.is_empty() && images.iter().all(|image| *image == expected),
                 "Retina desktop must retain its full dimensions and aspect ratio"
             );
         } else {
@@ -1609,6 +1706,7 @@ fn retina_overlay_canonicalizes_odd_pixels_before_copy_and_initial_placement() {
         let mut app = app();
         let session = app.gate.begin().expect("capture starts");
         let snapshot = Snapshot {
+            windows: Arc::from([]),
             display: Display {
                 id: 0,
                 origin: [0.0, 0.0],

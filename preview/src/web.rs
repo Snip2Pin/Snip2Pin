@@ -68,6 +68,7 @@ struct Sandbox {
     message: Option<Message>,
     system_locale: Locale,
     source: Arc<ColorImage>,
+    windows: Vec<snip2pin::geometry::PixelRect>,
     texture: TextureHandle,
     icon: TextureHandle,
     selection: Option<overlay::Selection>,
@@ -91,7 +92,8 @@ impl Sandbox {
             }
             cc.egui_ctx.set_fonts(fonts);
         }
-        let source = capture::demo().pixels;
+        let scene = capture::demo_windows(None);
+        let source = scene.pixels.clone();
         Self {
             preferences: Preferences::default(),
             recording: false,
@@ -111,6 +113,7 @@ impl Sandbox {
                 Default::default(),
             ),
             source,
+            windows: scene.window_regions([1, 1]),
             selection: None,
             pins: Vec::new(),
             menu: None,
@@ -126,6 +129,8 @@ impl Sandbox {
             texture: self.texture.clone(),
             pixels: self.source.size.map(|n| n as u32),
             pixel_step: [1, 1],
+            windows: self.windows.clone(),
+            press: None,
             start: None,
             focus_requested: false,
         });

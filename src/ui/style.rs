@@ -55,8 +55,8 @@ pub const LAUNCHER: LauncherStyle = LauncherStyle {
 
 pub struct OverlayStyle {
     pub stroke: f32,
-    pub active: Color32,
-    pub dim: Color32,
+    pub highlight: Color32,
+    pub unselected_fill: Color32,
     pub hint_top: f32,
     pub hint_size: [f32; 2],
     pub hint_padding: [f32; 2],
@@ -67,8 +67,8 @@ pub struct OverlayStyle {
 
 pub const OVERLAY: OverlayStyle = OverlayStyle {
     stroke: 2.0,
-    active: Color32::from_rgb(56, 132, 255),
-    dim: Color32::from_black_alpha(28),
+    highlight: Color32::from_rgb(56, 132, 255),
+    unselected_fill: Color32::from_black_alpha(28),
     hint_top: 20.0,
     hint_size: [340.0, 36.0],
     hint_padding: [12.0, 8.0],
