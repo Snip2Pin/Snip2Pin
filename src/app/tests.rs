@@ -2093,6 +2093,7 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
     let pin = &app.pins[&1];
     let second = Pin {
         name: String::new(),
+        zoom_window: None,
         texture: pin.texture.clone(),
         pixels: pin.pixels.clone(),
         initial: pin.initial,

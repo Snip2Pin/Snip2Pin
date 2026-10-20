@@ -1,7 +1,7 @@
 //! Focus this process's pins while keeping the originating Home reachable.
 use snip2pin::i18n::{Message, Text};
 
-fn title(id: u64) -> String {
+pub(super) fn title(id: u64) -> String {
     format!("Snip2Pin · 贴图 {id}")
 }
 
@@ -286,7 +286,7 @@ pub fn activate(id: u64) -> Result<(), Message> {
 }
 
 #[cfg(target_os = "linux")]
-fn named_x11_windows(
+pub(super) fn named_x11_windows(
     connection: &impl x11rb::connection::Connection,
     root: u32,
     title: &str,

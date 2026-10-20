@@ -14,6 +14,27 @@ pub mod pin_menu;
 #[path = "platform/pin_window.rs"]
 pub mod pin_window;
 
+#[path = "platform/pin_zoom.rs"]
+pub mod pin_zoom;
+
+pub fn zoom_pin_native(
+    id: u64,
+    pixels: [usize; 2],
+    scale: f32,
+    commands: &[snip2pin::pin::Zoom],
+    cache: &mut Option<pin_zoom::Window>,
+) -> Result<bool, Message> {
+    if cache.is_none() {
+        *cache = pin_zoom::Window::find(id)?;
+    }
+    if let Some(window) = cache {
+        window.apply(pixels, scale, commands)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 #[path = "platform/quit_prompt.rs"]
 pub mod quit_prompt;
 

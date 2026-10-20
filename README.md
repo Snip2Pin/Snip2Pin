@@ -19,7 +19,7 @@ keep it above other windows, drag to move, and double-click to close.
 - 点击「截图并置顶」或按快捷键，悬停识别窗口后单击，或在任意显示器上拖动框选；完成后原位置顶，并自动复制到剪贴板。
 - 蓝框标识识别到的窗口，拖动时仅显示框选边界；未选区域略微变暗。按 Esc 取消。
 - 拖动贴图移动，拖动边缘或滚动鼠标缩放，双击关闭；边缘缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
-- 触摸板双指滑动平移、捏合缩放；触摸屏单指框选或拖动。精细滚动输入用于平移，普通滚轮用于缩放；仅模拟普通滚轮的触摸板保留滚轮操作，捏合也兼容 Ctrl+滚轮输入。
+- 在贴图上开始触摸板双指滑动平移、捏合或滚轮缩放，连续手势保持操作同一贴图；缩放固定开始时鼠标指向的图片点。触摸屏单指框选或拖动。精细滚动用于平移，普通滚轮用于缩放，捏合兼容 Ctrl+滚轮；Wayland 位置由系统管理。
 - 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，用方向键微调位置、`=`／`-` 微调缩放、`0` 恢复原始尺寸；按住 Shift 快速调整，滚轮同样支持。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
 - 菜单栏／托盘和 macOS Dock 提供主页、截图和关闭未锁定贴图等操作。有托盘时关闭主页会留在后台；「开机自启」默认关闭。
 
@@ -47,10 +47,11 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
   follow the operating system. Double-click to close. Copy always uses the original
   screenshot. Hover for copy, lock and close controls. Narrow pins hide leftmost
   buttons; the right-click menu retains every action without enlarging the image.
-- Swipe with two fingers on a trackpad to pan; pinch to zoom. Use one finger on a
-  touchscreen to select or drag. Precision scrolling pans; ordinary wheel input
-  zooms. Trackpads that only emulate an ordinary wheel retain wheel behavior;
-  pinch also accepts synthesized Ctrl+wheel input.
+- Start a trackpad pan, pinch or wheel zoom over a pin; a continuous gesture keeps
+  its initial target. Zoom keeps the image point initially under the pointer fixed.
+  Use one finger on a touchscreen to select or drag. Precision scrolling pans;
+  ordinary wheel input zooms, including trackpads that emulate a wheel. Pinch also
+  accepts Ctrl+wheel input. Wayland manages window positioning.
 - Click a pin's row in Home to focus it; double-click its name to edit.
   Focused pins stay highlighted. Use arrow keys for fine movement, `=` / `-` for fine zoom and `0` to restore the
   original size. Hold **Shift** for faster adjustments, including wheel zoom.

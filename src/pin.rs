@@ -27,6 +27,15 @@ pub enum Zoom {
     Out,
     Original,
     Scale(f32),
+    At { factor: f32, anchor: ZoomAnchor },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomAnchor {
+    pub fraction: [f32; 2],
+    /// Fixed screen point: macOS points, physical pixels on other hosts.
+    /// Absent when the host cannot report a global position.
+    pub screen: Option<[f32; 2]>,
 }
 
 /// Keyboard steps and direct gestures use different units at the host boundary.
@@ -72,7 +81,7 @@ pub fn zoom_size(
         // rather than rounding a small increase back to the same pixel.
         Zoom::In => current * FINE_ZOOM_FACTOR.max(1.0 + growth_factor),
         Zoom::Out => current * FINE_ZOOM_FACTOR.recip(),
-        Zoom::Scale(factor) if factor.is_finite() && factor > 0.0 => {
+        Zoom::Scale(factor) | Zoom::At { factor, .. } if factor.is_finite() && factor > 0.0 => {
             current
                 * if factor > 1.0 {
                     factor.max(1.0 + growth_factor)
@@ -80,12 +89,60 @@ pub fn zoom_size(
                     factor
                 }
         }
-        Zoom::Scale(_) => return None,
+        Zoom::Scale(_) | Zoom::At { .. } => return None,
         Zoom::Original => {
             egui::vec2(original_pixels[0] as f32, original_pixels[1] as f32) / pixels_per_point
         }
     };
     (size.is_finite() && size.min_elem() > 0.0).then_some(size)
+}
+
+/// Apply explicit zoom commands to observed content bounds. Gesture anchors are
+/// image fractions; quantize native size before deriving the anchored origin.
+pub fn zoom_rect(
+    mut current: Rect,
+    pixels: [usize; 2],
+    scale: f32,
+    commands: &[Zoom],
+) -> Option<Rect> {
+    if !current.is_finite() {
+        return None;
+    }
+    for &command in commands {
+        let mut size = zoom_size(current.size(), pixels, scale, command)?;
+        let mut origin = current.min;
+        if let Zoom::At { anchor, .. } = command {
+            let fraction = Vec2::from(anchor.fraction);
+            if !fraction.is_finite() || fraction.min_elem() < 0.0 || fraction.max_elem() > 1.0 {
+                return None;
+            }
+            let step = native_step(scale)?;
+            size = (size / step).round() * step;
+            if size.min_elem() <= 0.0 {
+                return None;
+            }
+            let point = anchor
+                .screen
+                .map(|point| {
+                    Pos2::from(point)
+                        / if cfg!(target_os = "macos") {
+                            1.0
+                        } else {
+                            scale
+                        }
+                })
+                .unwrap_or(current.min + current.size() * fraction);
+            if !point.is_finite() {
+                return None;
+            }
+            origin = point - size * fraction;
+        }
+        current = Rect::from_min_size(origin, size);
+        if !current.is_finite() {
+            return None;
+        }
+    }
+    Some(current)
 }
 
 /// Convert accumulated arrow-key steps into native logical window units.

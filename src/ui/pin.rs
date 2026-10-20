@@ -9,6 +9,32 @@ use super::{
 };
 
 mod input;
+mod session;
+
+pub fn forget_gesture(ctx: &egui::Context, id: u64) {
+    ctx.data_mut(|data| {
+        data.remove::<session::Session>(session::key(id));
+        if data
+            .get_temp::<session::Owner>(session::owner_key())
+            .is_some_and(|owner| owner.pin == id)
+        {
+            data.remove::<session::Owner>(session::owner_key());
+        }
+    });
+}
+
+/// Route a continuing gesture delivered to another window of this app.
+/// Input delivered to other processes remains under the operating system.
+pub fn route_gesture(ui: &egui::Ui, emit: &dyn Fn(Action)) {
+    let owner = ui
+        .ctx()
+        .data(|data| data.get_temp::<session::Owner>(session::owner_key()));
+    if let Some(owner) = owner
+        && owner.viewport != ui.ctx().viewport_id()
+    {
+        input::adjust(ui, owner.pin, false, Interaction::default(), true, emit);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -61,7 +87,7 @@ pub fn image_with_host(
     let bounds = ui.max_rect();
     let focused =
         keyboard_focus.unwrap_or_else(|| ui.input(|input| input.viewport().focused == Some(true)));
-    input::adjust(ui, id, focused, locked, excluded, events);
+    input::adjust(ui, id, focused, interaction, false, events);
     let resize_inset = if focused {
         PIN.focused_resize_inset
     } else {

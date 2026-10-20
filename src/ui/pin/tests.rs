@@ -1015,7 +1015,7 @@ fn wheel_units_and_precision_are_independent_of_ui_zoom() {
                 let [Action::Zoom(7, commands)] = actions.as_slice() else {
                     panic!("expected one wheel adjustment: {actions:?}")
                 };
-                let [Zoom::Scale(factor)] = commands.as_slice() else {
+                let [Zoom::At { factor, .. }] = commands.as_slice() else {
                     panic!("expected one scale: {commands:?}")
                 };
                 let expected = if fast { 1.25 } else { 1.01 };
@@ -1128,15 +1128,15 @@ fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
         let actions = actions.into_inner();
         if blocked == "none" {
             assert!(
-                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(factor)] if (*factor - 1.01).abs() < 0.00001))
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor, .. }] if (*factor - 1.01).abs() < 0.00001))
             );
         } else if blocked == "reset" {
             assert!(
-                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(before), Zoom::Original, Zoom::Scale(after)] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor: before, .. }, Zoom::Original, Zoom::At { factor: after, .. }] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
             );
         } else if blocked == "ctrl" {
             assert!(
-                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(factor)] if *factor > 1.0))
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor, .. }] if *factor > 1.0))
             );
         } else {
             assert!(actions.is_empty(), "blocked={blocked}: {actions:?}");

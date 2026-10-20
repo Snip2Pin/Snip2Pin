@@ -401,6 +401,43 @@ fn direct_gesture_units_do_not_change_with_display_density() {
 }
 
 #[test]
+fn gesture_zoom_keeps_the_image_point_fixed_after_native_size_quantization() {
+    for scale in [1.0, 1.25, 2.0, 3.0] {
+        for anchor in [[0.0, 0.0], [1.0, 1.0], [0.5, 0.5], [0.13, 0.71]] {
+            let mut rect =
+                egui::Rect::from_min_size(egui::pos2(-1920.0, 37.0), egui::vec2(301.0, 203.0));
+            let point = rect.min + rect.size() * egui::Vec2::from(anchor);
+            let screen_point = point
+                * if cfg!(target_os = "macos") {
+                    1.0
+                } else {
+                    scale
+                };
+            for factor in [1.25, 0.8, 0.5, 2.0, 1.01] {
+                rect = snip2pin::pin::zoom_rect(
+                    rect,
+                    [602, 406],
+                    scale,
+                    &[Zoom::At {
+                        factor,
+                        anchor: snip2pin::pin::ZoomAnchor {
+                            fraction: anchor,
+                            screen: Some(screen_point.into()),
+                        },
+                    }],
+                )
+                .expect("valid anchored bounds");
+                let actual = rect.min + rect.size() * egui::Vec2::from(anchor);
+                assert!(
+                    (actual - point).abs().max_elem() < 0.001,
+                    "scale={scale} anchor={anchor:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn restoring_legal_originals_preserves_one_to_one_pixels_and_aspect() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         for pixels in [[1, 1], [1, 120], [120, 1], [2, 2], [640, 480]] {

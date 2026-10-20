@@ -178,6 +178,50 @@ fn main() {
                         }
                     }
                     native.setFrame_display(original, false);
+                    if index == 0 {
+                        let initial_style = native.styleMask();
+                        let before = native.contentRectForFrameRect(native.frame());
+                        let anchor = [0.23, 0.71];
+                        let point = (
+                            before.origin.x + before.size.width * f64::from(anchor[0]),
+                            before.origin.y + before.size.height * (1.0 - f64::from(anchor[1])),
+                        );
+                        let primary = objc2_app_kit::NSScreen::screens(thread)
+                            .firstObject()
+                            .expect("primary screen");
+                        let top = primary.frame().origin.y + primary.frame().size.height;
+                        let mut zoom_window = None;
+                        for factor in [1.25, 0.8, 1.01] {
+                            platform::zoom_pin_native(
+                                index as u64,
+                                [600, 400],
+                                native.backingScaleFactor() as f32,
+                                &[pin::Zoom::At {
+                                    factor,
+                                    anchor: pin::ZoomAnchor {
+                                        fraction: anchor,
+                                        screen: Some([point.0 as f32, (top - point.1) as f32]),
+                                    },
+                                }],
+                                &mut zoom_window,
+                            )
+                            .expect("atomic anchored zoom");
+                            let actual = native.contentRectForFrameRect(native.frame());
+                            let moved = (
+                                actual.origin.x + actual.size.width * f64::from(anchor[0]),
+                                actual.origin.y + actual.size.height * (1.0 - f64::from(anchor[1])),
+                            );
+                            assert!(
+                                (moved.0 - point.0).abs() < 1.0 && (moved.1 - point.1).abs() < 1.0,
+                                "native content anchor drifted: factor={factor}, before={before:?}, actual={actual:?}, point={point:?}, moved={moved:?}"
+                            );
+                            assert_eq!(native.styleMask(), initial_style);
+                            assert!(
+                                !native.isVisible() && !native.isKeyWindow() && !app.isActive()
+                            );
+                        }
+                        native.setFrame_display(original, false);
+                    }
                 }
                 #[cfg(test)]
                 if index == 0 {

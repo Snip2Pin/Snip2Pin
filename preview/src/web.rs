@@ -124,7 +124,10 @@ impl Sandbox {
         }
     }
 
-    fn capture(&mut self) {
+    fn capture(&mut self, ctx: &egui::Context) {
+        for pin in &self.pins {
+            pin_view::forget_gesture(ctx, pin.id);
+        }
         self.message = None;
         self.menu = None;
         self.unlock_hint = None;
@@ -157,6 +160,7 @@ impl Sandbox {
             pin_view::Action::ClosePin(id) => {
                 if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
                     launcher::forget_pin_name(ui.ctx(), id);
+                    pin_view::forget_gesture(ui.ctx(), id);
                 }
                 self.pins.retain(|pin| pin.id != id || pin.locked);
                 if !self.pins.iter().any(|pin| Some(pin.id) == self.focused_pin) {
@@ -201,19 +205,20 @@ impl Sandbox {
             }
             pin_view::Action::Zoom(id, commands) => {
                 if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id && !pin.locked)
-                    && let Some(size) = commands.iter().try_fold(
-                        pin.image.size() * ui.ctx().zoom_factor(),
-                        |size, &command| {
-                            pin::zoom_size(
-                                size,
-                                pin.texture.size(),
-                                ui.ctx().native_pixels_per_point().unwrap_or(1.0),
-                                command,
-                            )
-                        },
+                    && let Some(rect) = pin::zoom_rect(
+                        egui::Rect::from_min_size(
+                            pin.image.min * ui.ctx().zoom_factor(),
+                            pin.image.size() * ui.ctx().zoom_factor(),
+                        ),
+                        pin.texture.size(),
+                        ui.ctx().native_pixels_per_point().unwrap_or(1.0),
+                        &commands,
                     )
                 {
-                    pin.image = Rect::from_min_size(pin.image.min, size / ui.ctx().zoom_factor());
+                    pin.image = Rect::from_min_size(
+                        rect.min / ui.ctx().zoom_factor(),
+                        rect.size() / ui.ctx().zoom_factor(),
+                    );
                 }
                 self.menu = None;
             }
@@ -279,7 +284,7 @@ impl eframe::App for Sandbox {
                 })
             })
         {
-            self.capture();
+            self.capture(ui.ctx());
         }
         if let Some(selection) = &mut self.selection {
             match overlay::show(ui, selection, true) {
@@ -382,10 +387,11 @@ impl eframe::App for Sandbox {
                     pin.name = name;
                 }
             }
-            Some(launcher::Action::Capture) => self.capture(),
+            Some(launcher::Action::Capture) => self.capture(ui.ctx()),
             Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
                 if !pin.locked {
                     launcher::forget_pin_name(ui.ctx(), pin.id);
+                    pin_view::forget_gesture(ui.ctx(), pin.id);
                 }
                 pin.locked
             }),
