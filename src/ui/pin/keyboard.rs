@@ -1,44 +1,30 @@
-//! Time-based held-arrow input; native windows remain authoritative for geometry.
-use eframe::egui::{self, Event, Key, Vec2};
+//! Discrete arrow-key input; system key repeats determine the movement cadence.
+use eframe::egui::{self, Event, Key};
 use snip2pin::pin::FAST_MOVE_STEPS;
 
 use super::{Action, input::reserved};
 
-struct Pace {
-    initial: f64,
-    acceleration: f64,
-    maximum: f64,
-}
-
-// Speeds use the same native steps as a fine arrow-key tap, per second.
-const NORMAL: Pace = Pace {
-    initial: 8.0,
-    acceleration: 1200.0,
-    maximum: 900.0,
-};
-// Leave time for a few fine steps before a sustained hold accelerates.
+// Preserve fine adjustment before increasing the distance of each repeat.
 const FINE_HOLD_SECONDS: f64 = 0.4;
-// Discard catch-up after a stalled frame, rather than teleporting the window.
-const MAX_FRAME_GAP: f64 = 0.1;
-
-impl Pace {
-    fn distance(&self, seconds: f64) -> f64 {
-        let after_fine = (seconds - FINE_HOLD_SECONDS).max(0.0);
-        let accelerating = after_fine.min((self.maximum - self.initial) / self.acceleration);
-        self.initial * seconds.min(FINE_HOLD_SECONDS)
-            + self.initial * accelerating
-            + 0.5 * self.acceleration * accelerating.powi(2)
-            + self.maximum * (after_fine - accelerating)
-    }
-}
+const STEP_GROWTH_PER_SECOND: f64 = 25.0;
 
 #[derive(Clone, Copy)]
 struct Hold {
-    direction: Vec2,
+    direction: [i32; 2],
     fast: bool,
-    time: f64,
-    age: f64,
-    fraction: Vec2,
+    started: f64,
+}
+
+impl Hold {
+    fn stride(self, time: f64) -> i32 {
+        if self.fast {
+            FAST_MOVE_STEPS
+        } else {
+            let accelerating = (time - self.started - FINE_HOLD_SECONDS).max(0.0);
+            (1.0 + (accelerating * STEP_GROWTH_PER_SECOND).floor()).min(f64::from(FAST_MOVE_STEPS))
+                as i32
+        }
+    }
 }
 
 fn state_id(id: u64) -> egui::Id {
@@ -62,7 +48,7 @@ fn direction(key: Key) -> Option<[i32; 2]> {
 pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action)) {
     let ctx = ui.ctx();
     let mut hold = ctx.data(|data| data.get_temp::<Hold>(state_id(id)));
-    let (steps, active) = ui.input(|input| {
+    let steps = ui.input(|input| {
         if !focused
             || !input.time.is_finite()
             || reserved(input.modifiers)
@@ -73,10 +59,24 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
                 .any(|event| matches!(event, Event::WindowFocused(false)))
         {
             hold = None;
-            return ([0, 0], false);
+            return [0, 0];
+        }
+        let held_direction = [
+            i32::from(input.key_down(Key::ArrowRight)) - i32::from(input.key_down(Key::ArrowLeft)),
+            i32::from(input.key_down(Key::ArrowDown)) - i32::from(input.key_down(Key::ArrowUp)),
+        ];
+        // An existing hold can change direction/modifiers, but interrupted input
+        // must receive a fresh press before repeat events may move it again.
+        if hold.is_some_and(|hold| {
+            hold.direction != held_direction || hold.fast != input.modifiers.shift
+        }) {
+            hold = Some(Hold {
+                direction: held_direction,
+                fast: input.modifiers.shift,
+                started: input.time,
+            });
         }
         let mut steps = [0_i32; 2];
-        let mut fresh = false;
         for event in &input.events {
             if let Event::Key {
                 key,
@@ -86,69 +86,41 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
                 ..
             } = event
                 && !reserved(*modifiers)
-                && (!repeat || (modifiers.shift && hold.is_some()))
                 && let Some(direction) = direction(*key)
             {
-                fresh |= !repeat;
-                let stride = if modifiers.shift { FAST_MOVE_STEPS } else { 1 };
+                if !repeat || hold.is_some_and(|hold| hold.fast != modifiers.shift) {
+                    hold = Some(Hold {
+                        direction: held_direction,
+                        fast: modifiers.shift,
+                        started: input.time,
+                    });
+                }
+                let Some(hold) = hold else { continue };
+                let stride = hold.stride(input.time);
                 for axis in 0..2 {
                     steps[axis] = steps[axis].saturating_add(direction[axis] * stride);
                 }
             }
         }
-        let keys = [
+        let any_held = [
             Key::ArrowLeft,
             Key::ArrowRight,
             Key::ArrowUp,
             Key::ArrowDown,
-        ];
-        if !keys.iter().any(|key| input.key_down(*key)) {
+        ]
+        .iter()
+        .any(|key| input.key_down(*key));
+        if !any_held {
             hold = None;
-            return (steps, false);
-        }
-        let direction = egui::vec2(
-            f32::from(input.key_down(Key::ArrowRight)) - f32::from(input.key_down(Key::ArrowLeft)),
-            f32::from(input.key_down(Key::ArrowDown)) - f32::from(input.key_down(Key::ArrowUp)),
-        )
-        .normalized();
-        // Focus/lock transitions must not resume a still-held or repeated key.
-        // Releasing Shift restores fine control without needing to release the arrow.
-        if fresh
-            || hold.is_some_and(|hold| {
-                hold.direction != direction || hold.fast != input.modifiers.shift
-            })
-        {
-            hold = Some(Hold {
-                direction,
-                fast: input.modifiers.shift,
-                time: input.time,
-                age: 0.0,
-                fraction: Vec2::ZERO,
-            });
-        } else if let Some(hold) = &mut hold
-            && !hold.fast
-        {
-            let elapsed = (input.time - hold.time).clamp(0.0, MAX_FRAME_GAP);
-            hold.time = input.time;
-            let distance = NORMAL.distance(hold.age + elapsed) - NORMAL.distance(hold.age);
-            hold.age += elapsed;
-            hold.fraction += direction * distance as f32;
-            for (axis, step) in steps.iter_mut().enumerate() {
-                let whole = hold.fraction[axis].trunc() as i32;
-                hold.fraction[axis] -= whole as f32;
-                *step = step.saturating_add(whole);
+        } else {
+            // Opposing keys cancel that axis without synthesizing movement.
+            for axis in 0..2 {
+                if held_direction[axis] == 0 {
+                    steps[axis] = 0;
+                }
             }
         }
-        // Opposing keys stop that axis immediately, including a fresh press.
-        for axis in 0..2 {
-            if direction[axis] == 0.0 {
-                steps[axis] = 0;
-            }
-        }
-        (
-            steps,
-            hold.is_some() && direction != Vec2::ZERO && !input.modifiers.shift,
-        )
+        steps
     });
     ctx.data_mut(|data| match hold {
         Some(hold) => {
@@ -161,8 +133,5 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
     if steps != [0, 0] {
         emit(Action::Move(id, steps));
         ctx.request_repaint_of(egui::ViewportId::ROOT);
-    }
-    if active {
-        ctx.request_repaint();
     }
 }

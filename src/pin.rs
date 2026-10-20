@@ -19,7 +19,7 @@ pub const METRICS: Metrics = Metrics {
 /// Explicit adjustments preserve proportions; Shift selects the faster pace.
 pub const FINE_ZOOM_FACTOR: f32 = 1.01;
 pub const FAST_ZOOM_FACTOR: f32 = 1.25;
-pub const FAST_MOVE_STEPS: i32 = 10;
+pub const FAST_MOVE_STEPS: i32 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Zoom {
