@@ -16,7 +16,6 @@ const NORMAL: Pace = Pace {
     acceleration: 1200.0,
     maximum: 900.0,
 };
-const SHIFT_SPEED: f64 = 1800.0;
 // Leave time for a few fine steps before a sustained hold accelerates.
 const FINE_HOLD_SECONDS: f64 = 0.4;
 // Discard catch-up after a stalled frame, rather than teleporting the window.
@@ -82,14 +81,15 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
             if let Event::Key {
                 key,
                 pressed: true,
-                repeat: false,
+                repeat,
                 modifiers,
                 ..
             } = event
                 && !reserved(*modifiers)
+                && (!repeat || (modifiers.shift && hold.is_some()))
                 && let Some(direction) = direction(*key)
             {
-                fresh = true;
+                fresh |= !repeat;
                 let stride = if modifiers.shift { FAST_MOVE_STEPS } else { 1 };
                 for axis in 0..2 {
                     steps[axis] = steps[axis].saturating_add(direction[axis] * stride);
@@ -125,14 +125,12 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
                 age: 0.0,
                 fraction: Vec2::ZERO,
             });
-        } else if let Some(hold) = &mut hold {
+        } else if let Some(hold) = &mut hold
+            && !hold.fast
+        {
             let elapsed = (input.time - hold.time).clamp(0.0, MAX_FRAME_GAP);
             hold.time = input.time;
-            let distance = if hold.fast {
-                SHIFT_SPEED * elapsed
-            } else {
-                NORMAL.distance(hold.age + elapsed) - NORMAL.distance(hold.age)
-            };
+            let distance = NORMAL.distance(hold.age + elapsed) - NORMAL.distance(hold.age);
             hold.age += elapsed;
             hold.fraction += direction * distance as f32;
             for (axis, step) in steps.iter_mut().enumerate() {
@@ -147,7 +145,10 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
                 steps[axis] = 0;
             }
         }
-        (steps, hold.is_some() && direction != Vec2::ZERO)
+        (
+            steps,
+            hold.is_some() && direction != Vec2::ZERO && !input.modifiers.shift,
+        )
     });
     ctx.data_mut(|data| match hold {
         Some(hold) => {

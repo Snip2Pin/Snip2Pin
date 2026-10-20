@@ -75,17 +75,22 @@ fn a_held_arrow_accelerates_without_system_repeat_events_and_stops_on_release() 
         (capped - 900.0).abs() <= 1.0,
         "maximum native steps per second: {capped}"
     );
+    let stalled = frame(&mut fixture, 100.0, vec![], true, false);
+    assert!(
+        stalled.x > 0.0 && stalled.x <= 91.0,
+        "a stalled frame must not catch up: {stalled:?}"
+    );
     assert_eq!(
         frame(
             &mut fixture,
-            3.01,
+            100.01,
             vec![key(egui::Key::ArrowRight, false)],
             true,
             false
         ),
         Vec2::ZERO
     );
-    assert_eq!(frame(&mut fixture, 4.0, vec![], true, false), Vec2::ZERO);
+    assert_eq!(frame(&mut fixture, 101.0, vec![], true, false), Vec2::ZERO);
 }
 
 #[test]
@@ -214,45 +219,7 @@ fn elapsed_time_and_normalized_direction_keep_speed_consistent_across_frame_rate
 }
 
 #[test]
-fn shift_arrows_move_at_full_speed_from_the_first_held_frame() {
-    for fps in [30, 60, 144] {
-        for diagonal in [false, true] {
-            let mut fixture = Fixture::new();
-            let mut events = vec![Event::ModifiersChanged(Modifiers::SHIFT)];
-            for key_code in [egui::Key::ArrowRight, egui::Key::ArrowDown]
-                .into_iter()
-                .take(if diagonal { 2 } else { 1 })
-            {
-                let mut press = key(key_code, true);
-                if let Event::Key { modifiers, .. } = &mut press {
-                    *modifiers = Modifiers::SHIFT;
-                }
-                events.push(press);
-            }
-            frame(&mut fixture, 0.0, events, true, false);
-            let mut total = Vec2::ZERO;
-            for i in 1..=fps {
-                let delta = frame(
-                    &mut fixture,
-                    f64::from(i) / f64::from(fps),
-                    vec![],
-                    true,
-                    false,
-                );
-                let expected = 1800.0 / fps as f32;
-                assert!(
-                    (delta.length() - expected).abs() <= 2.0,
-                    "Shift must start and stay at full speed: fps={fps}, delta={delta:?}"
-                );
-                total += delta;
-            }
-            assert!((total.length() - 1800.0).abs() <= 2.0);
-        }
-    }
-}
-
-#[test]
-fn shift_keeps_its_speed_and_a_stalled_frame_never_catches_up_in_one_jump() {
+fn shift_arrows_step_on_key_events_without_frame_driven_movement() {
     let mut fixture = Fixture::new();
     let mut press = key(egui::Key::ArrowRight, true);
     if let Event::Key { modifiers, .. } = &mut press {
@@ -262,40 +229,77 @@ fn shift_keeps_its_speed_and_a_stalled_frame_never_catches_up_in_one_jump() {
         frame(
             &mut fixture,
             0.0,
-            vec![Event::ModifiersChanged(Modifiers::SHIFT), press],
-            true,
-            false
-        ),
-        egui::vec2(10.0, 0.0)
-    );
-    let mut capped = 0.0;
-    for i in 1..=180 {
-        let delta = frame(&mut fixture, f64::from(i) / 60.0, vec![], true, false);
-        if i > 120 {
-            capped += delta.x;
-        }
-    }
-    assert!((capped - 1800.0).abs() <= 1.0, "fast speed cap: {capped}");
-    let stalled = frame(&mut fixture, 100.0, vec![], true, false);
-    assert!(
-        stalled.x > 0.0 && stalled.x <= 181.0,
-        "no catch-up jump: {stalled:?}"
-    );
-    assert_eq!(
-        frame(
-            &mut fixture,
-            100.01,
-            vec![key(egui::Key::ArrowRight, false)],
+            vec![Event::ModifiersChanged(Modifiers::SHIFT), press.clone()],
             true,
             false,
         ),
-        Vec2::ZERO
+        egui::vec2(10.0, 0.0)
     );
-    assert_eq!(frame(&mut fixture, 101.0, vec![], true, false), Vec2::ZERO);
+    assert_eq!(frame(&mut fixture, 0.1, vec![], true, false), Vec2::ZERO);
+    if let Event::Key { repeat, .. } = &mut press {
+        *repeat = true;
+    }
+    assert_eq!(
+        frame(&mut fixture, 0.2, vec![press], true, false),
+        egui::vec2(10.0, 0.0)
+    );
+    assert_eq!(frame(&mut fixture, 0.3, vec![], true, false), Vec2::ZERO);
 }
 
 #[test]
-fn changing_shift_while_an_arrow_is_held_switches_between_full_speed_and_fine_control() {
+fn shift_repeats_cannot_resume_movement_after_focus_loss_locking_or_cleanup() {
+    for interruption in ["focus", "lock", "cleanup"] {
+        let mut fixture = Fixture::new();
+        let mut press = key(egui::Key::ArrowRight, true);
+        if let Event::Key { modifiers, .. } = &mut press {
+            *modifiers = Modifiers::SHIFT;
+        }
+        assert_eq!(
+            frame(
+                &mut fixture,
+                0.0,
+                vec![Event::ModifiersChanged(Modifiers::SHIFT), press.clone()],
+                true,
+                false
+            ),
+            egui::vec2(10.0, 0.0)
+        );
+        if interruption == "cleanup" {
+            fixture.forget_input();
+        }
+        assert_eq!(
+            frame(
+                &mut fixture,
+                0.1,
+                vec![],
+                interruption != "focus",
+                interruption == "lock"
+            ),
+            Vec2::ZERO
+        );
+        if let Event::Key { repeat, .. } = &mut press {
+            *repeat = true;
+        }
+        assert_eq!(
+            frame(&mut fixture, 0.2, vec![press], true, false),
+            Vec2::ZERO
+        );
+        assert_eq!(
+            frame(
+                &mut fixture,
+                0.3,
+                vec![key(egui::Key::ArrowRight, false)],
+                true,
+                false,
+            ),
+            Vec2::ZERO
+        );
+        assert_eq!(frame(&mut fixture, 1.0, vec![], true, false), Vec2::ZERO);
+    }
+}
+
+#[test]
+fn changing_shift_while_an_arrow_is_held_switches_between_direct_steps_and_fine_control() {
     let mut fixture = Fixture::new();
     frame(
         &mut fixture,
@@ -318,10 +322,17 @@ fn changing_shift_while_an_arrow_is_held_switches_between_full_speed_and_fine_co
         Vec2::ZERO,
         "a modifier change must not retroactively charge the previous frame"
     );
-    let fast = frame(&mut fixture, 1.06, vec![], true, false);
-    assert!(
-        (fast.x - 90.0).abs() <= 1.0,
-        "immediate full speed: {fast:?}"
+    assert_eq!(frame(&mut fixture, 1.03, vec![], true, false), Vec2::ZERO);
+    let repeat = Event::Key {
+        key: egui::Key::ArrowRight,
+        physical_key: None,
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::SHIFT,
+    };
+    assert_eq!(
+        frame(&mut fixture, 1.06, vec![repeat], true, false),
+        egui::vec2(10.0, 0.0)
     );
     frame(
         &mut fixture,
