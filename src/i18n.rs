@@ -104,7 +104,7 @@ catalogue! {
     Capturing => ("Capturing · Click to cancel", "正在截图 · 点击取消"),
     CancelCapture => ("Cancel capture", "取消截图"),
     ContinueCapture => ("Allow access & continue", "授权后继续截图"),
-    CaptureHelp => ("Drag to select; Esc cancels. Drag pins to move, resize at the edges, double-click to close. Hover to copy or close.", "拖动框选，Esc 取消。拖动贴图移动，边缘缩放，双击关闭。悬停贴图可复制或关闭。"),
+    CaptureHelp => ("Drag to select; Esc cancels. Drag pins to move, resize at the edges. Hover to copy, lock or close.", "拖动框选，Esc 取消。拖动贴图移动，边缘缩放。悬停贴图可复制、锁定或关闭。"),
     LocalShortcut => ("In-app: {value}", "窗口内 {value}"),
     CancelEdit => ("Cancel", "取消修改"),
     ChangeShortcut => ("Change shortcut", "修改快捷键"),

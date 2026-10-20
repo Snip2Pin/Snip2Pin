@@ -66,8 +66,6 @@ pub struct Interaction {
     pub excluded: Option<Rect>,
     /// Virtual hosts supply per-image focus; native hosts use viewport focus.
     pub keyboard_focus: Option<bool>,
-    /// Native hosts can supply their authoritative double-click press.
-    pub native_double_click: Option<bool>,
 }
 
 /// The web sandbox intercepts these requests; desktop hosts handle the gesture.
@@ -85,7 +83,6 @@ pub fn image_with_host(
         locked,
         excluded,
         keyboard_focus,
-        native_double_click,
     } = interaction;
     let bounds = ui.max_rect();
     let focused =
@@ -96,11 +93,7 @@ pub fn image_with_host(
     } else {
         METRICS.inset
     };
-    let response = ui.interact(
-        bounds,
-        ui.id().with(("pin-image", id)),
-        Sense::click_and_drag(),
-    );
+    let response = ui.interact(bounds, ui.id().with(("pin-image", id)), Sense::drag());
     if ui.ctx().current_pass_index() == 0
         && ui.input(|input| input.pointer.secondary_clicked())
         && ui
@@ -141,13 +134,14 @@ pub fn image_with_host(
             .then(|| input.pointer.press_origin())
             .flatten()
     });
-    let pressed_image = pressed.is_some_and(|point| {
-        bounds.contains(point)
-            && ui.clip_rect().contains(point)
-            && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-            && !excluded.is_some_and(|rect| rect.contains(point))
-    });
-    if !locked && pressed_image && native_double_click != Some(true) {
+    if !locked
+        && pressed.is_some_and(|point| {
+            bounds.contains(point)
+                && ui.clip_rect().contains(point)
+                && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
+                && !excluded.is_some_and(|rect| rect.contains(point))
+        })
+    {
         let pressed_edge = (!native_edges)
             .then_some(pressed)
             .flatten()
@@ -175,39 +169,7 @@ pub fn image_with_host(
         events(Action::UnlockHint(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
-    let double_clicked_image = native_double_click.map_or_else(
-        || {
-            response.double_clicked()
-                && response.interact_pointer_pos().is_some_and(|point| {
-                    bounds.contains(point) && !excluded.is_some_and(|rect| rect.contains(point))
-                })
-        },
-        |double| {
-            double
-                && ui
-                    .input(|input| {
-                        input.events.iter().rev().find_map(|event| match event {
-                            egui::Event::PointerButton {
-                                pos,
-                                button: egui::PointerButton::Primary,
-                                pressed: true,
-                                ..
-                            } => Some(*pos),
-                            _ => None,
-                        })
-                    })
-                    .is_some_and(|point| {
-                        bounds.contains(point)
-                            && ui.clip_rect().contains(point)
-                            && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-                            && !excluded.is_some_and(|rect| rect.contains(point))
-                    })
-        },
-    );
-    if ui.ctx().current_pass_index() == 0
-        && !locked
-        && (double_clicked_image || close_requested(ui))
-    {
+    if ui.ctx().current_pass_index() == 0 && !locked && close_requested(ui) {
         events(Action::ClosePin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
