@@ -4,7 +4,7 @@ use snip2pin::pin::{FAST_MOVE_STEPS, FAST_ZOOM_FACTOR, FINE_ZOOM_FACTOR, Zoom, Z
 
 use super::{
     Action, Interaction,
-    session::{Kind, Owner, Session, Target},
+    session::{Owner, Session, Target},
 };
 
 fn reserved(modifiers: Modifiers) -> bool {
@@ -121,13 +121,12 @@ pub(super) fn adjust(
     let scroll_zoom_speed = ui
         .ctx()
         .options(|options| options.input_options.scroll_zoom_speed);
-    let (zooms, movement, pan) = ui.input(|input| {
+    let (zooms, movement) = ui.input(|input| {
         let mut zooms = Vec::new();
         let mut movement = [0_i32; 2];
         let mut scroll = [0.0; 2];
         let mut pinch = 1.0;
         let mut anchor = None;
-        let mut pan = egui::Vec2::ZERO;
         let explicit_zoom = input
             .events
             .iter()
@@ -198,17 +197,15 @@ pub(super) fn adjust(
                     && (!reserved(*modifiers)
                         || (modifiers.ctrl && !modifiers.alt && !modifiers.mac_cmd)) =>
                 {
-                    if explicit_zoom && (modifiers.ctrl || *unit == MouseWheelUnit::Point) {
+                    // Plain precision scrolling does not manipulate windows.
+                    // Ctrl+wheel remains a pinch fallback; native Zoom wins.
+                    if (explicit_zoom && modifiers.ctrl)
+                        || (*unit == MouseWheelUnit::Point && (!modifiers.ctrl || explicit_zoom))
+                    {
                         continue;
                     }
-                    let kind = if *unit == MouseWheelUnit::Point && !modifiers.ctrl {
-                        Kind::Pan
-                    } else {
-                        Kind::Zoom
-                    };
                     let Some(target) = Session::target(
                         &mut session,
-                        kind,
                         Some(*phase),
                         input.time,
                         Target {
@@ -218,12 +215,10 @@ pub(super) fn adjust(
                     ) else {
                         continue;
                     };
-                    if kind == Kind::Zoom {
-                        if anchor.is_some() && anchor != Some(target) {
-                            flush_scroll(&mut scroll, &mut pinch, &mut anchor, &mut zooms);
-                        }
-                        anchor = Some(target);
+                    if anchor.is_some() && anchor != Some(target) {
+                        flush_scroll(&mut scroll, &mut pinch, &mut anchor, &mut zooms);
                     }
+                    anchor = Some(target);
                     if modifiers.ctrl {
                         // Precision touchpads and browsers can synthesize pinch
                         // as Ctrl+wheel. Prefer a native zoom event if supplied.
@@ -237,12 +232,6 @@ pub(super) fn adjust(
                             if factor.is_finite() && factor > 0.0 {
                                 pinch *= factor;
                             }
-                        }
-                        continue;
-                    }
-                    if *unit == MouseWheelUnit::Point {
-                        if delta.is_finite() && !explicit_zoom {
-                            pan += *delta;
                         }
                         continue;
                     }
@@ -270,7 +259,6 @@ pub(super) fn adjust(
                 {
                     let Some(target) = Session::target(
                         &mut session,
-                        Kind::Zoom,
                         None,
                         input.time,
                         Target {
@@ -290,7 +278,7 @@ pub(super) fn adjust(
             }
         }
         flush_scroll(&mut scroll, &mut pinch, &mut anchor, &mut zooms);
-        (zooms, movement, pan)
+        (zooms, movement)
     });
     if gesture_enabled {
         ui.ctx().data_mut(|data| match session {
@@ -321,28 +309,6 @@ pub(super) fn adjust(
     }
     if movement != [0, 0] {
         emit(Action::Move(id, movement));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-    }
-    if pan.is_finite() && pan != egui::Vec2::ZERO {
-        let pan = if continuation && !cfg!(target_os = "macos") {
-            ui.input(|input| {
-                input
-                    .raw
-                    .viewports
-                    .get(&owner?.viewport)?
-                    .native_pixels_per_point
-            })
-            .filter(|scale| scale.is_finite() && *scale > 0.0)
-            .zip(ui.ctx().native_pixels_per_point())
-            .map(|(scale, source)| pan * source / scale)
-            .unwrap_or(egui::Vec2::ZERO)
-        } else {
-            pan
-        };
-        if pan == egui::Vec2::ZERO {
-            return;
-        }
-        emit(Action::Pan(id, pan));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
 }

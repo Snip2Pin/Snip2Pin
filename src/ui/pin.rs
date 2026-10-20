@@ -46,8 +46,6 @@ pub enum Action {
     ToggleLock(u64),
     Zoom(u64, Vec<Zoom>),
     Move(u64, [i32; 2]),
-    /// Direct gesture displacement in this UI's logical points.
-    Pan(u64, egui::Vec2),
 }
 
 const MENU_PADDING: f32 = 8.0;

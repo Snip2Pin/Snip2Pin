@@ -1009,7 +1009,7 @@ fn wheel_units_and_precision_are_independent_of_ui_zoom() {
                 assert_no_geometry(&output);
                 let actions = actions.into_inner();
                 if unit == egui::MouseWheelUnit::Point {
-                    assert_eq!(actions, [Action::Pan(7, egui::vec2(0.0, delta))]);
+                    assert!(actions.is_empty());
                     continue;
                 }
                 let [Action::Zoom(7, commands)] = actions.as_slice() else {

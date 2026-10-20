@@ -6,15 +6,8 @@ use snip2pin::pin::ZoomAnchor;
 // Native Start/End signals take precedence. No timer or idle polling is needed.
 const PHASELESS_IDLE: f64 = 0.150;
 
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Kind {
-    Pan,
-    Zoom,
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct Session {
-    kind: Kind,
     phased: bool,
     time: f64,
     anchor: Option<ZoomAnchor>,
@@ -49,7 +42,6 @@ impl Session {
     }
     pub fn target(
         slot: &mut Option<Self>,
-        kind: Kind,
         phase: Option<TouchPhase>,
         time: f64,
         target: Target,
@@ -59,9 +51,7 @@ impl Session {
             return None;
         }
         if phase == Some(TouchPhase::Start)
-            || slot.is_some_and(|session| {
-                session.kind != kind || (!session.phased && time - session.time > PHASELESS_IDLE)
-            })
+            || slot.is_some_and(|session| !session.phased && time - session.time > PHASELESS_IDLE)
         {
             *slot = None;
         }
@@ -80,7 +70,6 @@ impl Session {
                 })
             });
             *slot = Some(Self {
-                kind,
                 phased: phase == Some(TouchPhase::Start),
                 time,
                 anchor,

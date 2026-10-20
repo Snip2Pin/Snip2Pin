@@ -38,27 +38,6 @@ pub struct ZoomAnchor {
     pub screen: Option<[f32; 2]>,
 }
 
-/// Keyboard steps and direct gestures use different units at the host boundary.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Movement {
-    Steps([i32; 2]),
-    /// Native logical window units, with UI zoom already removed.
-    Points(Vec2),
-}
-
-impl Movement {
-    pub fn delta(self, native_scale: f32) -> Option<Vec2> {
-        match self {
-            Self::Steps(steps) => movement_delta(steps, native_scale),
-            Self::Points(delta) => (native_scale.is_finite()
-                && native_scale > 0.0
-                && delta.is_finite()
-                && delta != Vec2::ZERO)
-                .then_some(delta),
-        }
-    }
-}
-
 /// Size in native window logical units, derived from its observed content size.
 /// `pixels_per_point` is the native display scale; the host converts egui zoom
 /// at its boundary. macOS windows quantize to whole logical points, so

@@ -61,7 +61,7 @@ fn wheel(unit: egui::MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event
 }
 
 #[test]
-fn trackpad_pan_is_direct_and_batches_both_axes_without_native_drag() {
+fn plain_precision_scroll_does_not_move_or_resize_the_pin() {
     let mut fixture = Fixture::new();
     let (actions, commands) = fixture.paint(
         vec![
@@ -79,7 +79,10 @@ fn trackpad_pan_is_direct_and_batches_both_axes_without_native_drag() {
         ],
         Interaction::default(),
     );
-    assert_eq!(actions, [Action::Pan(7, egui::vec2(4.25, -1.5))]);
+    assert!(
+        actions.is_empty(),
+        "two-finger scrolling is not window dragging"
+    );
     assert!(commands.is_empty());
     assert!(
         fixture
@@ -90,13 +93,13 @@ fn trackpad_pan_is_direct_and_batches_both_axes_without_native_drag() {
 }
 
 #[test]
-fn a_pan_keeps_its_initial_target_until_the_native_end() {
+fn wheel_zoom_keeps_its_initial_anchor_until_the_native_end() {
     let mut fixture = Fixture::new();
     fixture.paint(
         vec![
             Event::PointerMoved(egui::pos2(80.0, 80.0)),
             Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
+                unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
                 phase: egui::TouchPhase::Start,
@@ -108,17 +111,19 @@ fn a_pan_keeps_its_initial_target_until_the_native_end() {
         vec![
             Event::PointerMoved(egui::pos2(-40.0, 80.0)),
             wheel(
-                egui::MouseWheelUnit::Point,
-                egui::vec2(-20.0, 3.0),
+                egui::MouseWheelUnit::Line,
+                egui::vec2(0.0, 1.0),
                 Modifiers::NONE,
             ),
         ],
         Interaction::default(),
     );
-    assert_eq!(actions, [Action::Pan(7, egui::vec2(-20.0, 3.0))]);
+    assert!(matches!(actions.as_slice(), [Action::Zoom(7, commands)]
+        if matches!(commands.as_slice(), [Zoom::At { anchor, .. }]
+            if anchor.fraction == [1.0 / 3.0, 0.5])));
     fixture.paint(
         vec![Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
+            unit: egui::MouseWheelUnit::Line,
             delta: Vec2::ZERO,
             modifiers: Modifiers::NONE,
             phase: egui::TouchPhase::End,
@@ -129,8 +134,8 @@ fn a_pan_keeps_its_initial_target_until_the_native_end() {
         fixture
             .paint(
                 vec![wheel(
-                    egui::MouseWheelUnit::Point,
-                    egui::vec2(-20.0, 3.0),
+                    egui::MouseWheelUnit::Line,
+                    egui::vec2(0.0, 1.0),
                     Modifiers::NONE
                 )],
                 Interaction::default()
@@ -179,13 +184,13 @@ fn zoom_keeps_its_original_image_anchor_when_the_pointer_leaves() {
 }
 
 #[test]
-fn a_pan_that_started_outside_cannot_pick_up_a_pin_mid_gesture() {
+fn wheel_zoom_started_outside_cannot_pick_up_a_pin_mid_gesture() {
     let mut fixture = Fixture::new();
     fixture.paint(
         vec![
             Event::PointerMoved(egui::pos2(-40.0, 80.0)),
             Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
+                unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
                 phase: egui::TouchPhase::Start,
@@ -199,8 +204,8 @@ fn a_pan_that_started_outside_cannot_pick_up_a_pin_mid_gesture() {
                 vec![
                     Event::PointerMoved(egui::pos2(80.0, 80.0)),
                     wheel(
-                        egui::MouseWheelUnit::Point,
-                        egui::vec2(5.0, 8.0),
+                        egui::MouseWheelUnit::Line,
+                        egui::vec2(0.0, 1.0),
                         Modifiers::NONE
                     )
                 ],
@@ -253,7 +258,7 @@ fn native_end_and_cancel_release_the_target_even_with_reserved_modifiers() {
 }
 
 #[test]
-fn continuing_input_in_another_app_viewport_stays_with_the_original_pin() {
+fn zoom_continuation_delivered_to_another_app_viewport_keeps_the_original_pin() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let texture = texture(&ctx);
@@ -296,55 +301,51 @@ fn continuing_input_in_another_app_viewport_stays_with_the_original_pin() {
         vec![
             Event::PointerMoved(egui::pos2(80.0, 80.0)),
             Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
+                unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
                 phase: egui::TouchPhase::Start,
             },
         ],
     );
-    assert_eq!(
-        paint(
-            second,
-            8,
-            vec![
-                Event::PointerMoved(egui::pos2(80.0, 80.0)),
-                wheel(
-                    egui::MouseWheelUnit::Point,
-                    egui::vec2(12.0, -3.0),
-                    Modifiers::NONE
-                )
-            ]
-        ),
-        [Action::Pan(7, egui::vec2(12.0, -3.0))]
+    let continued = paint(
+        second,
+        8,
+        vec![
+            Event::PointerMoved(egui::pos2(80.0, 80.0)),
+            wheel(
+                egui::MouseWheelUnit::Line,
+                egui::vec2(0.0, 1.0),
+                Modifiers::NONE,
+            ),
+        ],
     );
+    assert!(matches!(continued.as_slice(), [Action::Zoom(7, _)]));
     paint(
         second,
         8,
         vec![Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
+            unit: egui::MouseWheelUnit::Line,
             delta: Vec2::ZERO,
             modifiers: Modifiers::ALT,
             phase: egui::TouchPhase::End,
         }],
     );
-    assert_eq!(
-        paint(
-            second,
-            8,
-            vec![Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(2.0, 4.0),
-                modifiers: Modifiers::NONE,
-                phase: egui::TouchPhase::Start,
-            }]
-        ),
-        [Action::Pan(8, egui::vec2(2.0, 4.0))]
+    let next = paint(
+        second,
+        8,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Start,
+        }],
     );
+    assert!(matches!(next.as_slice(), [Action::Zoom(8, _)]));
 }
 
 #[test]
-fn native_pinch_takes_priority_over_synthesized_scroll_and_pan() {
+fn native_pinch_takes_priority_over_synthesized_scroll() {
     for locked in [false, true] {
         let mut fixture = Fixture::new();
         let (actions, commands) = fixture.paint(

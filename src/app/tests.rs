@@ -2486,9 +2486,7 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
             ..Default::default()
         },
     );
-    let output = ctx.run_logic(&input, |ctx| {
-        app.move_pin(1, pin::Movement::Steps([2, -3]), None, ctx)
-    });
+    let output = ctx.run_logic(&input, |ctx| app.move_pin(1, [2, -3], None, ctx));
     let step = if cfg!(target_os = "macos") { 1.0 } else { 0.5 };
     assert_eq!(
         output.viewport_commands[&pin_id(1)],
@@ -2499,29 +2497,12 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
     );
     assert_eq!(app.pins[&1].initial, initial);
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
-    let pan = ctx.run_logic(&input, |ctx| {
-        dispatch_pin(
-            ui::pin::Action::Pan(1, egui::vec2(2.5, -1.25)),
-            &app.sender,
-            ctx,
-            None,
-        );
-        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
-    });
-    assert!(
-        pan.viewport_commands[&pin_id(1)]
-            .iter()
-            .any(|command| matches!(command,
-        ViewportCommand::OuterPosition(position) if *position == egui::pos2(-47.5, 17.25)))
-    );
     input
         .viewports
         .get_mut(&pin_id(1))
         .expect("viewport")
         .outer_rect = None;
-    let absent = ctx.run_logic(&input, |ctx| {
-        app.move_pin(1, pin::Movement::Steps([1, 0]), None, ctx)
-    });
+    let absent = ctx.run_logic(&input, |ctx| app.move_pin(1, [1, 0], None, ctx));
     assert!(
         !absent.viewport_commands.contains_key(&pin_id(1)),
         "do not guess a native outer origin from content or initial geometry"
@@ -2529,17 +2510,10 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
     app.sender
         .send(Event::MovePin(
             1,
-            pin::Movement::Steps([1, 0]),
+            [1, 0],
             Some((egui::pos2(-100.0, 37.0), 2.0)),
         ))
         .expect("queued before lock");
-    app.sender
-        .send(Event::MovePin(
-            1,
-            pin::Movement::Points(egui::vec2(2.5, -1.25)),
-            Some((egui::pos2(-100.0, 37.0), 2.0)),
-        ))
-        .expect("gesture queued before lock");
     app.pins.get_mut(&1).expect("pin").locked = true;
     let locked = ctx.run_logic(&input, |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
