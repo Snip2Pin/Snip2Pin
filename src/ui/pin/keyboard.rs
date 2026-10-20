@@ -16,11 +16,7 @@ const NORMAL: Pace = Pace {
     acceleration: 1200.0,
     maximum: 900.0,
 };
-const FAST: Pace = Pace {
-    initial: 16.0,
-    acceleration: 2400.0,
-    maximum: 1800.0,
-};
+const SHIFT_SPEED: f64 = 1800.0;
 // Leave time for a few fine steps before a sustained hold accelerates.
 const FINE_HOLD_SECONDS: f64 = 0.4;
 // Discard catch-up after a stalled frame, rather than teleporting the window.
@@ -40,6 +36,7 @@ impl Pace {
 #[derive(Clone, Copy)]
 struct Hold {
     direction: Vec2,
+    fast: bool,
     time: f64,
     age: f64,
     fraction: Vec2,
@@ -115,9 +112,15 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
         )
         .normalized();
         // Focus/lock transitions must not resume a still-held or repeated key.
-        if fresh || hold.is_some_and(|hold| hold.direction != direction) {
+        // Releasing Shift restores fine control without needing to release the arrow.
+        if fresh
+            || hold.is_some_and(|hold| {
+                hold.direction != direction || hold.fast != input.modifiers.shift
+            })
+        {
             hold = Some(Hold {
                 direction,
+                fast: input.modifiers.shift,
                 time: input.time,
                 age: 0.0,
                 fraction: Vec2::ZERO,
@@ -125,12 +128,11 @@ pub(super) fn adjust(ui: &egui::Ui, id: u64, focused: bool, emit: &dyn Fn(Action
         } else if let Some(hold) = &mut hold {
             let elapsed = (input.time - hold.time).clamp(0.0, MAX_FRAME_GAP);
             hold.time = input.time;
-            let pace = if input.modifiers.shift {
-                &FAST
+            let distance = if hold.fast {
+                SHIFT_SPEED * elapsed
             } else {
-                &NORMAL
+                NORMAL.distance(hold.age + elapsed) - NORMAL.distance(hold.age)
             };
-            let distance = pace.distance(hold.age + elapsed) - pace.distance(hold.age);
             hold.age += elapsed;
             hold.fraction += direction * distance as f32;
             for (axis, step) in steps.iter_mut().enumerate() {
