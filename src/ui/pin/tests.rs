@@ -4,6 +4,7 @@ use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Vec2};
 
 mod gestures;
+mod keyboard;
 
 fn image(
     ui: &mut egui::Ui,
@@ -1206,7 +1207,7 @@ fn wheel_zoom_tracks_hover_without_requiring_keyboard_focus() {
 }
 
 #[test]
-fn shift_arrows_accumulate_fast_movement_once() {
+fn shift_arrow_taps_accumulate_fast_movement_once() {
     let ctx = egui::Context::default();
     let texture = texture(&ctx);
     let actions = RefCell::new(Vec::new());
@@ -1214,12 +1215,14 @@ fn shift_arrows_accumulate_fast_movement_once() {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
         events: [egui::Key::ArrowRight, egui::Key::ArrowRight]
             .into_iter()
-            .map(|key| Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: true,
-                modifiers: Modifiers::SHIFT,
+            .flat_map(|key| {
+                [true, false].map(|pressed| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                })
             })
             .collect(),
         ..Default::default()

@@ -1,13 +1,13 @@
 //! Translate explicit user input into semantic adjustments, never geometry.
 use eframe::egui::{self, Event, Modifiers, MouseWheelUnit};
-use snip2pin::pin::{FAST_MOVE_STEPS, FAST_ZOOM_FACTOR, FINE_ZOOM_FACTOR, Zoom, ZoomAnchor};
+use snip2pin::pin::{FAST_ZOOM_FACTOR, FINE_ZOOM_FACTOR, Zoom, ZoomAnchor};
 
 use super::{
     Action, Interaction,
     session::{Owner, Session, Target},
 };
 
-fn reserved(modifiers: Modifiers) -> bool {
+pub(super) fn reserved(modifiers: Modifiers) -> bool {
     modifiers.ctrl || modifiers.command || modifiers.mac_cmd || modifiers.alt
 }
 
@@ -55,7 +55,7 @@ pub(super) fn adjust(
         || ui.ctx().current_pass_index() != 0
     {
         if ui.ctx().current_pass_index() == 0 {
-            super::forget_gesture(ui.ctx(), id);
+            super::forget_input(ui.ctx(), id);
         }
         return;
     }
@@ -121,9 +121,8 @@ pub(super) fn adjust(
     let scroll_zoom_speed = ui
         .ctx()
         .options(|options| options.input_options.scroll_zoom_speed);
-    let (zooms, movement) = ui.input(|input| {
+    let zooms = ui.input(|input| {
         let mut zooms = Vec::new();
-        let mut movement = [0_i32; 2];
         let mut scroll = [0.0; 2];
         let mut pinch = 1.0;
         let mut anchor = None;
@@ -151,7 +150,6 @@ pub(super) fn adjust(
                     modifiers,
                     ..
                 } if focused && !reserved(*modifiers) => {
-                    let step = if modifiers.shift { FAST_MOVE_STEPS } else { 1 };
                     let command = match key {
                         egui::Key::Plus | egui::Key::Equals => Some(if modifiers.shift {
                             Zoom::Scale(FAST_ZOOM_FACTOR)
@@ -164,22 +162,6 @@ pub(super) fn adjust(
                             Zoom::Out
                         }),
                         egui::Key::Num0 => Some(Zoom::Original),
-                        egui::Key::ArrowLeft => {
-                            movement[0] = movement[0].saturating_sub(step);
-                            None
-                        }
-                        egui::Key::ArrowRight => {
-                            movement[0] = movement[0].saturating_add(step);
-                            None
-                        }
-                        egui::Key::ArrowUp => {
-                            movement[1] = movement[1].saturating_sub(step);
-                            None
-                        }
-                        egui::Key::ArrowDown => {
-                            movement[1] = movement[1].saturating_add(step);
-                            None
-                        }
                         _ => None,
                     };
                     if let Some(command) = command {
@@ -278,7 +260,7 @@ pub(super) fn adjust(
             }
         }
         flush_scroll(&mut scroll, &mut pinch, &mut anchor, &mut zooms);
-        (zooms, movement)
+        zooms
     });
     if gesture_enabled {
         ui.ctx().data_mut(|data| match session {
@@ -307,8 +289,7 @@ pub(super) fn adjust(
         emit(Action::Zoom(id, zooms));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
-    if movement != [0, 0] {
-        emit(Action::Move(id, movement));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    if !continuation {
+        super::keyboard::adjust(ui, id, focused, emit);
     }
 }

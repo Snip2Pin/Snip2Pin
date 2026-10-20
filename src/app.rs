@@ -408,7 +408,7 @@ impl Snip2Pin {
 
     fn begin_capture(&mut self, ctx: &egui::Context) {
         for id in self.pins.keys() {
-            ui::pin::forget_gesture(ctx, *id);
+            ui::pin::forget_input(ctx, *id);
         }
         if !matches!(self.phase, Phase::Idle) || self.recording {
             return;
@@ -849,7 +849,7 @@ impl Snip2Pin {
     }
 
     fn open_pin_menu(&mut self, id: u64, position: Option<egui::Pos2>, ctx: &egui::Context) {
-        ui::pin::forget_gesture(ctx, id);
+        ui::pin::forget_input(ctx, id);
         let Some(pin) = self.pins.get(&id) else {
             return;
         };
@@ -891,7 +891,7 @@ impl Snip2Pin {
         }
         if let Some(pin) = self.pins.remove(&id) {
             launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_gesture(ctx, id);
+            ui::pin::forget_input(ctx, id);
             ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
@@ -965,7 +965,7 @@ impl Snip2Pin {
     }
 
     fn set_pin_locked(&mut self, id: u64, locked: bool, ctx: &egui::Context) {
-        ui::pin::forget_gesture(ctx, id);
+        ui::pin::forget_input(ctx, id);
         let Some(pin) = self.pins.get_mut(&id) else {
             return;
         };
@@ -1128,7 +1128,7 @@ impl Snip2Pin {
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
             launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_gesture(ctx, id);
+            ui::pin::forget_input(ctx, id);
             ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);

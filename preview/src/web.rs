@@ -126,7 +126,7 @@ impl Sandbox {
 
     fn capture(&mut self, ctx: &egui::Context) {
         for pin in &self.pins {
-            pin_view::forget_gesture(ctx, pin.id);
+            pin_view::forget_input(ctx, pin.id);
         }
         self.message = None;
         self.menu = None;
@@ -160,7 +160,7 @@ impl Sandbox {
             pin_view::Action::ClosePin(id) => {
                 if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
                     launcher::forget_pin_name(ui.ctx(), id);
-                    pin_view::forget_gesture(ui.ctx(), id);
+                    pin_view::forget_input(ui.ctx(), id);
                 }
                 self.pins.retain(|pin| pin.id != id || pin.locked);
                 if !self.pins.iter().any(|pin| Some(pin.id) == self.focused_pin) {
@@ -384,7 +384,7 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
                 if !pin.locked {
                     launcher::forget_pin_name(ui.ctx(), pin.id);
-                    pin_view::forget_gesture(ui.ctx(), pin.id);
+                    pin_view::forget_input(ui.ctx(), pin.id);
                 }
                 pin.locked
             }),

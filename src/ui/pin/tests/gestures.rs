@@ -1,13 +1,16 @@
 use super::*;
 
-struct Fixture {
+pub(super) struct Fixture {
     ctx: egui::Context,
     texture: TextureHandle,
     frame: u32,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn forget_input(&self) {
+        super::super::forget_input(&self.ctx, 7);
+    }
+    pub(super) fn new() -> Self {
         let ctx = egui::Context::default();
         let texture = texture(&ctx);
         Self {
@@ -22,13 +25,24 @@ impl Fixture {
         events: Vec<Event>,
         interaction: Interaction,
     ) -> (Vec<Action>, Vec<ViewportCommand>) {
+        let time = f64::from(self.frame) / 60.0;
+        self.frame += 1;
+        self.paint_at(time, events, interaction)
+    }
+
+    pub(super) fn paint_at(
+        &mut self,
+        time: f64,
+        events: Vec<Event>,
+        interaction: Interaction,
+    ) -> (Vec<Action>, Vec<ViewportCommand>) {
         let actions = RefCell::new(Vec::new());
         let commands = RefCell::new(Vec::new());
         let mut output = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
                 events,
-                time: Some(f64::from(self.frame) / 60.0),
+                time: Some(time),
                 ..Default::default()
             },
             |ui| {
@@ -46,7 +60,6 @@ impl Fixture {
             },
         );
         output.textures_delta.clear();
-        self.frame += 1;
         (actions.into_inner(), commands.into_inner())
     }
 }

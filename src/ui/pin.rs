@@ -9,9 +9,11 @@ use super::{
 };
 
 mod input;
+mod keyboard;
 mod session;
 
-pub fn forget_gesture(ctx: &egui::Context, id: u64) {
+pub fn forget_input(ctx: &egui::Context, id: u64) {
+    keyboard::forget(ctx, id);
     ctx.data_mut(|data| {
         data.remove::<session::Session>(session::key(id));
         if data
