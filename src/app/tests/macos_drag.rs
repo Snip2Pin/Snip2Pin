@@ -43,9 +43,9 @@ impl Fixture {
             screen: pin.screen,
             screen_areas: pin.screen_areas.clone(),
             session: pin.session,
-            ready: Arc::new(AtomicBool::new(false)),
+            first_frame_drawn: Arc::new(AtomicBool::new(false)),
             locked: false,
-            presented: Cell::new(false),
+            show_requested: Cell::new(false),
         };
         app.pins.insert(2, second);
         let area = egui::Rect::from_min_max(egui::pos2(0.0, 30.0), egui::pos2(2560.0, 1440.0));
@@ -137,7 +137,7 @@ impl Fixture {
             .events
             .try_iter()
             .filter_map(|event| match event {
-                Event::BeginPinDrag(id, press) => Some((id, press)),
+                Event::BeginPinDrag { pin_id: id, press } => Some((id, press)),
                 _ => None,
             })
             .collect()

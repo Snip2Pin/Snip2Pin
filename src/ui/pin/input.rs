@@ -11,14 +11,67 @@ pub(super) fn reserved(modifiers: Modifiers) -> bool {
     modifiers.ctrl || modifiers.command || modifiers.mac_cmd || modifiers.alt
 }
 
+#[derive(Default)]
+struct ScrollSteps {
+    ordinary: f32,
+    fast: f32,
+}
+
+fn keyboard_zoom(key: egui::Key, shift: bool) -> Option<Zoom> {
+    match key {
+        egui::Key::Plus | egui::Key::Equals => Some(if shift {
+            Zoom::Scale(FAST_ZOOM_FACTOR)
+        } else {
+            Zoom::In
+        }),
+        egui::Key::Minus => Some(if shift {
+            Zoom::Scale(FAST_ZOOM_FACTOR.recip())
+        } else {
+            Zoom::Out
+        }),
+        egui::Key::Num0 => Some(Zoom::Original),
+        _ => None,
+    }
+}
+
+fn wheel_points(
+    unit: MouseWheelUnit,
+    delta: egui::Vec2,
+    points_per_line: f32,
+    page_size: egui::Vec2,
+    zoom: f32,
+) -> egui::Vec2 {
+    match unit {
+        MouseWheelUnit::Line => delta * points_per_line,
+        MouseWheelUnit::Point => delta * zoom,
+        MouseWheelUnit::Page => delta * page_size * zoom,
+    }
+}
+
+fn wheel_steps(
+    unit: MouseWheelUnit,
+    delta_y: f32,
+    points_per_line: f32,
+    page_height: f32,
+    zoom: f32,
+) -> f32 {
+    match unit {
+        MouseWheelUnit::Line => delta_y,
+        MouseWheelUnit::Page if points_per_line.is_finite() && points_per_line > 0.0 => {
+            delta_y * page_height * zoom / points_per_line
+        }
+        _ => 0.0,
+    }
+}
+
 fn flush_scroll(
-    steps: &mut [f32; 2],
+    steps: &mut ScrollSteps,
     pinch: &mut f32,
     anchor: &mut Option<ZoomAnchor>,
     zooms: &mut Vec<Zoom>,
 ) {
-    let factor = FINE_ZOOM_FACTOR.powf(steps[0]) * FAST_ZOOM_FACTOR.powf(steps[1]) * *pinch;
-    *steps = [0.0; 2];
+    let factor = FINE_ZOOM_FACTOR.powf(steps.ordinary) * FAST_ZOOM_FACTOR.powf(steps.fast) * *pinch;
+    *steps = ScrollSteps::default();
     *pinch = 1.0;
     let anchor = anchor.take();
     if factor.is_finite() && factor > 0.0 && factor != 1.0 {
@@ -114,7 +167,7 @@ pub(super) fn adjust(
         .options(|options| options.input_options.scroll_zoom_speed);
     let zooms = ui.input(|input| {
         let mut zooms = Vec::new();
-        let mut scroll = [0.0; 2];
+        let mut scroll = ScrollSteps::default();
         let mut pinch = 1.0;
         let mut anchor = None;
         let explicit_zoom = input
@@ -141,21 +194,7 @@ pub(super) fn adjust(
                     modifiers,
                     ..
                 } if focused && !reserved(*modifiers) => {
-                    let command = match key {
-                        egui::Key::Plus | egui::Key::Equals => Some(if modifiers.shift {
-                            Zoom::Scale(FAST_ZOOM_FACTOR)
-                        } else {
-                            Zoom::In
-                        }),
-                        egui::Key::Minus => Some(if modifiers.shift {
-                            Zoom::Scale(FAST_ZOOM_FACTOR.recip())
-                        } else {
-                            Zoom::Out
-                        }),
-                        egui::Key::Num0 => Some(Zoom::Original),
-                        _ => None,
-                    };
-                    if let Some(command) = command {
+                    if let Some(command) = keyboard_zoom(*key, modifiers.shift) {
                         flush_scroll(&mut scroll, &mut pinch, &mut anchor, &mut zooms);
                         zooms.push(command);
                     }
@@ -196,11 +235,8 @@ pub(super) fn adjust(
                         // Precision touchpads and browsers can synthesize pinch
                         // as Ctrl+wheel. Prefer a native zoom event if supplied.
                         if !explicit_zoom {
-                            let points = match unit {
-                                MouseWheelUnit::Line => *delta * points_per_line,
-                                MouseWheelUnit::Point => *delta * zoom,
-                                MouseWheelUnit::Page => *delta * page_size * zoom,
-                            };
+                            let points =
+                                wheel_points(*unit, *delta, points_per_line, page_size, zoom);
                             let factor = ((points.x + points.y) * scroll_zoom_speed).exp();
                             if factor.is_finite() && factor > 0.0 {
                                 pinch *= factor;
@@ -208,17 +244,13 @@ pub(super) fn adjust(
                         }
                         continue;
                     }
-                    let steps = match unit {
-                        MouseWheelUnit::Line => delta.y,
-                        MouseWheelUnit::Page
-                            if points_per_line.is_finite() && points_per_line > 0.0 =>
-                        {
-                            delta.y * page_size.y * zoom / points_per_line
-                        }
-                        _ => 0.0,
-                    };
+                    let steps = wheel_steps(*unit, delta.y, points_per_line, page_size.y, zoom);
                     if steps.is_finite() {
-                        scroll[usize::from(modifiers.shift)] += steps;
+                        if modifiers.shift {
+                            scroll.fast += steps;
+                        } else {
+                            scroll.ordinary += steps;
+                        }
                     }
                 }
                 Event::Zoom(factor)

@@ -1,4 +1,4 @@
-/// A validated rectangle in physical image pixels.
+/// A rectangle in physical image pixels; callers must check source bounds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PixelRect {
     pub x: u32,

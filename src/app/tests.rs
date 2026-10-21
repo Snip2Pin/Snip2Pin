@@ -414,7 +414,7 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
         app.show_layers(ui.ctx());
-        app.restore(ui.ctx());
+        app.reset_capture(ui.ctx());
     });
     output.textures_delta.clear();
     assert!(
@@ -536,7 +536,7 @@ fn every_monitor_gets_a_layer_and_pin_uses_that_monitors_origin() {
             ..
         }
     ));
-    app.restore(&ctx);
+    app.reset_capture(&ctx);
     assert_eq!(app.active_display, None);
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
     assert_eq!(app.pins.len(), 1);
@@ -693,7 +693,7 @@ fn clicking_a_recognized_window_pins_and_copies_the_frozen_region_once() {
             assert!(output.platform_output.commands.is_empty());
         }
     }
-    app.restore(&ctx);
+    app.reset_capture(&ctx);
     assert!(
         metadata.upgrade().is_none(),
         "window metadata lasts only for its capture session"
@@ -934,7 +934,13 @@ fn native_image_paints_observed_geometry_without_repositioning_or_resize_compens
     assert_eq!(
         app.events
             .try_iter()
-            .filter(|event| matches!(event, Event::PinReady(_, 1)))
+            .filter(|event| matches!(
+                event,
+                Event::PinFrameDrawn {
+                    session: _,
+                    pin_id: 1
+                }
+            ))
             .count(),
         1
     );
@@ -977,7 +983,7 @@ fn top_edge_pin_finishes_capture_when_the_system_moves_it_below_the_menu_bar() {
             output.builder.inner_size.expect("size"),
         );
         let mut painted = false;
-        let mut ready = false;
+        let mut first_frame_drawn = false;
         for _ in 0..4 {
             actual = actual.translate(egui::vec2(0.0, (28.0 - actual.min.y).max(0.0)));
             let mut input = egui::RawInput {
@@ -999,10 +1005,10 @@ fn top_edge_pin_finishes_capture_when_the_system_moves_it_below_the_menu_bar() {
                 matches!(&shape.shape,
             egui::Shape::Mesh(mesh) if mesh.texture_id == texture)
             });
-            ready |= app
+            first_frame_drawn |= app
                 .events
                 .try_iter()
-                .any(|event| matches!(event, Event::PinReady(session, 1) if session == id));
+                .any(|event| matches!(event, Event::PinFrameDrawn { session, pin_id: 1 } if session == id));
             for command in &frame.viewport_output[&viewport].commands {
                 match command {
                     ViewportCommand::InnerSize(size) => {
@@ -1016,10 +1022,10 @@ fn top_edge_pin_finishes_capture_when_the_system_moves_it_below_the_menu_bar() {
             }
         }
         assert!(
-            ready && painted,
+            first_frame_drawn && painted,
             "top-edge capture must reveal the moved pin and finish, instead of endlessly retrying an impossible desktop position"
         );
-        app.restore(&ctx);
+        app.reset_capture(&ctx);
         assert!(matches!(app.phase, Phase::Idle));
         assert!(app.layers.values().all(|layer| layer.selection.is_none()));
     }
@@ -1421,7 +1427,7 @@ fn root_escape_cancels_pending_pin_before_a_late_ready_event_and_allows_recaptur
     let next = app.gate.begin().expect("capture can start immediately");
     app.accept_capture(next, Ok(vec![capture::demo()]), None, &ctx);
     app.sender
-        .send(Event::PinReady(session, 1))
+        .send(Event::PinFrameDrawn { session, pin_id: 1 })
         .expect("late event");
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
@@ -1602,7 +1608,7 @@ fn native_dpi_and_keyboard_zoom_never_add_a_button_driven_image_minimum() {
     assert_eq!(
         app.events
             .try_iter()
-            .filter(|event| matches!(event, Event::PinReady(id, 1) if *id == session))
+            .filter(|event| matches!(event, Event::PinFrameDrawn { session: id, pin_id: 1 } if *id == session))
             .count(),
         1
     );
@@ -1772,7 +1778,12 @@ fn retina_overlay_canonicalizes_odd_pixels_before_copy_and_initial_placement() {
             let mut frame = ctx.run_ui(input, |ui| {
                 paint(ui);
                 for event in app.events.try_iter().collect::<Vec<_>>() {
-                    if let Event::Selection(id, display, action) = event {
+                    if let Event::Selection {
+                        request_id: id,
+                        display_id: display,
+                        action,
+                    } = event
+                    {
                         if let overlay::Action::Select(rect) = &action {
                             selected = Some(*rect);
                         }
@@ -1979,7 +1990,7 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
         }),
         ctx,
     );
-    app.restore(ctx);
+    app.reset_capture(ctx);
     let mut selected = ctx.run_ui(egui::RawInput::default(), |_| {});
     selected.textures_delta.clear();
     app
@@ -2103,15 +2114,17 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
         screen: pin.screen,
         screen_areas: pin.screen_areas.clone(),
         session: pin.session,
-        ready: Arc::new(AtomicBool::new(true)),
+        first_frame_drawn: Arc::new(AtomicBool::new(true)),
         locked: false,
         #[cfg(target_os = "macos")]
         lock_limits: None,
         #[cfg(target_os = "macos")]
-        presented: Cell::new(false),
+        show_requested: Cell::new(false),
     };
     app.pins.insert(2, second);
-    app.pins[&1].ready.store(true, Ordering::Release);
+    app.pins[&1]
+        .first_frame_drawn
+        .store(true, Ordering::Release);
 }
 
 #[test]
@@ -2394,11 +2407,14 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
     );
     app.pins.get_mut(&1).expect("pin").locked = true;
     app.sender
-        .send(Event::ZoomPin(
-            1,
-            vec![pin::Zoom::In],
-            Some((egui::vec2(200.0, 120.0), 2.0)),
-        ))
+        .send(Event::ZoomPin {
+            pin_id: 1,
+            commands: vec![pin::Zoom::In],
+            observed: Some(ObservedSize {
+                content_size: egui::vec2(200.0, 120.0),
+                native_pixels_per_point: 2.0,
+            }),
+        })
         .expect("queued zoom");
     let locked = ctx.run_logic(&input, |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
@@ -2438,11 +2454,14 @@ fn queued_zoom_keys_accumulate_in_order_and_request_one_native_size() {
         ),
     ] {
         app.sender
-            .send(Event::ZoomPin(
-                1,
+            .send(Event::ZoomPin {
+                pin_id: 1,
                 commands,
-                Some((egui::vec2(400.0, 240.0), 1.0)),
-            ))
+                observed: Some(ObservedSize {
+                    content_size: egui::vec2(400.0, 240.0),
+                    native_pixels_per_point: 1.0,
+                }),
+            })
             .expect("zoom keys");
         let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
@@ -2510,11 +2529,14 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
         "do not guess a native outer origin from content or initial geometry"
     );
     app.sender
-        .send(Event::MovePin(
-            1,
-            [1, 0],
-            Some((egui::pos2(-100.0, 37.0), 2.0)),
-        ))
+        .send(Event::MovePin {
+            pin_id: 1,
+            steps: [1, 0],
+            observed: Some(ObservedPosition {
+                outer_origin: egui::pos2(-100.0, 37.0),
+                native_pixels_per_point: 2.0,
+            }),
+        })
         .expect("queued before lock");
     app.pins.get_mut(&1).expect("pin").locked = true;
     let locked = ctx.run_logic(&input, |ctx| {
@@ -2566,7 +2588,9 @@ fn home_zoom_hint_uses_current_native_content_size_instead_of_source_or_initial_
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);
-    app.pins[&1].ready.store(true, Ordering::Release);
+    app.pins[&1]
+        .first_frame_drawn
+        .store(true, Ordering::Release);
     for (display_size, focused, locked, expected) in [
         (None, true, false, false),
         (Some(egui::vec2(320.0, 240.0)), true, false, false),
@@ -2614,7 +2638,9 @@ fn pin_size_classification_wakes_home_only_on_changes_and_is_released_on_close()
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);
-    app.pins[&1].ready.store(true, Ordering::Release);
+    app.pins[&1]
+        .first_frame_drawn
+        .store(true, Ordering::Release);
     let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
     setup.textures_delta.clear();
     let paint = setup.viewport_output[&pin_id(1)]
@@ -2946,7 +2972,10 @@ fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
         });
         let id = app.quit_confirmation.as_ref().expect("pending quit").id;
         app.sender
-            .send(Event::QuitDecision(id, Ok(confirmed)))
+            .send(Event::QuitDecision {
+                request_id: id,
+                outcome: Ok(confirmed),
+            })
             .expect("asynchronous decision");
         let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
@@ -3040,7 +3069,10 @@ fn repeated_quit_reuses_its_request_and_late_results_cannot_resolve_a_new_prompt
     );
     for confirmed in [true, false] {
         app.sender
-            .send(Event::QuitDecision(first, Ok(confirmed)))
+            .send(Event::QuitDecision {
+                request_id: first,
+                outcome: Ok(confirmed),
+            })
             .expect("late decision");
     }
     let stale = ctx.run_logic(&egui::RawInput::default(), |ctx| {
@@ -3145,7 +3177,10 @@ fn confirmed_quit_ignores_a_later_capture_event_in_the_same_batch() {
     app.tray_action(crate::tray::Action::Quit, &ctx);
     let id = app.quit_confirmation.as_ref().expect("pending quit").id;
     app.sender
-        .send(Event::QuitDecision(id, Ok(true)))
+        .send(Event::QuitDecision {
+            request_id: id,
+            outcome: Ok(true),
+        })
         .expect("confirm");
     app.sender.send(Event::Capture).expect("late shortcut");
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
@@ -3345,7 +3380,7 @@ fn pin_initializes_hidden_and_becomes_visible_without_a_first_paint() {
         }
     });
     shown.textures_delta.clear();
-    assert!(!app.pins[&1].ready.load(Ordering::Acquire));
+    assert!(!app.pins[&1].first_frame_drawn.load(Ordering::Acquire));
     assert_eq!(
         shown.viewport_output[&pin_id(1)]
             .commands
@@ -3375,7 +3410,13 @@ fn pin_initializes_hidden_and_becomes_visible_without_a_first_paint() {
     assert_eq!(
         app.events
             .try_iter()
-            .filter(|event| matches!(event, Event::PinReady(_, 1)))
+            .filter(|event| matches!(
+                event,
+                Event::PinFrameDrawn {
+                    session: _,
+                    pin_id: 1
+                }
+            ))
             .count(),
         1
     );
@@ -3428,7 +3469,7 @@ fn initialized_pin_can_be_shown_when_all_windows_are_occluded() {
         output.viewport_commands[&pin_id(1)].as_slice(),
         [ViewportCommand::Visible(true)]
     ));
-    assert!(!app.pins[&1].ready.load(Ordering::Acquire));
+    assert!(!app.pins[&1].first_frame_drawn.load(Ordering::Acquire));
     let output = ctx.run_logic(&input, |ctx| app.show_pins(ctx));
     assert!(!output.viewport_commands.contains_key(&pin_id(1)));
 }
@@ -3466,7 +3507,10 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
             area.bottom() / zoom - ui::pin::MENU_SIZE.y,
         );
         app.sender
-            .send(Event::MenuPin(1, Some(position)))
+            .send(Event::MenuPin {
+                pin_id: 1,
+                position: Some(position),
+            })
             .expect("menu event");
         let mut opened = ctx.run_ui(egui::RawInput::default(), |ui| {
             eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
@@ -3556,7 +3600,10 @@ fn right_click_menu_preserves_current_viewport_coordinates_after_dpi_changes() {
                 .events
                 .try_iter()
                 .find_map(|event| match event {
-                    Event::MenuPin(1, position) => Some(position),
+                    Event::MenuPin {
+                        pin_id: 1,
+                        position,
+                    } => Some(position),
                     _ => None,
                 })
                 .expect("real pin right-click must dispatch a menu request");
@@ -3566,7 +3613,10 @@ fn right_click_menu_preserves_current_viewport_coordinates_after_dpi_changes() {
                 "capture DPI={capture_scale}, current DPI={current_scale}, zoom={zoom}"
             );
             app.sender
-                .send(Event::MenuPin(1, requested))
+                .send(Event::MenuPin {
+                    pin_id: 1,
+                    position: requested,
+                })
                 .expect("forward inspected event");
             let mut opened = ctx.run_ui(egui::RawInput::default(), |ui| {
                 eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
@@ -3798,11 +3848,11 @@ fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
     app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
     assert!(
         repaints.lock().expect("repaint log").contains(&layer_id(0)),
-        "ready must paint the selection without waiting for pointer input"
+        "capture completion must paint the selection without waiting for pointer input"
     );
     drain();
     repaints.lock().expect("repaint log").clear();
-    app.restore(&ctx);
+    app.reset_capture(&ctx);
     assert!(
         repaints.lock().expect("repaint log").contains(&layer_id(0)),
         "cancel must clear the selection without waiting for pointer input"

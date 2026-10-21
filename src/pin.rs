@@ -1,4 +1,4 @@
-//! Initial pin placement and controls inside the visible part of the image.
+//! Pin placement, visible controls, and explicit size and position adjustments.
 use eframe::egui::{self, Pos2, Rect, Vec2};
 
 use crate::geometry::Placement;

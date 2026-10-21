@@ -17,6 +17,15 @@ pub enum Action {
     Quit,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuState {
+    pub locale: Locale,
+    pub capture_enabled: bool,
+    pub has_unlocked_pins: bool,
+    pub has_locked_pins: bool,
+    pub capturing: bool,
+}
+
 pub struct Tray {
     _icon: TrayIcon,
     capture: MenuItem,
@@ -24,7 +33,7 @@ pub struct Tray {
     close_pins: MenuItem,
     unlock_pins: MenuItem,
     quit: MenuItem,
-    state: Option<(Locale, bool, bool, bool, bool)>,
+    state: Option<MenuState>,
 }
 
 impl Tray {
@@ -104,30 +113,24 @@ impl Tray {
         })
     }
 
-    pub fn update(
-        &mut self,
-        locale: Locale,
-        capture: bool,
-        has_pins: bool,
-        has_locked: bool,
-        capturing: bool,
-    ) {
-        if self.state == Some((locale, capture, has_pins, has_locked, capturing)) {
+    pub fn update(&mut self, state: MenuState) {
+        if self.state == Some(state) {
             return;
         }
-        self.capture.set_enabled(capture);
-        self.home.set_text(locale.text(Text::Home));
-        self.close_pins.set_text(locale.text(Text::ClosePins));
-        self.quit.set_text(locale.text(Text::Quit));
-        self.capture.set_text(locale.text(if capturing {
+        self.capture.set_enabled(state.capture_enabled);
+        self.home.set_text(state.locale.text(Text::Home));
+        self.close_pins.set_text(state.locale.text(Text::ClosePins));
+        self.quit.set_text(state.locale.text(Text::Quit));
+        self.capture.set_text(state.locale.text(if state.capturing {
             Text::CancelCapture
         } else {
             Text::Capture
         }));
-        self.close_pins.set_enabled(has_pins);
-        self.unlock_pins.set_text(locale.text(Text::UnlockPins));
-        self.unlock_pins.set_enabled(has_locked);
-        self.state = Some((locale, capture, has_pins, has_locked, capturing));
+        self.close_pins.set_enabled(state.has_unlocked_pins);
+        self.unlock_pins
+            .set_text(state.locale.text(Text::UnlockPins));
+        self.unlock_pins.set_enabled(state.has_locked_pins);
+        self.state = Some(state);
     }
 }
 

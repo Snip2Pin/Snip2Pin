@@ -1,4 +1,4 @@
-/// Keep one worker active and reject stale or duplicated results.
+/// Track one active capture request and reject stale or duplicated results.
 #[derive(Default)]
 pub struct CaptureGate {
     next: u64,
