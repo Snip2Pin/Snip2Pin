@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory)][string]$Archive,
     [Parameter(Mandatory)][string]$Installer,
     [Parameter(Mandatory)][string]$Destination,
-    [Parameter(Mandatory)][ValidateSet('signed', 'unverified')][string]$Distribution
+    [Parameter(Mandatory)][ValidateSet('signed', 'unverified')][string]$Distribution,
+    [switch]$InstallSmoke
 )
 $ErrorActionPreference = 'Stop'
 function Assert-Signature([string]$Path) {
@@ -23,16 +24,20 @@ function Invoke-Silent([string]$Path, [string]$Arguments) {
 }
 # Embedded uninstallers are verified after a silent, temporary per-user install.
 # Never alter a developer's installation or execute this check on a self-hosted runner.
-if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+if ($InstallSmoke -and ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted')) {
     throw 'Windows install verification requires a GitHub-hosted runner'
 }
-$registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin'
-$startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Snip2Pin'
-if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $startMenu)) { throw 'Refusing to modify an existing installation' }
 if (Test-Path -LiteralPath $Destination) { throw 'Verification destination must not exist' }
 Expand-Archive -LiteralPath $Archive -DestinationPath $Destination
 $appSignature = Assert-Signature (Join-Path $Destination 'snip2pin.exe')
 $setupSignature = Assert-Signature $Installer
+if ($Distribution -eq 'signed' -and $appSignature.SignerCertificate.Thumbprint -ne $setupSignature.SignerCertificate.Thumbprint) {
+    throw 'Application and installer publishers differ'
+}
+if (-not $InstallSmoke) { return }
+$registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin'
+$startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Snip2Pin'
+if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $startMenu)) { throw 'Refusing to modify an existing installation' }
 $installed = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
 $uninstaller = Join-Path $installed 'Uninstall.exe'
 try {
@@ -44,9 +49,7 @@ try {
         }
     }
     $uninstallSignature = Assert-Signature $uninstaller
-    if ($Distribution -eq 'signed' -and
-        ($appSignature.SignerCertificate.Thumbprint -ne $setupSignature.SignerCertificate.Thumbprint -or
-         $appSignature.SignerCertificate.Thumbprint -ne $uninstallSignature.SignerCertificate.Thumbprint)) {
+    if ($Distribution -eq 'signed' -and $appSignature.SignerCertificate.Thumbprint -ne $uninstallSignature.SignerCertificate.Thumbprint) {
         throw 'Application, installer and uninstaller publishers differ'
     }
     if ((Get-ItemProperty -LiteralPath $registration).InstallLocation -ne $installed -or

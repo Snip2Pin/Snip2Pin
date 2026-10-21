@@ -23,16 +23,40 @@ Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
+; Append mode requests write access without truncating or changing any bytes.
+; Check existing payloads before replacing any file or publishing new metadata.
+!macro CheckWritable FILE
+    IfFileExists "$INSTDIR\${FILE}" 0 writable_${FILE}
+    ClearErrors
+    FileOpen $0 "$INSTDIR\${FILE}" a
+    IfErrors install_failed
+    FileClose $0
+    writable_${FILE}:
+!macroend
+
 Section "Snip2Pin"
     SetShellVarContext current
     SetRegView 64
+    !insertmacro CheckWritable "snip2pin.exe"
+    !insertmacro CheckWritable "LICENSE"
+    !insertmacro CheckWritable "README.txt"
+    !insertmacro CheckWritable "THIRD_PARTY_NOTICES.txt"
+    !insertmacro CheckWritable "Uninstall.exe"
+    ClearErrors
     SetOutPath "$INSTDIR"
-    SetOverwrite on
+    IfErrors install_failed
+    ; Never ignore a failed overwrite or publish metadata for a failed extraction.
+    SetOverwrite try
     File "${PAYLOAD}\snip2pin.exe"
+    IfErrors install_failed
     File "${PAYLOAD}\LICENSE"
+    IfErrors install_failed
     File "${PAYLOAD}\README.txt"
+    IfErrors install_failed
     File "${PAYLOAD}\THIRD_PARTY_NOTICES.txt"
+    IfErrors install_failed
     WriteUninstaller "$INSTDIR\Uninstall.exe"
+    IfErrors install_failed
     CreateDirectory "$SMPROGRAMS\Snip2Pin"
     CreateShortcut "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk" "$INSTDIR\snip2pin.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "DisplayName" "Snip2Pin"
@@ -43,6 +67,13 @@ Section "Snip2Pin"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "DisplayIcon" "$INSTDIR\snip2pin.exe"
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "NoModify" 1
     WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "NoRepair" 1
+    IfErrors install_failed
+    Goto install_complete
+    install_failed:
+        SetErrorLevel 1
+        MessageBox MB_OK "Close Snip2Pin and check write access to the installation folder before installing." /SD IDOK
+        Abort
+    install_complete:
 SectionEnd
 
 Section "Uninstall"
