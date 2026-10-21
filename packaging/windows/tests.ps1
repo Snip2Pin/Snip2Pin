@@ -104,3 +104,7 @@ try {
     & makensis /V2 "/DPAYLOAD=$payload" "/DOUTPUT=$temporary/rejected-Setup.exe" /DVERSION=0.0.0 "/DSIGN_SCRIPT=$failingHook" "$PSScriptRoot/installer.nsi"
     if ($LASTEXITCODE -eq 0) { throw 'NSIS accepted a failed uninstaller signing hook' }
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force }
+Write-Output 'Windows installation, upgrade, uninstall and signing-failure fixtures passed'
+# The final native command intentionally fails; do not propagate its expected
+# exit code through the GitHub PowerShell wrapper after all assertions passed.
+exit 0
