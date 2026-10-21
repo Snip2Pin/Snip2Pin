@@ -91,7 +91,17 @@ jobs:
         run: |
           docker run --rm --env DEBIAN_FRONTEND=noninteractive --volume "$PWD/.build/unverified-final/${{ matrix.target }}:/packages:ro" \
             ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
-            bash -eu -c 'apt-get update; apt-get install --yes /packages/*.deb; snip2pin --version; apt-get install --yes --reinstall /packages/*.deb; snip2pin --version; apt-get remove --yes snip2pin; ! command -v snip2pin'
+            bash -eu -c '
+              apt-get update
+              apt-get install --yes /packages/*.deb
+              snip2pin --version
+              apt-get install --yes --reinstall /packages/*.deb
+              snip2pin --version
+              apt-get remove --yes snip2pin
+              hash -r
+              test ! -e /usr/bin/snip2pin
+              ! command -v snip2pin
+            '
   dependencies:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
