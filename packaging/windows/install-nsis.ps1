@@ -7,7 +7,9 @@ $sha256 = 'ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8'
 if (Test-Path -LiteralPath $Destination) { throw 'NSIS destination must not exist' }
 $archive = Join-Path ([IO.Path]::GetTempPath()) "$([guid]::NewGuid()).zip"
 try {
-    Invoke-WebRequest -Uri $url -OutFile $archive
+    # SourceForge routes browser-style user agents to an HTML download page.
+    & curl.exe --fail --location --silent --show-error --output $archive $url
+    if ($LASTEXITCODE -ne 0) { throw 'NSIS download failed' }
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) { throw 'NSIS download hash mismatch' }
     Expand-Archive -LiteralPath $archive -DestinationPath $Destination
     $compilerDirectory = Join-Path $Destination 'nsis-3.13'
