@@ -53,18 +53,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    if action.as_deref() == Some("--write-icon") {
-        let path = arguments
-            .next()
-            .ok_or("--write-icon needs an output path")?;
-        let variant = match arguments.next().as_deref().unwrap_or("line") {
-            "line" => snip2pin::icon::Variant::Line,
-            "metal" => snip2pin::icon::Variant::Metal,
-            _ => return Err("icon must be line or metal".into()),
-        };
-        snip2pin::icon::render_vector(variant, snip2pin::icon::EXPORT_SIZE)?.save(path)?;
-        return Ok(());
-    }
     let background = action.as_deref() == Some("--background");
     let options = startup_options(background)?;
     let relaunch = Arc::new(Mutex::new(None));

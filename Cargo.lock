@@ -3632,7 +3632,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "plist",
  "raw-window-handle",
- "resvg",
  "serde",
  "sys-locale",
  "tempfile",
@@ -5037,6 +5036,8 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "image",
+ "resvg",
  "serde",
  "serde_json",
  "sha2",
