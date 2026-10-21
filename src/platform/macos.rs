@@ -1,7 +1,32 @@
 //! AppKit presentation without replacing backend classes or delegates.
-use objc2_app_kit::{NSApplication, NSWindow};
+use objc2_app_kit::{NSApplication, NSScreen, NSWindow};
 use objc2_foundation::NSSize;
 use snip2pin::i18n::{Message, Text};
+
+/// Current usable bounds in the backend's top-left desktop coordinates.
+pub fn work_area(screen: &NSScreen) -> Option<eframe::egui::Rect> {
+    let thread = objc2::MainThreadMarker::new()?;
+    let primary = NSScreen::screens(thread).firstObject()?;
+    let desktop_top = primary.frame().origin.y + primary.frame().size.height;
+    let visible = screen.visibleFrame();
+    Some(eframe::egui::Rect::from_min_size(
+        eframe::egui::pos2(
+            visible.origin.x as f32,
+            (desktop_top - visible.origin.y - visible.size.height) as f32,
+        ),
+        eframe::egui::vec2(visible.size.width as f32, visible.size.height as f32),
+    ))
+}
+
+pub fn pin_presentation_area(id: u64) -> Option<eframe::egui::Rect> {
+    let thread = objc2::MainThreadMarker::new()?;
+    if !NSScreen::screensHaveSeparateSpaces(thread) {
+        return None;
+    }
+    let window = super::pin_window::find(id).ok()?;
+    let screen = window.screen()?;
+    work_area(&screen)
+}
 
 /// Original native constraints, restored exactly when a pin is unlocked.
 pub struct PinLock {

@@ -148,6 +148,21 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         return Some(Action::Cancel);
     }
+    if ui.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Touch {
+                    phase: egui::TouchPhase::Cancel,
+                    ..
+                }
+            )
+        })
+    }) {
+        selection.press = None;
+        selection.start = None;
+        return activate.then_some(Action::Activate);
+    }
     if (active || activate)
         && let Some(point) = ui.input(|input| {
             input.events.iter().rev().find_map(|event| match event {
@@ -266,6 +281,98 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touchscreen_region_and_cancel_use_the_same_selection_path() {
+        for cancel in [false, true] {
+            let ctx = egui::Context::default();
+            let mut selection = Selection {
+                texture: ctx.load_texture(
+                    "generated touch selection",
+                    egui::ColorImage::filled([2, 2], Color32::WHITE),
+                    Default::default(),
+                ),
+                pixels: [640, 480],
+                pixel_step: [1, 1],
+                windows: Vec::new(),
+                press: None,
+                start: None,
+                focus_requested: true,
+            };
+            let touch = |phase, pos| egui::Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(1),
+                phase,
+                pos,
+                force: None,
+            };
+            let pointer = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let start = egui::pos2(40.0, 50.0);
+            let end = egui::pos2(140.0, 130.0);
+            let frames = [
+                vec![
+                    touch(egui::TouchPhase::Start, start),
+                    egui::Event::PointerMoved(start),
+                    pointer(start, true),
+                ],
+                vec![
+                    touch(egui::TouchPhase::Move, end),
+                    egui::Event::PointerMoved(end),
+                ],
+                if cancel {
+                    vec![
+                        touch(egui::TouchPhase::Cancel, end),
+                        egui::Event::PointerGone,
+                    ]
+                } else {
+                    vec![
+                        touch(egui::TouchPhase::End, end),
+                        pointer(end, false),
+                        egui::Event::PointerGone,
+                    ]
+                },
+            ];
+            let selected = std::cell::RefCell::new(Vec::new());
+            for (frame, events) in frames.into_iter().enumerate() {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(640.0, 480.0),
+                        )),
+                        events,
+                        time: Some(frame as f64),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if let Some(Action::Select(rect)) = show(ui, &mut selection, true) {
+                            selected.borrow_mut().push(rect);
+                        }
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                selected.into_inner(),
+                if cancel {
+                    Vec::new()
+                } else {
+                    vec![PixelRect {
+                        x: 40,
+                        y: 50,
+                        width: 100,
+                        height: 80,
+                    }]
+                }
+            );
+            assert!(selection.start.is_none() && selection.press.is_none());
+        }
+    }
 
     #[test]
     fn batched_blank_gestures_distinguish_clicks_from_tiny_round_trip_drags() {

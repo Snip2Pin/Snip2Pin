@@ -114,6 +114,100 @@ fn main() {
                     let original = native.frame();
                     let mut frames = vec![original];
                     let screens = objc2_app_kit::NSScreen::screens(thread);
+                    if objc2_app_kit::NSScreen::screensHaveSeparateSpaces(thread) {
+                        let primary = screens.firstObject().expect("primary screen");
+                        let desktop_top = primary.frame().origin.y + primary.frame().size.height;
+                        let usable = |screen: &objc2_app_kit::NSScreen| {
+                            let area = screen.visibleFrame();
+                            egui::Rect::from_min_size(
+                                egui::pos2(
+                                    area.origin.x as f32,
+                                    (desktop_top - area.origin.y - area.size.height) as f32,
+                                ),
+                                egui::vec2(area.size.width as f32, area.size.height as f32),
+                            )
+                        };
+                        let areas = screens
+                            .iter()
+                            .map(|screen| usable(&screen))
+                            .collect::<Vec<_>>();
+                        for a in screens.iter() {
+                            for b in screens.iter() {
+                                let left = a.frame();
+                                let right = b.frame();
+                                if left.origin.x + left.size.width != right.origin.x {
+                                    continue;
+                                }
+                                let low = a.visibleFrame().origin.y.max(b.visibleFrame().origin.y);
+                                let high = (a.visibleFrame().origin.y
+                                    + a.visibleFrame().size.height)
+                                    .min(b.visibleFrame().origin.y + b.visibleFrame().size.height);
+                                if high - low < initial_height {
+                                    continue;
+                                }
+                                for offset in [0.6, 0.4] {
+                                    native.setFrame_display(
+                                        objc2_foundation::NSRect::new(
+                                            objc2_foundation::NSPoint::new(
+                                                right.origin.x - initial_width * offset,
+                                                (low + high - initial_height) / 2.0,
+                                            ),
+                                            initial.size,
+                                        ),
+                                        false,
+                                    );
+                                    let before = native.frame();
+                                    let owner =
+                                        usable(&native.screen().expect("native presenting screen"));
+                                    let image = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            before.origin.x as f32,
+                                            (desktop_top - before.origin.y - before.size.height)
+                                                as f32,
+                                        ),
+                                        egui::vec2(
+                                            before.size.width as f32,
+                                            before.size.height as f32,
+                                        ),
+                                    );
+                                    for zoom in [1.0, 1.25, 2.0] {
+                                        let ratio = 1.0 / zoom;
+                                        let row = platform::pin_toolbar(
+                                            index as u64,
+                                            egui::Rect::from_min_max(
+                                                image.min * ratio,
+                                                image.max * ratio,
+                                            ),
+                                            &areas,
+                                            areas[0],
+                                            ratio,
+                                        )
+                                        .expect("visible controls on presenting screen");
+                                        assert_eq!(row.count, pin::Control::ALL.len());
+                                        assert!(
+                                            egui::Rect::from_min_max(
+                                                owner.min * ratio,
+                                                owner.max * ratio
+                                            )
+                                            .contains_rect(row.bounds),
+                                            "controls escaped the native presenting screen: image={image:?}, owner={owner:?}, row={row:?}"
+                                        );
+                                    }
+                                    assert_eq!(
+                                        native.frame(),
+                                        before,
+                                        "presentation query must not move the window"
+                                    );
+                                    assert!(
+                                        !native.isVisible()
+                                            && !native.isKeyWindow()
+                                            && !app.isActive()
+                                    );
+                                }
+                            }
+                        }
+                        native.setFrame_display(original, false);
+                    }
                     if let Some(first) = screens.iter().next() {
                         let a = first.frame();
                         for other in screens.iter().skip(1) {
@@ -178,6 +272,50 @@ fn main() {
                         }
                     }
                     native.setFrame_display(original, false);
+                    if index == 0 {
+                        let initial_style = native.styleMask();
+                        let before = native.contentRectForFrameRect(native.frame());
+                        let anchor = [0.23, 0.71];
+                        let point = (
+                            before.origin.x + before.size.width * f64::from(anchor[0]),
+                            before.origin.y + before.size.height * (1.0 - f64::from(anchor[1])),
+                        );
+                        let primary = objc2_app_kit::NSScreen::screens(thread)
+                            .firstObject()
+                            .expect("primary screen");
+                        let top = primary.frame().origin.y + primary.frame().size.height;
+                        let mut zoom_window = None;
+                        for factor in [1.25, 0.8, 1.01] {
+                            platform::zoom_pin_native(
+                                index as u64,
+                                [600, 400],
+                                native.backingScaleFactor() as f32,
+                                &[pin::Zoom::At {
+                                    factor,
+                                    anchor: pin::ZoomAnchor {
+                                        fraction: anchor,
+                                        screen: Some([point.0 as f32, (top - point.1) as f32]),
+                                    },
+                                }],
+                                &mut zoom_window,
+                            )
+                            .expect("atomic anchored zoom");
+                            let actual = native.contentRectForFrameRect(native.frame());
+                            let moved = (
+                                actual.origin.x + actual.size.width * f64::from(anchor[0]),
+                                actual.origin.y + actual.size.height * (1.0 - f64::from(anchor[1])),
+                            );
+                            assert!(
+                                (moved.0 - point.0).abs() < 1.0 && (moved.1 - point.1).abs() < 1.0,
+                                "native content anchor drifted: factor={factor}, before={before:?}, actual={actual:?}, point={point:?}, moved={moved:?}"
+                            );
+                            assert_eq!(native.styleMask(), initial_style);
+                            assert!(
+                                !native.isVisible() && !native.isKeyWindow() && !app.isActive()
+                            );
+                        }
+                        native.setFrame_display(original, false);
+                    }
                 }
                 #[cfg(test)]
                 if index == 0 {

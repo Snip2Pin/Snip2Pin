@@ -130,6 +130,7 @@ struct UnlockHint {
 
 struct Pin {
     name: String,
+    zoom_window: Option<platform::pin_zoom::Window>,
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
     initial: egui::Rect,
@@ -406,6 +407,9 @@ impl Snip2Pin {
     }
 
     fn begin_capture(&mut self, ctx: &egui::Context) {
+        for id in self.pins.keys() {
+            ui::pin::forget_input(ctx, *id);
+        }
         if !matches!(self.phase, Phase::Idle) || self.recording {
             return;
         }
@@ -806,6 +810,7 @@ impl Snip2Pin {
                 self.next_pin,
                 Pin {
                     name: String::new(),
+                    zoom_window: None,
                     texture,
                     pixels,
                     initial: {
@@ -844,6 +849,7 @@ impl Snip2Pin {
     }
 
     fn open_pin_menu(&mut self, id: u64, position: Option<egui::Pos2>, ctx: &egui::Context) {
+        ui::pin::forget_input(ctx, id);
         let Some(pin) = self.pins.get(&id) else {
             return;
         };
@@ -885,6 +891,7 @@ impl Snip2Pin {
         }
         if let Some(pin) = self.pins.remove(&id) {
             launcher::forget_pin_name(ctx, id);
+            ui::pin::forget_input(ctx, id);
             ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
@@ -958,6 +965,7 @@ impl Snip2Pin {
     }
 
     fn set_pin_locked(&mut self, id: u64, locked: bool, ctx: &egui::Context) {
+        ui::pin::forget_input(ctx, id);
         let Some(pin) = self.pins.get_mut(&id) else {
             return;
         };
@@ -1005,6 +1013,7 @@ impl Snip2Pin {
         else {
             return;
         };
+        let pixels = pin.pixels.size;
         let zoom = ctx.zoom_factor();
         let geometry = observed.or_else(|| {
             ctx.input(|input| {
@@ -1014,18 +1023,64 @@ impl Snip2Pin {
                     Some(rect) => rect.size() * zoom,
                     // Restoring source size does not need a global position.
                     None if commands.first() == Some(&pin::Zoom::Original) => {
-                        egui::vec2(pin.pixels.size[0] as f32, pin.pixels.size[1] as f32) / scale
+                        egui::vec2(pixels[0] as f32, pixels[1] as f32) / scale
                     }
                     None => return None,
                 };
                 Some((current, scale))
             })
         });
+        if !self.demo
+            && commands
+                .iter()
+                .any(|command| matches!(command, pin::Zoom::At { .. }))
+            && let Some((_, scale)) = geometry
+        {
+            let Some(pin) = self.pins.get_mut(&id) else {
+                return;
+            };
+            match platform::zoom_pin_native(id, pixels, scale, commands, &mut pin.zoom_window) {
+                Ok(true) => {
+                    self.close_pin_menu(ctx);
+                    return;
+                }
+                Ok(false) => {} // Native Wayland has no global positioning request.
+                Err(error) => {
+                    self.message = Some(error);
+                    return;
+                }
+            }
+        }
         if let Some((current, scale)) = geometry
-            && let Some(size) = commands.iter().try_fold(current, |size, &command| {
-                pin::zoom_size(size, pin.pixels.size, scale, command)
+            && let Some(mut size) = commands.iter().try_fold(current, |size, &command| {
+                pin::zoom_size(size, pixels, scale, command)
             })
         {
+            if self.demo
+                && commands
+                    .iter()
+                    .any(|command| matches!(command, pin::Zoom::At { .. }))
+                && let Some(position) = ctx.input(|input| {
+                    input
+                        .raw
+                        .viewports
+                        .get(&pin_id(id))
+                        .and_then(|viewport| viewport.inner_rect)
+                        .map(|rect| rect.min * zoom)
+                })
+                && let Some(target) = pin::zoom_rect(
+                    egui::Rect::from_min_size(position, current),
+                    pixels,
+                    scale,
+                    commands,
+                )
+            {
+                ctx.send_viewport_cmd_to(
+                    pin_id(id),
+                    ViewportCommand::OuterPosition(target.min / zoom),
+                );
+                size = target.size();
+            }
             ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::InnerSize(size / zoom));
         }
         self.close_pin_menu(ctx);
@@ -1073,6 +1128,7 @@ impl Snip2Pin {
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
             launcher::forget_pin_name(ctx, id);
+            ui::pin::forget_input(ctx, id);
             ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
             if pin.ready.load(Ordering::Acquire) {
                 ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
@@ -1524,6 +1580,7 @@ impl Snip2Pin {
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
             let locked = pin.locked;
+            let demo = self.demo;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
@@ -1563,8 +1620,12 @@ impl Snip2Pin {
                 );
                 // Native geometry is authoritative; painting never changes it.
                 let controls = if let Some(image) = ui.input(|input| input.viewport().inner_rect) {
-                    pin::toolbar_geometry(image, &areas, screen, ratio)
-                        .map(|toolbar| toolbar.translate(-image.min.to_vec2()))
+                    (if demo {
+                        pin::toolbar_geometry(image, &areas, screen, ratio)
+                    } else {
+                        platform::pin_toolbar(id, image, &areas, screen, ratio)
+                    })
+                    .map(|toolbar| toolbar.translate(-image.min.to_vec2()))
                 } else {
                     // Wayland may not expose global positions. Keep controls
                     // inside the observed content instead of guessing one.
@@ -1595,6 +1656,7 @@ impl Snip2Pin {
                     })
                     .flatten();
                 let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
+                ui::pin::route_gesture(ui, &dispatch);
                 #[cfg(target_os = "macos")]
                 let press_origin = ui.input(|input| input.pointer.press_origin());
                 ui::pin::image_with_host(
@@ -1830,6 +1892,7 @@ impl eframe::App for Snip2Pin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        ui::pin::route_gesture(ui, &|action| dispatch_pin(action, &self.sender, &ctx, None));
         if !self.prepare_home(&ctx) {
             return;
         }

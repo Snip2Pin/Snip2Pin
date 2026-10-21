@@ -3,6 +3,9 @@ use std::cell::RefCell;
 use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Vec2};
 
+mod gestures;
+mod keyboard;
+
 fn image(
     ui: &mut egui::Ui,
     id: u64,
@@ -373,52 +376,56 @@ fn batched_pointer_motion_keeps_the_pressed_resize_edge() {
 }
 
 #[test]
-fn body_double_click_and_escape_close_the_pin() {
-    let ctx = egui::Context::default();
-    let texture = texture(&ctx);
-    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
-    let point = bounds.center();
-    paint_image(
-        &ctx,
-        &texture,
-        bounds,
-        vec![Event::PointerMoved(point)],
-        true,
-        0.0,
-        false,
-    );
-    for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+fn image_double_clicks_do_not_close_but_escape_does() {
+    for native_edges in [false, true] {
+        let ctx = egui::Context::default();
+        let texture = texture(&ctx);
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+        let point = bounds.center();
+        paint_image(
+            &ctx,
+            &texture,
+            bounds,
+            vec![Event::PointerMoved(point)],
+            native_edges,
+            0.0,
+            false,
+        );
+        for (index, pressed) in [true, false, true, false, true, false]
+            .into_iter()
+            .enumerate()
+        {
+            let (_, actions) = paint_image(
+                &ctx,
+                &texture,
+                bounds,
+                vec![pointer(point, pressed)],
+                native_edges,
+                (index + 1) as f64 * 0.05,
+                true,
+            );
+            assert!(
+                actions.is_empty(),
+                "image clicks must never close a pin: {actions:?}"
+            );
+        }
         let (_, actions) = paint_image(
             &ctx,
             &texture,
             bounds,
-            vec![pointer(point, pressed)],
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            native_edges,
+            1.0,
             true,
-            (index + 1) as f64 * 0.05,
-            false,
         );
-        if index == 3 {
-            assert_eq!(actions, [Action::ClosePin(7)]);
-        } else {
-            assert!(actions.is_empty());
-        }
+        assert_eq!(actions, [Action::ClosePin(7)]);
     }
-    let (_, actions) = paint_image(
-        &ctx,
-        &texture,
-        bounds,
-        vec![Event::Key {
-            key: egui::Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Modifiers::NONE,
-        }],
-        true,
-        1.0,
-        false,
-    );
-    assert_eq!(actions, [Action::ClosePin(7)]);
 }
 
 #[test]
@@ -1006,10 +1013,14 @@ fn wheel_units_and_precision_are_independent_of_ui_zoom() {
                 output.textures_delta.clear();
                 assert_no_geometry(&output);
                 let actions = actions.into_inner();
+                if unit == egui::MouseWheelUnit::Point {
+                    assert!(actions.is_empty());
+                    continue;
+                }
                 let [Action::Zoom(7, commands)] = actions.as_slice() else {
                     panic!("expected one wheel adjustment: {actions:?}")
                 };
-                let [Zoom::Scale(factor)] = commands.as_slice() else {
+                let [Zoom::At { factor, .. }] = commands.as_slice() else {
                     panic!("expected one scale: {commands:?}")
                 };
                 let expected = if fast { 1.25 } else { 1.01 };
@@ -1122,11 +1133,15 @@ fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
         let actions = actions.into_inner();
         if blocked == "none" {
             assert!(
-                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(factor)] if (*factor - 1.01).abs() < 0.00001))
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor, .. }] if (*factor - 1.01).abs() < 0.00001))
             );
         } else if blocked == "reset" {
             assert!(
-                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::Scale(before), Zoom::Original, Zoom::Scale(after)] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor: before, .. }, Zoom::Original, Zoom::At { factor: after, .. }] if (*before - 1.01).abs() < 0.00001 && (*after - 1.01_f32.sqrt()).abs() < 0.00001))
+            );
+        } else if blocked == "ctrl" {
+            assert!(
+                matches!(actions.as_slice(), [Action::Zoom(7, commands)] if matches!(commands.as_slice(), [Zoom::At { factor, .. }] if *factor > 1.0))
             );
         } else {
             assert!(actions.is_empty(), "blocked={blocked}: {actions:?}");
@@ -1196,7 +1211,7 @@ fn wheel_zoom_tracks_hover_without_requiring_keyboard_focus() {
 }
 
 #[test]
-fn shift_arrows_accumulate_fast_movement_once() {
+fn shift_arrow_taps_accumulate_fast_movement_once() {
     let ctx = egui::Context::default();
     let texture = texture(&ctx);
     let actions = RefCell::new(Vec::new());
@@ -1204,12 +1219,14 @@ fn shift_arrows_accumulate_fast_movement_once() {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0))),
         events: [egui::Key::ArrowRight, egui::Key::ArrowRight]
             .into_iter()
-            .map(|key| Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: true,
-                modifiers: Modifiers::SHIFT,
+            .flat_map(|key| {
+                [true, false].map(|pressed| Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                })
             })
             .collect(),
         ..Default::default()
@@ -1234,7 +1251,7 @@ fn shift_arrows_accumulate_fast_movement_once() {
     });
     output.textures_delta.clear();
     assert_no_geometry(&output);
-    assert_eq!(actions.into_inner(), vec![Action::Move(7, [20, 0])]);
+    assert_eq!(actions.into_inner(), vec![Action::Move(7, [100, 0])]);
 }
 
 #[test]
@@ -1457,7 +1474,7 @@ fn keyboard_zoom_and_movement_leave_text_editing_and_command_shortcuts_alone() {
                     if modifiers.shift {
                         vec![
                             Action::Zoom(7, vec![Zoom::Scale(snip2pin::pin::FAST_ZOOM_FACTOR)]),
-                            Action::Move(7, [-10, 0]),
+                            Action::Move(7, [-50, 0]),
                         ]
                     } else {
                         vec![Action::Zoom(7, vec![Zoom::In]), Action::Move(7, [-1, 0])]
