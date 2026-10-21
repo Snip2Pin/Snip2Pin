@@ -13,7 +13,7 @@ fn image(
     native_edges: bool,
     excluded: Option<Rect>,
     events: &dyn Fn(Action),
-) -> bool {
+) {
     let ctx = ui.ctx().clone();
     image_with_host(
         ui,
@@ -26,7 +26,7 @@ fn image(
         },
         events,
         |command| ctx.send_viewport_cmd(command),
-    )
+    );
 }
 
 fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {

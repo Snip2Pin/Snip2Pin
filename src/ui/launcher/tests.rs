@@ -1,6 +1,138 @@
 use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Pos2, Rect, Vec2};
 
+#[test]
+fn responsive_setting_controls_fit_and_select_in_both_languages() {
+    for locale in [Locale::English, Locale::Chinese] {
+        for width in [210.0, LAUNCHER.window[0]] {
+            for scale in [1.0, 2.0] {
+                for (label, selected, target, expected) in [
+                    (
+                        Text::Theme,
+                        Theme::System.label(locale),
+                        Theme::Dark.label(locale),
+                        0,
+                    ),
+                    (
+                        Text::Icon,
+                        Icon::Auto.label(locale),
+                        Icon::Metal.label(locale),
+                        1,
+                    ),
+                    (
+                        Text::Language,
+                        Language::System.label(locale),
+                        Language::Chinese.label(locale),
+                        2,
+                    ),
+                ] {
+                    let ctx = egui::Context::default();
+                    ctx.global_style_mut(|style| {
+                        for font in style.text_styles.values_mut() {
+                            font.size *= scale;
+                        }
+                    });
+                    let size = egui::vec2(width, 1200.0);
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.set_width(width - 2.0 * f32::from(LAUNCHER.margin));
+                            let response = setting_row(
+                                ui,
+                                locale.text(label),
+                                LAUNCHER.control_width,
+                                |ui, _| {
+                                    egui::ComboBox::from_id_salt("hit-rect")
+                                        .width(LAUNCHER.control_width.min(ui.available_width()))
+                                        .truncate()
+                                        .selected_text(selected)
+                                        .show_ui(ui, |_| {})
+                                        .response
+                                },
+                            );
+                            assert!(
+                                ui.clip_rect().contains_rect(response.rect),
+                                "entire hit rectangle fits"
+                            );
+                            assert!(response.rect.right() <= ui.max_rect().right());
+                        },
+                    );
+                    output.textures_delta.clear();
+                    let render = |events| localized_frame(&ctx, size, events, false, locale);
+                    let _ = render(vec![]);
+                    let output = render(vec![]).0;
+                    let label_bounds = visible_text(&output, locale.text(label));
+                    let text = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.text() == selected
+                            {
+                                let rect = shape.shape.visual_bounding_rect();
+                                (rect.center().y >= label_bounds.center().y - 1.0).then_some(rect)
+                            } else {
+                                None
+                            }
+                        })
+                        .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+                        .expect("setting selected text");
+                    let (bounds, clip) = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Rect(rect) = &shape.shape
+                                && rect.rect.contains_rect(text)
+                                && rect.rect.height() < text.height() * 3.0
+                            {
+                                Some((rect.rect, shape.clip_rect))
+                            } else {
+                                None
+                            }
+                        })
+                        .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+                        .expect("combo button frame");
+                    assert!(
+                        clip.contains_rect(bounds),
+                        "full button must fit: {locale:?}, {width}, {scale}: {bounds:?} in {clip:?}"
+                    );
+                    if width == LAUNCHER.window[0] && scale == 1.0 {
+                        assert!(
+                            (label_bounds.center().y - bounds.center().y).abs() < bounds.height()
+                        );
+                    }
+                    let click_at = |point| {
+                        let _ = render(vec![Event::PointerMoved(point)]);
+                        let event = |pressed| Event::PointerButton {
+                            pos: point,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        };
+                        let _ = render(vec![event(true)]);
+                        render(vec![event(false)])
+                    };
+                    let _ = click_at(bounds.center());
+                    let popup = render(vec![]).0;
+                    let option = visible_text(&popup, target);
+                    let action = click_at(option.center()).1;
+                    assert!(
+                        match expected {
+                            0 => matches!(action, Some(Action::Appearance(Theme::Dark, _))),
+                            1 => matches!(action, Some(Action::Appearance(_, Icon::Metal))),
+                            _ => matches!(action, Some(Action::Language(Language::Chinese))),
+                        },
+                        "selection: {locale:?}, {width}, {scale}, {label:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn frame(
     ctx: &egui::Context,
     size: Vec2,

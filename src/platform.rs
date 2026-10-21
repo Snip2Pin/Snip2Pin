@@ -154,32 +154,59 @@ pub fn relaunch_command() -> Result<std::process::Command, Message> {
 #[cfg(target_os = "macos")]
 const DISPLAY_ORIGIN_TOLERANCE: f32 = 1.0;
 
-/// Read usable display bounds on the UI thread; never show or activate windows.
-pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
-    let bounds =
-        egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
+#[cfg(target_os = "macos")]
+fn matching_work_areas(
+    bounds: Vec<egui::Rect>,
+    areas: &[(egui::Rect, egui::Rect)],
+) -> Vec<egui::Rect> {
+    bounds
+        .into_iter()
+        .map(|bounds| {
+            areas
+                .iter()
+                .find(|(frame, _)| frame.min.distance(bounds.min) < DISPLAY_ORIGIN_TOLERANCE)
+                .map_or(bounds, |(_, area)| *area)
+        })
+        .collect()
+}
+
+/// Query each desktop once and return usable bounds in the input display order.
+pub fn pin_work_areas(displays: &[snip2pin::capture::Display]) -> Vec<egui::Rect> {
+    if displays.is_empty() {
+        return Vec::new();
+    }
+    let bounds: Vec<_> = displays
+        .iter()
+        .map(|display| {
+            egui::Rect::from_min_size(display.position().into(), display.logical_size().into())
+        })
+        .collect();
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    if let Some(area) = work_area::read(display) {
-        return area;
+    {
+        work_area::read_many(displays)
+            .into_iter()
+            .zip(bounds)
+            .map(|(area, bounds)| area.unwrap_or(bounds))
+            .collect()
     }
     #[cfg(target_os = "macos")]
     if let Some(thread) = objc2::MainThreadMarker::new() {
         let screens = objc2_app_kit::NSScreen::screens(thread);
         if let Some(primary) = screens.iter().next() {
-            let frame = primary.frame();
-            let desktop_top = frame.origin.y + frame.size.height;
-            for screen in screens.iter() {
-                let frame = screen.frame();
-                let origin = egui::pos2(
-                    frame.origin.x as f32,
-                    (desktop_top - frame.origin.y - frame.size.height) as f32,
-                );
-                if origin.distance(bounds.min) < DISPLAY_ORIGIN_TOLERANCE {
-                    return macos::work_area(&screen).unwrap_or(bounds);
-                }
-            }
+            let top = macos::primary_top(primary.frame());
+            let areas: Vec<_> = screens
+                .iter()
+                .map(|screen| {
+                    (
+                        macos::backend_rect(screen.frame(), top),
+                        macos::backend_rect(screen.visibleFrame(), top),
+                    )
+                })
+                .collect();
+            return matching_work_areas(bounds, &areas);
         }
     }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     bounds
 }
 
@@ -503,6 +530,31 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod selection_grid_tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn work_areas_match_origins_in_input_order_and_preserve_unavailable_fallbacks() {
+        use eframe::egui::{Rect, pos2, vec2};
+        let left = Rect::from_min_size(pos2(-1280.0, 56.0), vec2(1280.0, 1024.0));
+        let above = Rect::from_min_size(pos2(0.0, -900.0), vec2(1600.0, 900.0));
+        let unmatched = Rect::from_min_size(pos2(3000.0, 0.0), vec2(100.0, 100.0));
+        let usable_left = Rect::from_min_max(left.min + vec2(0.0, 24.0), left.max);
+        let usable_above = Rect::from_min_max(above.min, above.max - vec2(0.0, 40.0));
+        let areas = [(left, usable_left), (above, usable_above)];
+        assert_eq!(
+            super::matching_work_areas(
+                vec![above.translate(vec2(0.5, 0.0)), unmatched, left],
+                &areas
+            ),
+            vec![usable_above, unmatched, usable_left]
+        );
+        assert_eq!(super::matching_work_areas(vec![left], &[]), vec![left]);
+        let outside_tolerance = left.translate(vec2(1.0, 0.0));
+        assert_eq!(
+            super::matching_work_areas(vec![outside_tolerance], &areas),
+            vec![outside_tolerance]
+        );
+    }
+
     #[test]
     fn source_density_selects_native_steps_without_native_services() {
         let mut snapshot = snip2pin::capture::demo();

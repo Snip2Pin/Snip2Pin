@@ -68,7 +68,7 @@ fn main() {
             scale: scale as f32,
         };
         let visible = screen.visibleFrame();
-        let usable = platform::pin_work_area(&display);
+        let usable = platform::pin_work_areas(std::slice::from_ref(&display))[0];
         assert_eq!(
             usable.min,
             eframe::egui::pos2(
