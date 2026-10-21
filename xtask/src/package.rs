@@ -349,9 +349,8 @@ fn finalize_as(candidate: &Path, archive: &Path, distribution: Distribution) -> 
 }
 
 pub fn prepare_unverified(candidate: &Path, destination: &Path, target: &str) -> Result {
-    crate::release::verify_candidate(candidate, target)?;
+    let data = crate::release::verify_candidate(candidate, target)?;
     native_host(target)?;
-    let data = verify(candidate)?.remove(0);
     fs::create_dir_all(destination)?;
     let archive = destination.join(distribution_filename(
         &data.version,

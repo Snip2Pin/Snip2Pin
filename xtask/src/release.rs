@@ -288,9 +288,12 @@ fn check_run(run_id: &str) -> Result {
     validate_candidate_run(&api(&format!("actions/runs/{run_id}"))?)
 }
 
-pub fn verify_candidate(directory: &Path, target: &str) -> Result {
+pub fn verify_candidate(directory: &Path, target: &str) -> Result<Manifest> {
     let data = package::verify(directory)?;
-    validate_unsigned(&data, target, &crate::version()?, &crate::revision()?)
+    validate_unsigned(&data, target, &crate::version()?, &crate::revision()?)?;
+    data.into_iter()
+        .next()
+        .ok_or_else(|| "missing candidate".into())
 }
 
 fn validate_unsigned(data: &[Manifest], target: &str, version: &str, revision: &str) -> Result {
@@ -353,6 +356,48 @@ fn validate_candidate_run(run: &Value) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_candidate_returns_metadata_and_rejects_tampering_or_wrong_target() {
+        let directory = tempfile::tempdir().expect("candidate fixture");
+        let version = crate::version().expect("workspace version");
+        let revision = crate::revision().expect("source revision");
+        let target = TARGETS[0];
+        let file = package::filename(&version, target, false);
+        let payload = directory.path().join(&file);
+        std::fs::write(&payload, b"candidate bytes").expect("candidate payload");
+        let checksum = package::digest(&payload).expect("candidate checksum");
+        let data = Manifest {
+            schema: 2,
+            version: version.clone(),
+            revision: revision.clone(),
+            target: target.into(),
+            final_package: false,
+            distribution: None,
+            file: file.clone(),
+            sha256: checksum.clone(),
+            candidate_sha256: None,
+        };
+        std::fs::write(
+            directory.path().join(format!("{target}.json")),
+            serde_json::to_vec(&data).expect("manifest JSON"),
+        )
+        .expect("candidate manifest");
+
+        let verified = verify_candidate(directory.path(), target).expect("valid candidate");
+        assert_eq!(verified.version, version);
+        assert_eq!(verified.revision, revision);
+        assert_eq!(verified.target, target);
+        assert_eq!(verified.file, file);
+        assert_eq!(verified.sha256, checksum);
+        assert!(!verified.final_package);
+        assert_eq!(verified.distribution, None);
+        assert_eq!(verified.candidate_sha256, None);
+        assert!(verify_candidate(directory.path(), TARGETS[1]).is_err());
+
+        std::fs::write(payload, b"changed bytes").expect("tampered payload");
+        assert!(verify_candidate(directory.path(), target).is_err());
+    }
 
     #[test]
     fn exact_main_ci_can_be_automatic_or_manual_but_never_a_pr() {

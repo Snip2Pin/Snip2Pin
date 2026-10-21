@@ -30,7 +30,7 @@ fn run() -> Result {
         ["preview", font] => preview(Path::new(font)),
         ["check-messages", base, head, title] => messages::check(base, head, title),
         ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
-        ["verify-candidate", directory, target] => release::verify_candidate(Path::new(directory), target),
+        ["verify-candidate", directory, target] => release::verify_candidate(Path::new(directory), target).map(|_| ()),
         ["check-msrv"] => {
             let minimum = manifest()?["package"]["rust-version"].as_str().ok_or("missing rust-version")?.to_owned();
             execute(Command::new("rustup").args(["toolchain", "install", &minimum, "--profile", "minimal"]))?;
