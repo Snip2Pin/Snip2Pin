@@ -457,6 +457,10 @@ impl eframe::App for Sandbox {
                             locked: pin.locked,
                             toolbar: controls,
                             keyboard_focus: Some(self.focused_pin == Some(pin.id)),
+                            space: pin_view::InputSpace {
+                                origin: Some(ui.max_rect().min),
+                                scale: ui.ctx().pixels_per_point(),
+                            },
                         },
                         &|action| {
                             events.borrow_mut().push(action);

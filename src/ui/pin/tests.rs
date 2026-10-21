@@ -939,6 +939,7 @@ fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
                             locked,
                             toolbar: Some(toolbar),
                             keyboard_focus: None,
+                            ..Default::default()
                         },
                         &|action| actions.borrow_mut().push(action),
                         |command| ctx.send_viewport_cmd(command),
@@ -1353,6 +1354,7 @@ fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
                                 locked,
                                 toolbar: None,
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1783,6 +1785,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                                 locked: true,
                                 toolbar: None,
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),
@@ -1834,6 +1837,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                         locked: true,
                         toolbar: None,
                         keyboard_focus: None,
+                        ..Default::default()
                     },
                     &|action| actions.borrow_mut().push(action),
                     |command| ctx.send_viewport_cmd(command),
@@ -1896,6 +1900,7 @@ fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
                                 locked: true,
                                 toolbar: Some(toolbar),
                                 keyboard_focus: None,
+                                ..Default::default()
                             },
                             &|action| actions.borrow_mut().push(action),
                             |command| ctx.send_viewport_cmd(command),

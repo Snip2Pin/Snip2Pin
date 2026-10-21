@@ -1666,6 +1666,7 @@ impl Snip2Pin {
                         locked,
                         toolbar: controls,
                         keyboard_focus: None,
+                        space: platform::pin_input_space(ui),
                     },
                     &dispatch,
                     |command| {

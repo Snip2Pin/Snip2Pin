@@ -66,6 +66,24 @@ pub struct Interaction {
     pub toolbar: Option<Toolbar>,
     /// Virtual hosts supply per-image focus; native hosts use viewport focus.
     pub keyboard_focus: Option<bool>,
+    pub space: InputSpace,
+}
+
+/// Host-observed image origin and native screen units per UI point.
+#[derive(Clone, Copy, Debug)]
+pub struct InputSpace {
+    /// Unknown on hosts that cannot report a global window position.
+    pub origin: Option<Pos2>,
+    pub scale: f32,
+}
+
+impl Default for InputSpace {
+    fn default() -> Self {
+        Self {
+            origin: None,
+            scale: 1.0,
+        }
+    }
 }
 
 /// Paint one complete pin; hosts supply observed layout and handle native gestures.
@@ -115,6 +133,7 @@ fn image_with_host(
         locked,
         toolbar,
         keyboard_focus,
+        ..
     } = interaction;
     let excluded = toolbar.map(|toolbar| toolbar.bounds);
     let bounds = ui.max_rect();

@@ -107,16 +107,7 @@ pub(super) fn adjust(
     let target = Target {
         hovered,
         bounds,
-        screen_scale: if cfg!(target_os = "macos") {
-            zoom
-        } else {
-            ui.ctx().pixels_per_point()
-        },
-        screen_origin: if interaction.keyboard_focus.is_some() {
-            Some(bounds.min)
-        } else {
-            ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min))
-        },
+        space: interaction.space,
     };
     let scroll_zoom_speed = ui
         .ctx()

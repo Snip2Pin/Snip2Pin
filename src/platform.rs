@@ -14,6 +14,18 @@ pub mod pin_menu;
 #[path = "platform/pin_window.rs"]
 pub mod pin_window;
 
+/// Convert the native viewport's observed coordinates at the desktop seam.
+pub fn pin_input_space(ui: &egui::Ui) -> snip2pin::ui::pin::InputSpace {
+    snip2pin::ui::pin::InputSpace {
+        origin: ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min)),
+        scale: if cfg!(target_os = "macos") {
+            ui.ctx().zoom_factor()
+        } else {
+            ui.ctx().pixels_per_point()
+        },
+    }
+}
+
 /// Lay out controls using the native window's presentation constraints.
 pub fn pin_toolbar(
     _id: u64,
