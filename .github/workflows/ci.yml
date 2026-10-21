@@ -65,6 +65,12 @@ jobs:
         run: cargo xtask check
       - name: Package structure and CLI smoke check (no credentials/upload)
         run: cargo xtask package ${{ matrix.target }} debug
+      - name: macOS packaging storage
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          df -h .
+          du -sh target .build
       - name: Check unverified package integrity without credentials or upload
         shell: bash
         run: |
