@@ -21,7 +21,7 @@ fn image(
         texture,
         Interaction {
             native_edges,
-            excluded,
+            toolbar: excluded.map(|bounds| Toolbar { bounds, count: 0 }),
             ..Default::default()
         },
         events,
@@ -42,6 +42,58 @@ fn pointer(point: Pos2, pressed: bool) -> Event {
         button: PointerButton::Primary,
         pressed,
         modifiers: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn complete_view_owns_focus_painting_and_excludes_buttons_from_native_gestures() {
+    for focused in [false, true] {
+        for native_edges in [false, true] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+            let toolbar = snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0)
+                .expect("room for all controls");
+            let point = toolbar.bounds.min + Vec2::splat(METRICS.button / 2.0);
+            let actions = RefCell::new(Vec::new());
+            let host = RefCell::new(Vec::new());
+            for events in [
+                vec![Event::PointerMoved(point)],
+                vec![pointer(point, true)],
+                vec![pointer(point, false)],
+            ] {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(bounds),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                native_edges,
+                                toolbar: Some(toolbar),
+                                keyboard_focus: Some(focused),
+                                ..Default::default()
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |command| host.borrow_mut().push(command),
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                let highlights = output.shapes.iter().filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == PIN.highlight)
+                });
+                assert_eq!(highlights.count(), usize::from(focused));
+                assert_eq!(image_mesh(&output, &texture), bounds);
+            }
+            assert_eq!(actions.into_inner(), [Action::CopyPin(7)]);
+            assert!(host.into_inner().is_empty());
+        }
     }
 }
 
@@ -885,7 +937,7 @@ fn clicking_the_image_or_unlock_control_keeps_keyboard_commands_available() {
                         Interaction {
                             native_edges,
                             locked,
-                            excluded: Some(toolbar.bounds),
+                            toolbar: Some(toolbar),
                             keyboard_focus: None,
                         },
                         &|action| actions.borrow_mut().push(action),
@@ -1116,8 +1168,10 @@ fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
                     &texture,
                     Interaction {
                         keyboard_focus: Some(blocked == "reset"),
-                        excluded: (blocked == "toolbar")
-                            .then_some(Rect::from_center_size(point, Vec2::splat(20.0))),
+                        toolbar: (blocked == "toolbar").then_some(Toolbar {
+                            bounds: Rect::from_center_size(point, Vec2::splat(20.0)),
+                            count: 0,
+                        }),
                         ..Default::default()
                     },
                     &|action| actions.borrow_mut().push(action),
@@ -1297,7 +1351,7 @@ fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
                             Interaction {
                                 native_edges,
                                 locked,
-                                excluded: None,
+                                toolbar: None,
                                 keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),
@@ -1727,7 +1781,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                             Interaction {
                                 native_edges,
                                 locked: true,
-                                excluded: None,
+                                toolbar: None,
                                 keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),
@@ -1778,7 +1832,7 @@ fn locked_images_ignore_drag_resize_double_click_and_escape_but_keep_the_menu() 
                     Interaction {
                         native_edges,
                         locked: true,
-                        excluded: None,
+                        toolbar: None,
                         keyboard_focus: None,
                     },
                     &|action| actions.borrow_mut().push(action),
@@ -1840,7 +1894,7 @@ fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
                             Interaction {
                                 native_edges: false,
                                 locked: true,
-                                excluded: Some(row),
+                                toolbar: Some(toolbar),
                                 keyboard_focus: None,
                             },
                             &|action| actions.borrow_mut().push(action),

@@ -448,15 +448,14 @@ impl eframe::App for Sandbox {
                     ui.set_min_size(pin.image.size());
                     ui.set_max_size(pin.image.size());
                     let controls = pin::toolbar_geometry(ui.max_rect(), &[bounds], bounds, 1.0);
-                    let hovered = pointer.is_some_and(|point| ui.max_rect().contains(point));
-                    pin_view::image_with_host(
+                    pin_view::show(
                         ui,
                         pin.id,
                         &pin.texture,
                         pin_view::Interaction {
                             native_edges: false,
                             locked: pin.locked,
-                            excluded: controls.map(|toolbar| toolbar.bounds),
+                            toolbar: controls,
                             keyboard_focus: Some(self.focused_pin == Some(pin.id)),
                         },
                         &|action| {
@@ -464,25 +463,6 @@ impl eframe::App for Sandbox {
                         },
                         |command| requested = Some(command),
                     );
-                    if self.focused_pin == Some(pin.id) {
-                        let style = &snip2pin::ui::style::PIN;
-                        ui.painter().rect_stroke(
-                            ui.max_rect(),
-                            0,
-                            egui::Stroke::new(
-                                style.highlight_stroke_pixels / ui.ctx().pixels_per_point(),
-                                style.highlight,
-                            ),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    if hovered && let Some(row) = controls {
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
-                            pin_view::controls(ui, pin.id, pin.locked, row, &|action| {
-                                events.borrow_mut().push(action)
-                            });
-                        });
-                    }
                 });
             if let Some(command) = requested
                 && let Some(pointer) = ui.input(|input| input.pointer.press_origin())

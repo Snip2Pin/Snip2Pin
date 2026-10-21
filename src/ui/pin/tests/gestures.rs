@@ -418,7 +418,10 @@ fn pinch_ignores_invalid_factors_and_excluded_targets() {
                 Event::Zoom(1.2),
             ],
             Interaction {
-                excluded: excluded.then_some(Rect::from_center_size(point, Vec2::splat(20.0))),
+                toolbar: excluded.then_some(Toolbar {
+                    bounds: Rect::from_center_size(point, Vec2::splat(20.0)),
+                    count: 0,
+                }),
                 ..Default::default()
             },
         );

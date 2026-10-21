@@ -1632,9 +1632,6 @@ impl Snip2Pin {
                     let bounds = ui.max_rect();
                     pin::toolbar_geometry(bounds, &[], bounds, 1.0)
                 };
-                let hovered = ui
-                    .input(|input| input.pointer.hover_pos())
-                    .is_some_and(|point| ui.max_rect().contains(point));
                 let ctx = ui.ctx().clone();
                 let menu_position = fallback_menu
                     .then(|| {
@@ -1659,14 +1656,14 @@ impl Snip2Pin {
                 ui::pin::route_gesture(ui, &dispatch);
                 #[cfg(target_os = "macos")]
                 let press_origin = ui.input(|input| input.pointer.press_origin());
-                ui::pin::image_with_host(
+                ui::pin::show(
                     ui,
                     id,
                     &texture,
                     ui::pin::Interaction {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
-                        excluded: controls.map(|toolbar| toolbar.bounds),
+                        toolbar: controls,
                         keyboard_focus: None,
                     },
                     &dispatch,
@@ -1688,17 +1685,6 @@ impl Snip2Pin {
                         ctx.send_viewport_cmd(command);
                     },
                 );
-                if pin_focused(&ctx, id) {
-                    ui.painter().rect_stroke(
-                        ui.max_rect(),
-                        0,
-                        egui::Stroke::new(
-                            ui::style::PIN.highlight_stroke_pixels / ctx.pixels_per_point(),
-                            ui::style::PIN.highlight,
-                        ),
-                        egui::StrokeKind::Inside,
-                    );
-                }
                 let small = launcher::pin_is_small(ui.max_rect().size());
                 let changed = ctx.data_mut(|data| {
                     let key = pin_hint_state_id(id);
@@ -1716,11 +1702,6 @@ impl Snip2Pin {
                         .any(|event| matches!(event, egui::Event::WindowFocused(_)))
                 }) {
                     ctx.request_repaint_of(ViewportId::ROOT);
-                }
-                if hovered && let Some(row) = controls {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
-                        ui::pin::controls(ui, id, locked, row, &dispatch);
-                    });
                 }
                 if !ready.swap(true, Ordering::AcqRel) {
                     let _ = events.send(Event::PinReady(session, id));

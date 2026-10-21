@@ -83,8 +83,8 @@ pub(super) fn adjust(
         bounds.contains(*point)
             && ui.clip_rect().contains(*point)
             && !interaction
-                .excluded
-                .is_some_and(|rect| rect.contains(*point))
+                .toolbar
+                .is_some_and(|toolbar| toolbar.bounds.contains(*point))
             && ui.ctx().layer_id_at(*point) == Some(ui.layer_id())
     });
     let mut session = ui
