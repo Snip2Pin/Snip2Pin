@@ -1,4 +1,5 @@
 //! Repository checks and packaging; no GUI, desktop capture, or credentials.
+mod installers;
 mod messages;
 mod notices;
 mod package;
@@ -43,7 +44,16 @@ fn run() -> Result {
         ["verify", directory] => package::verify(Path::new(directory)).map(|_| ()),
         ["verify-native", directory, target, distribution] => package::verify_native(Path::new(directory), target, package::Distribution::parse(distribution)?),
         ["prepare-unverified", candidate, destination, target] => package::prepare_unverified(Path::new(candidate), Path::new(destination), target),
-        ["finalize", candidate, archive] => package::finalize(Path::new(candidate), Path::new(archive)),
+        ["finalize", candidate, destination, distribution] => package::finalize(Path::new(candidate), Path::new(destination), package::Distribution::parse(distribution)?),
+        ["dmg", app, destination] => package::create_dmg(Path::new(app), Path::new(destination)),
+        ["prepare-linux", candidate, destination, distribution] => {
+            let distribution = package::Distribution::parse(distribution)?;
+            let data = release::verify_candidate(Path::new(candidate), "x86_64-unknown-linux-gnu")?;
+            std::fs::create_dir_all(destination)?;
+            package::prepare_linux(&data, Path::new(candidate), Path::new(destination), distribution)?;
+            package::finalize(Path::new(candidate), Path::new(destination), distribution)
+        }
+        ["aur-package", directory, destination] => release::aur_package(Path::new(directory), Path::new(destination)),
         ["release-check", version, revision] => release::preflight(version, revision),
         ["stage", version, revision, directory, notes, distribution, "--confirm"] => {
             release::stage(version, revision, Path::new(directory), Path::new(notes), package::Distribution::parse(distribution)?)
@@ -51,7 +61,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, distribution, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory), package::Distribution::parse(distribution)?)
         }
-        _ => Err("usage: cargo xtask check | lint | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | finalize CANDIDATE_DIR FINAL_ARCHIVE | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
+        _ => Err("usage: cargo xtask check | lint | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | prepare-linux CANDIDATE_DIR OUTPUT_DIR signed|unverified | dmg APP OUTPUT_DMG | finalize CANDIDATE_DIR OUTPUT_DIR signed|unverified | aur-package FINAL_DIR NEW_OUTPUT_DIR | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
     }
 }
 

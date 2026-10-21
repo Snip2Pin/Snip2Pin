@@ -72,6 +72,20 @@ jobs:
           cargo xtask verify-native .build/unverified-final/${{ matrix.target }} ${{ matrix.target }} unverified
       - name: Minimum supported Rust
         run: cargo xtask check-msrv
+      - name: Windows installer fixture and uninstall checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/tests.ps1
+      - name: Debian package fixture and payload checks
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p xtask debian_fixture -- --ignored
+      - name: Debian install and removal on a clean Ubuntu baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker run --rm --env DEBIAN_FRONTEND=noninteractive --volume "$PWD/.build/unverified-final/${{ matrix.target }}:/packages:ro" \
+            ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+            bash -eu -c 'apt-get update; apt-get install --yes /packages/*.deb; snip2pin --version; apt-get install --yes --reinstall /packages/*.deb; snip2pin --version; apt-get remove --yes snip2pin; ! command -v snip2pin'
   dependencies:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

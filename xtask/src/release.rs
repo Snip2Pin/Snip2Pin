@@ -94,6 +94,9 @@ pub fn validate_set(
     revision: &str,
     distribution: Distribution,
 ) -> Result {
+    for manifest in data {
+        manifest.validate()?;
+    }
     if data.len() != TARGETS.len() {
         return Err("all four native packages are required".into());
     }
@@ -178,7 +181,9 @@ pub fn stage(
         ])
         .arg(notes_path);
     for data in data {
-        command.arg(directory.join(&data.file));
+        for artifact in &data.artifacts {
+            command.arg(directory.join(&artifact.file));
+        }
         command.arg(directory.join(format!("{}.json", data.target)));
     }
     execute(&mut command)
@@ -229,7 +234,8 @@ pub fn publish(
             || original[0].final_package
             || original[0].revision != revision
             || original[0].version != version
-            || final_data.candidate_sha256.as_deref() != Some(original[0].sha256.as_str())
+            || final_data.candidate_sha256.as_deref()
+                != original[0].artifacts.first().map(|a| a.sha256.as_str())
         {
             return Err("final package is not linked to this candidate run".into());
         }
@@ -258,12 +264,18 @@ pub fn publish(
         return Err("unverified release must retain its bilingual trust/permission notice".into());
     }
     let assets = draft["assets"].as_array().ok_or("draft assets")?;
-    if assets.len() != TARGETS.len() * 2 {
+    let expected_assets = data.iter().map(|d| d.artifacts.len() + 1).sum::<usize>();
+    if assets.len() != expected_assets {
         return Err("unexpected draft assets".into());
     }
     for data in data {
-        for file in [&data.file, &format!("{}.json", data.target)] {
-            if assets.iter().filter(|a| a["name"] == *file).count() != 1 {
+        for file in data
+            .artifacts
+            .iter()
+            .map(|a| a.file.clone())
+            .chain(std::iter::once(format!("{}.json", data.target)))
+        {
+            if assets.iter().filter(|a| a["name"] == file).count() != 1 {
                 return Err("draft asset set mismatch".into());
             }
         }
@@ -286,6 +298,93 @@ fn check_run(run_id: &str) -> Result {
         return Err("invalid candidate run ID".into());
     }
     validate_candidate_run(&api(&format!("actions/runs/{run_id}"))?)
+}
+
+/// Generate local Arch packaging only after the exact assets are public.
+pub fn aur_package(directory: &Path, destination: &Path) -> Result {
+    let data = package::verify(directory)?
+        .into_iter()
+        .find(|data| data.target == "x86_64-unknown-linux-gnu")
+        .ok_or("missing Linux package")?;
+    if !data.final_package {
+        return Err("AUR requires a final Linux package".into());
+    }
+    let artifact = data.artifact(package::Format::TarGz)?;
+    let tag = format!("v{}", data.version);
+    let release = api(&format!("releases/tags/{tag}"))?;
+    let url = format!(
+        "https://github.com/{REPOSITORY}/releases/download/{tag}/{}",
+        artifact.file
+    );
+    validate_public_asset(&release, &tag, &artifact.file, &url)?;
+    let refs = output(Command::new("git").args([
+        "ls-remote",
+        "--tags",
+        "https://github.com/Snip2Pin/Snip2Pin.git",
+        &format!("refs/tags/{tag}"),
+        &format!("refs/tags/{tag}^{{}}"),
+    ]))?;
+    if refs
+        .lines()
+        .last()
+        .and_then(|line| line.split_whitespace().next())
+        != Some(data.revision.as_str())
+    {
+        return Err("public version tag source differs from final manifest".into());
+    }
+    if destination.exists() {
+        return Err("AUR output directory already exists".into());
+    }
+    fs_download_check(&tag, &artifact.file, &artifact.sha256)?;
+    crate::installers::aur(destination, &data.version, &url, &artifact.sha256)
+}
+
+fn validate_public_asset(release: &Value, tag: &str, file: &str, url: &str) -> Result {
+    if release["draft"] != false || release["prerelease"] != false || release["tag_name"] != tag {
+        return Err("AUR requires a public stable release".into());
+    }
+    let assets = release["assets"].as_array().ok_or("release assets")?;
+    if assets
+        .iter()
+        .filter(|asset| asset["name"] == file && asset["browser_download_url"] == url)
+        .count()
+        != 1
+    {
+        return Err("public Linux asset name or URL mismatch".into());
+    }
+    Ok(())
+}
+
+fn fs_download_check(tag: &str, file: &str, checksum: &str) -> Result {
+    let directory = Path::new(".build/aur-public-asset");
+    if directory.exists() {
+        return Err("AUR verification directory already exists".into());
+    }
+    std::fs::create_dir_all(directory)?;
+    let result: Result = (|| {
+        execute(
+            Command::new("gh")
+                .args([
+                    "release",
+                    "download",
+                    tag,
+                    "--repo",
+                    REPOSITORY,
+                    "--pattern",
+                    file,
+                    "--dir",
+                ])
+                .arg(directory),
+        )?;
+        if package::digest(&directory.join(file))? != checksum {
+            return Err("public Linux asset differs from the verified final manifest".into());
+        }
+        Ok(())
+    })();
+    let cleanup = std::fs::remove_dir_all(directory);
+    result?;
+    cleanup?;
+    Ok(())
 }
 
 pub fn verify_candidate(directory: &Path, target: &str) -> Result<Manifest> {
@@ -358,24 +457,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn aur_requires_the_exact_public_stable_asset() {
+        let url = "https://github.com/Snip2Pin/Snip2Pin/releases/download/v0.2.0/linux.tar.gz";
+        let release = serde_json::json!({ "tag_name": "v0.2.0", "draft": false,
+            "prerelease": false, "assets": [{ "name": "linux.tar.gz", "browser_download_url": url }] });
+        validate_public_asset(&release, "v0.2.0", "linux.tar.gz", url).expect("public asset");
+        for key in ["draft", "prerelease"] {
+            let mut invalid = release.clone();
+            invalid[key] = true.into();
+            assert!(validate_public_asset(&invalid, "v0.2.0", "linux.tar.gz", url).is_err());
+        }
+        assert!(validate_public_asset(&release, "v0.2.1", "linux.tar.gz", url).is_err());
+        assert!(validate_public_asset(&release, "v0.2.0", "other.tar.gz", url).is_err());
+        assert!(
+            validate_public_asset(
+                &release,
+                "v0.2.0",
+                "linux.tar.gz",
+                "https://example.com/other"
+            )
+            .is_err()
+        );
+        let mut duplicate = release.clone();
+        duplicate["assets"]
+            .as_array_mut()
+            .expect("assets")
+            .push(release["assets"][0].clone());
+        assert!(validate_public_asset(&duplicate, "v0.2.0", "linux.tar.gz", url).is_err());
+    }
+
+    fn final_artifacts(target: &str, distribution: Distribution) -> Vec<package::Artifact> {
+        package::formats(target, true)
+            .iter()
+            .map(|format| package::Artifact {
+                format: *format,
+                file: package::artifact_filename("0.2.0", target, Some(distribution), *format),
+                sha256: "b".repeat(64),
+            })
+            .collect()
+    }
+
+    #[test]
     fn verified_candidate_returns_metadata_and_rejects_tampering_or_wrong_target() {
         let directory = tempfile::tempdir().expect("candidate fixture");
         let version = crate::version().expect("workspace version");
         let revision = crate::revision().expect("source revision");
         let target = TARGETS[0];
-        let file = package::filename(&version, target, false);
+        let file = package::candidate_filename(&version, target);
         let payload = directory.path().join(&file);
         std::fs::write(&payload, b"candidate bytes").expect("candidate payload");
         let checksum = package::digest(&payload).expect("candidate checksum");
         let data = Manifest {
-            schema: 2,
+            schema: 3,
             version: version.clone(),
             revision: revision.clone(),
             target: target.into(),
             final_package: false,
             distribution: None,
-            file: file.clone(),
-            sha256: checksum.clone(),
+            artifacts: vec![package::Artifact {
+                format: package::Format::Zip,
+                file: file.clone(),
+                sha256: checksum.clone(),
+            }],
             candidate_sha256: None,
         };
         std::fs::write(
@@ -388,8 +531,11 @@ mod tests {
         assert_eq!(verified.version, version);
         assert_eq!(verified.revision, revision);
         assert_eq!(verified.target, target);
-        assert_eq!(verified.file, file);
-        assert_eq!(verified.sha256, checksum);
+        let artifact = verified
+            .artifact(package::Format::Zip)
+            .expect("zip candidate");
+        assert_eq!(artifact.file, file);
+        assert_eq!(artifact.sha256, checksum);
         assert!(!verified.final_package);
         assert_eq!(verified.distribution, None);
         assert_eq!(verified.candidate_sha256, None);
@@ -421,14 +567,13 @@ mod tests {
         let mut data: Vec<_> = TARGETS
             .iter()
             .map(|target| Manifest {
-                schema: 2,
+                schema: 3,
                 version: "0.2.0".into(),
                 revision: sha.clone(),
                 target: (*target).into(),
                 final_package: true,
                 distribution: Some(Distribution::Unverified),
-                file: String::new(),
-                sha256: "b".repeat(64),
+                artifacts: final_artifacts(target, Distribution::Unverified),
                 candidate_sha256: Some("c".repeat(64)),
             })
             .collect();
@@ -443,14 +588,17 @@ mod tests {
         let sha = "a".repeat(40);
         let target = TARGETS[0];
         let mut data = vec![Manifest {
-            schema: 2,
+            schema: 3,
             version: "0.2.0".into(),
             revision: sha.clone(),
             target: target.into(),
             final_package: false,
             distribution: None,
-            file: package::filename("0.2.0", target, false),
-            sha256: "b".repeat(64),
+            artifacts: vec![package::Artifact {
+                format: package::Format::Zip,
+                file: package::candidate_filename("0.2.0", target),
+                sha256: "b".repeat(64),
+            }],
             candidate_sha256: None,
         }];
         assert!(validate_unsigned(&data, target, "0.2.0", &sha).is_ok());
@@ -496,14 +644,13 @@ mod tests {
         let mut data: Vec<_> = TARGETS
             .iter()
             .map(|target| Manifest {
-                schema: 2,
+                schema: 3,
                 version: "0.2.0".into(),
                 revision: sha.clone(),
                 target: (*target).into(),
                 final_package: true,
                 distribution: Some(Distribution::Signed),
-                file: package::filename("0.2.0", target, true),
-                sha256: "b".repeat(64),
+                artifacts: final_artifacts(target, Distribution::Signed),
                 candidate_sha256: Some("c".repeat(64)),
             })
             .collect();

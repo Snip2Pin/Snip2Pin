@@ -137,15 +137,21 @@ Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lo
 
 | 原生目标 | 包格式 | 共有校验；signed 模式额外校验 |
 | --- | --- | --- |
-| aarch64-apple-darwin | 含 `.app` 的 ZIP | 完整性、架构、应用标识与版本；Developer ID、时间戳、Hardened Runtime、公证票据 |
-| x86_64-apple-darwin | 含 `.app` 的 ZIP | 同上 |
-| x86_64-pc-windows-msvc | 便携 ZIP | 结构、版本及所选签名状态；Authenticode、时间戳 |
-| x86_64-unknown-linux-gnu | tar.gz | 动态库依赖、版本、X11/Wayland 声明 |
+| aarch64-apple-darwin | DMG，含 `.app` 与 Applications 链接 | 只读挂载、完整性、架构、标识、版本；signed 同时校验应用及 DMG 的签名与公证票据 |
+| x86_64-apple-darwin | DMG | 同上 |
+| x86_64-pc-windows-msvc | 便携 ZIP、NSIS `-Setup.exe` | 结构、版本、安装/卸载；signed 校验应用、嵌入卸载程序及安装程序的 Authenticode 与时间戳 |
+| x86_64-unknown-linux-gnu | tar.gz、`.deb` | 动态库依赖、版本、Debian 元数据及两种格式的有效载荷一致性 |
 
 macOS 最低部署目标为 13.0；最低系统仍须真实机器验收。Linux 构建基线为 Ubuntu
 24.04（glibc 2.39），不承诺可在更旧系统直接运行；Wayland 的置顶、快捷键和定位
-能力取决于合成器。Windows 包先提供便携版，移动程序路径后需重新设置自启。
-暂不增加 MSI、AppImage、自动更新或多个 Linux 包管理器入口。
+能力取决于合成器。`.deb` 在同一 Ubuntu 24.04 runner 上由 `dpkg-shlibdeps` 推导 ELF
+依赖，并声明运行时加载的桌面库；不承诺所有 Debian 版本兼容。Windows 安装到当前
+用户目录，不要求管理员权限，不自动启动应用或启用自启；便携版移动路径后需重新设置自启。
+NSIS 3.13 从官方归档按固定 SHA-256 安装，编译器版本也会检查。日常 CI 检验临时
+安装、卸载及无关文件保留，不显示安装界面；Windows 安装验收仅在 GitHub 托管 runner
+执行，本机打包不自动安装。Linux 另在固定 digest 的干净 Ubuntu 24.04 容器中解析
+依赖、安装、重复安装并卸载 `.deb`，只运行 `--version`，不启动桌面。
+暂不增加 MSI、AppImage 或自动更新。
 
 `unverified` 是明确选择的分发方式，文件名保留 `-unverified`，清单记录相同模式。
 macOS 只有 ad-hoc bundle seal，能够校验完整性但没有受信任的发布者身份，且未经
@@ -229,12 +235,12 @@ cargo xtask package TARGET release
 的成功 CI、四个原始候选包的版本和哈希，并重新审计依赖。
 
 维护者在 `release` 环境批准四个平台任务后，`unverified` 模式不读取任何 Secrets，
-macOS 对候选应用加 ad-hoc 完整性签名并重新封装，Windows/Linux 保留原始有效载荷，
+macOS 对候选应用加 ad-hoc 完整性签名并创建 DMG，Windows/Linux 从原候选有效载荷生成全部格式，
 生成明确标识为 unverified 的最终包、SHA-256 及来源清单。
 
 只有 `signed` 模式中，macOS 将 P12 导入临时钥匙串，用
 临时 API Key 文件配置公证凭据，完成 Developer ID 签名、时间戳、公证和票据附加；
-Windows 临时导入 PFX，按指定指纹用 SDK SignTool 签名并验证时间戳；Linux 只生成
+Windows 临时导入 PFX，按指定指纹用 SDK SignTool 签名应用、NSIS 嵌入卸载程序和最终安装程序，验证时间戳；Linux 只生成
 最终包和清单。不会重新编译应用。秘密仅传给各自的签名步骤，不传给下载/上传步骤。
 无论成功或失败都清理临时钥匙串、导入的证书私钥和凭据文件；任务取消/强制结束时
 依赖 GitHub 托管临时虚拟机销毁兜底，不在日常电脑部署自托管 runner。
@@ -243,7 +249,10 @@ Windows 临时导入 PFX，按指定指纹用 SDK SignTool 签名并验证时间
 （保留 14 天），随后自动创建 Draft Release。任一平台失败均不创建草稿，也不发布。
 包清单保留原候选哈希，正式发布时再次和原候选 run 比对。现有草稿/标签不会被覆盖。
 签名任务可读取秘密，因此批准前应检查所选源码和工作流，不能批准不可信改动。
-此入口只创建草稿，不能代替后续实际安装验收和手动发布确认。JSON 使用 schema 2，
+此入口只创建草稿，不能代替后续实际安装验收和手动发布确认。JSON 使用 schema 3，
+每目标清单包含共享版本、源 SHA、目标、分发模式、原候选哈希及 `artifacts` 列表。
+每个 artifact 包含类型、固定文件名及 SHA-256；候选仅一个归档，最终严格要求表中全部
+格式，拒绝重复、缺失、混合模式、路径穿越及符号链接。四目标共六个最终文件、四个清单。
 候选清单的 distribution 为 null，最终清单为 signed 或 unverified；旧清单需重新构建。
 
 ## 可选：本机 signed 签名备用入口
@@ -260,7 +269,7 @@ bash packaging/macos/distribute.sh CANDIDATE_DIR dist/final
 ```
 
 设置 `SNIP2PIN_SIGN_IDENTITY`、`SNIP2PIN_NOTARY_PROFILE`；脚本检查候选哈希，
-签名、公证、附加票据并验证 Gatekeeper 后才生成最终 ZIP 和新清单。
+先完成应用签名、公证及票据，再生成 DMG，对外层 DMG 签名、公证及附加票据后生成清单；此后不再修改内容。
 公证将已签名应用交给 Apple 检查，不上传私钥或钥匙串。当前开发自签身份继续用于
 本地更新；第一次切换正式发行身份可能需要重新授权，不能承诺无感保留 TCC 权限。
 
@@ -271,19 +280,40 @@ Windows 在有 Windows SDK SignTool 的本机 PowerShell 7 中执行：
 ```
 
 私钥留在当前用户证书存储或硬件提供方，工具不接收 PFX 或密码。签名和时间戳验证
-失败会停止。有效签名不代表已建立 SmartScreen 信誉。
+失败会停止。打包时校验三个可执行文件的签名，不自动安装；`verify-native` 的 Windows
+安装/卸载冒烟检查只在 GitHub 托管 runner 上执行。有效签名不代表已建立 SmartScreen 信誉。
 
-Linux 候选包无需平台证书；验证后复制为去掉 `-unsigned` 的最终文件名，再执行：
+Linux 候选包无需平台证书；在安装好 `dpkg-dev` 的 Ubuntu 24.04 上生成 tar.gz 与 `.deb`：
 
 ```sh
-cargo xtask verify CANDIDATE_DIR
-cargo xtask finalize CANDIDATE_DIR dist/final/Snip2Pin-VERSION-x86_64-unknown-linux-gnu.tar.gz
+cargo xtask prepare-linux CANDIDATE_DIR dist/final signed
 ```
 
 签名完成后不得改动应用内容；修改需回到构建步骤。最终清单与安装包一起保留，
 包含原候选包的 SHA-256；正式发布时还会对照候选构建 run 的原始 artifact 核对来源。
 第三方声明从实际依赖的 registry 许可文本生成并随包分发；发行前仍需核对字体及
 系统库要求，不能把自动收集当成法律审查。
+
+## 可选：公开发版后的 AUR 配方
+
+在已安装 `makepkg`、`gh` 和本项目 Rust 工具链的 Arch Linux 环境中，手动执行：
+
+```sh
+cargo xtask aur-package VERIFIED_FINAL_DIR NEW_AUR_DIR
+```
+
+命令先校验本地 schema 3 Linux 最终清单和全部文件，再检查同版本 GitHub Release
+已公开、非草稿且非预发布，下载确切名称和 URL 的 tar.gz 并比较 SHA-256。随后生成
+`snip2pin-bin` 的 `PKGBUILD`，由 `makepkg --printsrcinfo` 生成 `.SRCINFO`。配方固定
+源 URL 和真实校验和，不使用 `SKIP`，保留 MIT 许可及第三方声明。该命令需要网络，
+只写新目录，不上传 AUR、不推送仓库、不新增自动化。维护者须在 Arch 上检查依赖并
+实际 `makepkg` 安装、升级和卸载后自行提交 AUR；生成配方不代表已完成兼容性验收。
+
+格式依据：[Apple 分发打包](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution)、
+[NSIS 文档](https://nsis.sourceforge.io/Docs/Chapter5.html)、
+[dpkg-deb](https://manpages.debian.org/bookworm/dpkg/dpkg-deb.1.en.html)、
+[dpkg-shlibdeps](https://manpages.debian.org/bookworm/dpkg-dev/dpkg-shlibdeps.1.en.html)、
+[Arch PKGBUILD](https://wiki.archlinux.org/title/PKGBUILD)。
 
 ## 安装与交互验收
 

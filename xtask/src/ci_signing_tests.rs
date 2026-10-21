@@ -106,6 +106,7 @@ Get-ChildItem packaging/windows/*.ps1 | ForEach-Object {
     [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
     if ($errors.Count -gt 0) { throw 'PowerShell syntax error' }
 }
+./packaging/windows/pure-tests.ps1
 $env:GITHUB_ACTIONS = 'false'
 try { ./packaging/windows/ci-sign.ps1 -Candidate unused -OutputDirectory unused }
 catch { if ($_.Exception.Message -eq 'CI signing requires a GitHub-hosted runner') { exit 0 }; throw }

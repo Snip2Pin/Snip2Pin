@@ -37,6 +37,8 @@ macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内�
 
 采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
 
+后续发版提供 macOS DMG、Windows 当前用户安装程序与便携 ZIP、Linux tar.gz 与 `.deb`（Ubuntu 24.04 基线）。AUR 配方在公开发版后单独生成及验收；尚未发布或提交 AUR。
+
 ### English
 
 - Click **Capture & pin** or use the shortcut. Hover and click a window, or drag
@@ -89,6 +91,10 @@ Distribution uses GitHub Releases, outside the App Store. Packages marked
 `-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
 block them. Move the macOS app to Applications, then follow [Apple's instructions](https://support.apple.com/en-us/102445)
 if opening is blocked. Updates to these packages may require screen capture permission again.
+
+Future releases provide macOS DMGs, a per-user Windows installer and portable ZIP,
+and Linux tar.gz and .deb packages (Ubuntu 24.04 baseline). An AUR recipe can be
+generated and tested after a public release; it has not been published to AUR.
 
 ## Platform support
 

@@ -205,6 +205,17 @@ adapter instead of attempts to export them.
 Use Cargo.toml as the single version source; generate package metadata and bind
 manifests to a full commit SHA. Publish the verified files without rebuilding;
 never overwrite published tags/assets. Fix a release with a new patch version.
+Keep one unsigned candidate archive per native target. Schema 3 manifests list
+typed artifacts: final macOS DMG, Windows portable ZIP plus per-user NSIS Setup.exe,
+and Linux tar.gz plus Debian package. Require the complete exact format set and
+preserve the original candidate hash for every target. Signed Windows mode signs
+the application, embedded uninstaller and installer; signed macOS mode signs and
+notarizes the outer DMG after the app, without later content changes. Debian
+dependencies derive from ELF plus runtime-loaded libraries on Ubuntu 24.04; do
+not claim untested Debian compatibility. AUR generation is a separate manual
+post-publication command, verifies the public tarball, uses makepkg for .SRCINFO,
+and never pushes or uploads to AUR. Daily CI may verify temporary silent Windows
+fixture installs on hosted runners; no desktop activation or real user settings.
 
 Use the pinned Rust toolchain and commit `Cargo.lock`. Keep dependencies small.
 Use published crates instead of unpinned Git branches. Avoid unsafe code,
