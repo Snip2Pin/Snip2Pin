@@ -518,10 +518,14 @@ pub fn create_dmg(app: &Path, destination: &Path) -> Result {
     )?;
     #[cfg(unix)]
     std::os::unix::fs::symlink("/Applications", staging.path().join("Applications"))?;
+    // A transport image must not inherit the host filesystem. APFS image
+    // auto-sizing can exhaust the image while copying a real application.
     execute(
         Command::new("hdiutil")
             .args([
                 "create",
+                "-fs",
+                "HFS+",
                 "-format",
                 "UDZO",
                 "-volname",
