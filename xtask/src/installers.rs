@@ -158,7 +158,7 @@ pkgdesc='Capture a region and keep it floating on screen'
 arch=('x86_64')
 url='https://github.com/Snip2Pin/Snip2Pin'
 license=('MIT')
-depends=('glibc' 'gcc-libs' 'libxcb' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'dbus' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'libglvnd')
+depends=('glibc' 'gcc-libs' 'libxcb' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'dbus' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'libglvnd' 'mesa')
 optdepends=('xdg-desktop-portal: screen capture under Wayland; install a portal backend for your desktop'
             'wqy-microhei: Chinese UI font when no Noto CJK font is installed')
 provides=('snip2pin')
