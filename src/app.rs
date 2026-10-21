@@ -146,6 +146,17 @@ struct Pin {
     presented: Cell<bool>,
 }
 
+impl Pin {
+    fn release(self, id: u64, ctx: &egui::Context) {
+        launcher::forget_pin_name(ctx, id);
+        ui::pin::forget_input(ctx, id);
+        ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
+        if self.ready.load(Ordering::Acquire) {
+            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+        }
+    }
+}
+
 struct PinMenu {
     pin_id: u64,
     position: Option<egui::Pos2>,
@@ -890,12 +901,7 @@ impl Snip2Pin {
             self.close_pin_menu(ctx);
         }
         if let Some(pin) = self.pins.remove(&id) {
-            launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_input(ctx, id);
-            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
-            if pin.ready.load(Ordering::Acquire) {
-                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
-            }
+            pin.release(id, ctx);
         }
         if matches!(&self.phase, Phase::Selecting { pending_pin: Some(pending), .. } if *pending == id)
         {
@@ -1127,12 +1133,7 @@ impl Snip2Pin {
         }
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
-            launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_input(ctx, id);
-            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
-            if pin.ready.load(Ordering::Acquire) {
-                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
-            }
+            pin.release(id, ctx);
         }
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
     }
