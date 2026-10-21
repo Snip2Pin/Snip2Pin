@@ -170,11 +170,6 @@ fn matching_work_areas(
         .collect()
 }
 
-/// Read usable display bounds on the UI thread; never show or activate windows.
-pub fn pin_work_area(display: &snip2pin::capture::Display) -> egui::Rect {
-    pin_work_areas(std::slice::from_ref(display))[0]
-}
-
 /// Query each desktop once and return usable bounds in the input display order.
 pub fn pin_work_areas(displays: &[snip2pin::capture::Display]) -> Vec<egui::Rect> {
     if displays.is_empty() {

@@ -315,8 +315,12 @@ fn pin_list_rows(
                     }
                 })
                 .collect::<Vec<_>>();
+            let mut counts = std::collections::HashMap::new();
+            for name in &names {
+                *counts.entry(name.as_str()).or_insert(0_usize) += 1;
+            }
             for (pin, name) in pins.iter().zip(&names) {
-                let duplicate = names.iter().filter(|other| *other == name).take(2).count() > 1;
+                let duplicate = counts.get(name.as_str()).is_some_and(|&count| count > 1);
                 if let Some(selected) = ui
                     .push_id(("pin-row", pin.id), |ui| {
                         pin_row(ui, pin, locale, name, duplicate)

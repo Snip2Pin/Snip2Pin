@@ -2221,7 +2221,13 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
     );
     let guarded = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
-        app.tray_action(crate::tray::Action::ClosePin(1), ctx);
+        app.tray_action(
+            crate::tray::Action::Pin {
+                id: 1,
+                command: snip2pin::pin::MenuCommand::Close,
+            },
+            ctx,
+        );
         app.close_pin(1, ctx);
         app.tray_action(crate::tray::Action::ClosePins, ctx);
     });
@@ -2418,7 +2424,13 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
         .expect("queued zoom");
     let locked = ctx.run_logic(&input, |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
-        app.tray_action(crate::tray::Action::RestorePin(1), ctx);
+        app.tray_action(
+            crate::tray::Action::Pin {
+                id: 1,
+                command: snip2pin::pin::MenuCommand::RestoreSize,
+            },
+            ctx,
+        );
     });
     assert!(
         locked
@@ -3882,6 +3894,50 @@ fn appearance_changes_preserve_shortcut_and_survive_restart() {
         reloaded.binding,
         Binding::parse("Ctrl+Shift+4").expect("updated binding")
     );
+}
+
+#[test]
+fn native_menu_commands_keep_queue_order_and_share_copy_cleanup() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let original = app.pins[&1].pixels.clone();
+    app.open_pin_menu(1, None, &ctx);
+    assert!(app.pin_menu.is_some());
+    for command in [pin::MenuCommand::Copy, pin::MenuCommand::ToggleLock] {
+        app.sender
+            .send(Event::Tray(crate::tray::Action::Pin { id: 1, command }))
+            .expect("native menu command");
+    }
+    app.sender.send(Event::ClosePin(1)).expect("later close");
+    let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(
+        app.pins[&1].locked,
+        "the native lock must precede the queued close"
+    );
+    assert!(
+        app.pin_menu.is_none(),
+        "copy completes either menu transport"
+    );
+    assert!(matches!(output.platform_output.commands.as_slice(),
+        [egui::OutputCommand::CopyImage(image)] if image == original.as_ref()));
+    assert!(output.viewport_commands[&pin_menu_id()].contains(&ViewportCommand::Close));
+
+    app.sender
+        .send(Event::Tray(crate::tray::Action::Pin {
+            id: 1,
+            command: pin::MenuCommand::ToggleLock,
+        }))
+        .expect("unlock");
+    app.sender
+        .send(Event::ClosePin(1))
+        .expect("close after unlock");
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(app.pins.is_empty());
 }
 
 #[test]

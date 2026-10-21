@@ -44,13 +44,12 @@ fn pin_menu_id() -> ViewportId {
     ViewportId::from_hash_of("pin-menu")
 }
 
-fn dispatch_pin(
+fn pin_event(
     action: ui::pin::Action,
-    events: &Sender<Event>,
     ctx: &egui::Context,
     menu_position: Option<egui::Pos2>,
-) {
-    let event = match action {
+) -> Event {
+    match action {
         ui::pin::Action::UnlockAll => Event::Tray(crate::tray::Action::UnlockPins),
         ui::pin::Action::UnlockHint(id) => Event::UnlockHint(id),
         ui::pin::Action::CopyPin(id) => Event::CopyPin(id),
@@ -96,8 +95,16 @@ fn dispatch_pin(
                 observed,
             }
         }
-    };
-    let _ = events.send(event);
+    }
+}
+
+fn dispatch_pin(
+    action: ui::pin::Action,
+    events: &Sender<Event>,
+    ctx: &egui::Context,
+    menu_position: Option<egui::Pos2>,
+) {
+    let _ = events.send(pin_event(action, ctx, menu_position));
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
@@ -181,7 +188,7 @@ struct Layer {
 
 struct UnlockHint {
     pin: u64,
-    display: Option<u32>,
+    areas: BTreeMap<u32, egui::Rect>,
     until: Instant,
     raised: Arc<AtomicBool>,
 }
@@ -306,21 +313,7 @@ impl Snip2Pin {
         let shortcut = if demo {
             None
         } else {
-            let ctx = cc.egui_ctx.clone();
-            let hotkey_sender = sender.clone();
-            let unlock_sender = sender.clone();
-            let unlock_ctx = cc.egui_ctx.clone();
-            match Shortcut::register(
-                preferences.binding,
-                move || {
-                    let _ = hotkey_sender.send(Event::Capture);
-                    ctx.request_repaint_of(ViewportId::ROOT);
-                },
-                move || {
-                    let _ = unlock_sender.send(Event::Tray(crate::tray::Action::UnlockPins));
-                    unlock_ctx.request_repaint_of(ViewportId::ROOT);
-                },
-            ) {
+            match register_shortcut(preferences.binding, &sender, &cc.egui_ctx) {
                 Ok((shortcut, warning)) => {
                     if warning.is_some() {
                         message = warning;
@@ -579,6 +572,76 @@ impl Snip2Pin {
         }
     }
 
+    fn handle_event(&mut self, event: Event, ctx: &egui::Context) {
+        match event {
+            Event::HintError(error) => self.message = Some(Text::ScreenHintError.context(error)),
+            Event::UnlockHint(id) => {
+                let point = if self.demo {
+                    None
+                } else {
+                    platform::pointer_position()
+                };
+                self.show_unlock_hint(id, point, ctx);
+            }
+            Event::Capture => {
+                if Instant::now() >= self.suppress_shortcut_until {
+                    self.capture_command(ctx);
+                }
+            }
+            Event::Ready {
+                request_id: id,
+                result,
+                pointer,
+            } => self.accept_capture(id, result, pointer, ctx),
+            Event::Selection {
+                request_id: id,
+                display_id,
+                action,
+            } => self.selection_action(id, display_id, action, ctx),
+            Event::PinFrameDrawn {
+                session,
+                pin_id: pin,
+            } => {
+                if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
+                {
+                    self.reset_capture(ctx);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::BeginPinDrag { pin_id: id, press } => {
+                if self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+                    self.pin_drag.begin(id, press);
+                }
+            }
+            Event::CopyPin(id) => {
+                self.copy_pin(id, ctx);
+                self.close_pin_menu(ctx);
+            }
+            Event::ClosePin(id) => self.close_pin(id, ctx),
+            Event::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
+            Event::ZoomPin {
+                pin_id: id,
+                commands,
+                observed,
+            } => self.zoom_pin(id, &commands, observed, ctx),
+            Event::MenuPin {
+                pin_id: id,
+                position: anchor,
+            } => self.open_pin_menu(id, anchor, ctx),
+            Event::MovePin {
+                pin_id: id,
+                steps,
+                observed,
+            } => self.move_pin(id, steps, observed, ctx),
+            Event::ClosePinMenu => self.close_pin_menu(ctx),
+            Event::Tray(action) => self.tray_action(action, ctx),
+            Event::QuitDecision {
+                request_id: id,
+                outcome,
+            } => self.quit_decision(id, outcome, ctx),
+        }
+    }
+
     fn tray_action(&mut self, action: crate::tray::Action, ctx: &egui::Context) {
         use crate::tray::Action;
         match action {
@@ -612,10 +675,12 @@ impl Snip2Pin {
             }
             Action::Capture => self.capture_command(ctx),
             Action::UnlockPins => self.unlock_pins(ctx),
-            Action::CopyPin(id) => self.copy_pin(id, ctx),
-            Action::ClosePin(id) => self.close_pin(id, ctx),
-            Action::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
-            Action::RestorePin(id) => self.zoom_pin(id, &[pin::Zoom::Original], None, ctx),
+            Action::Pin { id, command } => {
+                self.handle_event(
+                    pin_event(ui::pin::Action::from_menu(id, command), ctx, None),
+                    ctx,
+                );
+            }
             Action::ClosePins => {
                 self.close_pins(ctx);
                 if matches!(
@@ -850,32 +915,32 @@ impl Snip2Pin {
                 egui::TextureOptions::LINEAR,
             );
             ctx.copy_image((*pixels).clone());
-            let screen = if self.demo {
-                egui::Rect::from_min_size(
-                    snapshot.display.position().into(),
-                    snapshot.display.logical_size().into(),
-                )
-            } else {
-                platform::pin_work_area(&snapshot.display)
-            };
+            let displays: Vec<_> = self
+                .layers
+                .values()
+                .map(|layer| layer.display.clone())
+                .collect();
+            let areas = display_areas(&displays, self.demo);
+            let screen = displays
+                .iter()
+                .zip(&areas)
+                .find(|(display, _)| display.id == display_id)
+                .map(|(_, area)| *area)
+                .unwrap_or_else(|| {
+                    // A source display must still get its own current work area
+                    // if its warmed layer is no longer in the topology snapshot.
+                    display_areas(std::slice::from_ref(&snapshot.display), self.demo)[0]
+                });
             let screen_areas = Arc::new(
-                self.layers
-                    .values()
-                    .map(|layer| {
-                        let area = if self.demo {
-                            egui::Rect::from_min_size(
-                                layer.display.position().into(),
-                                layer.display.logical_size().into(),
-                            )
-                        } else {
-                            platform::pin_work_area(&layer.display)
-                        };
-                        // Normalize mixed-DPI display bounds to the capture's
-                        // coordinate scale before the viewport applies its DPI.
+                displays
+                    .iter()
+                    .zip(areas)
+                    .map(|(display, area)| {
+                        // Normalize mixed-DPI bounds into the capture's coordinates.
                         let factor = if cfg!(target_os = "macos") {
                             1.0
                         } else {
-                            layer.display.scale / snapshot.display.scale
+                            display.scale / snapshot.display.scale
                         };
                         egui::Rect::from_min_max(area.min * factor, area.max * factor)
                     })
@@ -998,8 +1063,8 @@ impl Snip2Pin {
     }
 
     fn clear_unlock_hint(&mut self, ctx: &egui::Context) {
-        if self.unlock_hint.take().is_some() {
-            for &display in self.layers.keys() {
+        if let Some(hint) = self.unlock_hint.take() {
+            for &display in hint.areas.keys() {
                 ctx.request_repaint_of(layer_id(display));
             }
         }
@@ -1018,19 +1083,26 @@ impl Snip2Pin {
                 .find(|(_, layer)| layer.display.contains(point))
                 .map(|(&id, _)| id)
         });
+        let displays: Vec<_> = self
+            .layers
+            .values()
+            .filter(|layer| display.is_none_or(|id| layer.display.id == id))
+            .map(|layer| layer.display.clone())
+            .collect();
+        let areas = display_areas(&displays, self.demo);
+        for display in &displays {
+            ctx.request_repaint_of(layer_id(display.id));
+        }
         self.unlock_hint = Some(UnlockHint {
             pin: id,
-            display,
+            areas: displays
+                .iter()
+                .map(|display| display.id)
+                .zip(areas)
+                .collect(),
             until: Instant::now() + ui::screen_hint::UNLOCK_DURATION,
             raised: Arc::new(AtomicBool::new(false)),
         });
-        for &id in self
-            .layers
-            .keys()
-            .filter(|&&id| display.is_none_or(|display| display == id))
-        {
-            ctx.request_repaint_of(layer_id(id));
-        }
         ctx.request_repaint_after_for(ui::screen_hint::UNLOCK_DURATION, ViewportId::ROOT);
     }
 
@@ -1339,21 +1411,7 @@ impl Snip2Pin {
         self.suppress_shortcut_until = Instant::now() + SHORTCUT_SUPPRESSION;
         let mut registration_warning = None;
         if self.shortcut.is_none() && !self.demo && platform::global_shortcuts_supported() {
-            let sender = self.sender.clone();
-            let unlock_sender = self.sender.clone();
-            let unlock_ctx = ctx.clone();
-            let ctx = ctx.clone();
-            match Shortcut::register(
-                binding,
-                move || {
-                    let _ = sender.send(Event::Capture);
-                    ctx.request_repaint_of(ViewportId::ROOT);
-                },
-                move || {
-                    let _ = unlock_sender.send(Event::Tray(crate::tray::Action::UnlockPins));
-                    unlock_ctx.request_repaint_of(ViewportId::ROOT);
-                },
-            ) {
+            match register_shortcut(binding, &self.sender, ctx) {
                 Ok((shortcut, warning)) => {
                     self.shortcut = Some(shortcut);
                     registration_warning = warning;
@@ -1561,17 +1619,7 @@ impl Snip2Pin {
             let hint_area = self
                 .unlock_hint
                 .as_ref()
-                .filter(|hint| hint.display.is_none_or(|id| id == display_id))
-                .map(|_| {
-                    if demo {
-                        egui::Rect::from_min_size(
-                            display.position().into(),
-                            display.logical_size().into(),
-                        )
-                    } else {
-                        platform::pin_work_area(&display)
-                    }
-                });
+                .and_then(|hint| hint.areas.get(&display_id).copied());
             let position = display.position();
             let size = display.logical_size();
             ctx.show_viewport_deferred(
@@ -1887,75 +1935,7 @@ impl eframe::App for Snip2Pin {
             self.message = Some(error);
         }
         while let Ok(event) = self.events.try_recv() {
-            match event {
-                Event::HintError(error) => {
-                    self.message = Some(Text::ScreenHintError.context(error))
-                }
-                Event::UnlockHint(id) => {
-                    let point = if self.demo {
-                        None
-                    } else {
-                        platform::pointer_position()
-                    };
-                    self.show_unlock_hint(id, point, ctx);
-                }
-                Event::Capture => {
-                    if Instant::now() >= self.suppress_shortcut_until {
-                        self.capture_command(ctx);
-                    }
-                }
-                Event::Ready {
-                    request_id: id,
-                    result,
-                    pointer,
-                } => self.accept_capture(id, result, pointer, ctx),
-                Event::Selection {
-                    request_id: id,
-                    display_id,
-                    action,
-                } => self.selection_action(id, display_id, action, ctx),
-                Event::PinFrameDrawn {
-                    session,
-                    pin_id: pin,
-                } => {
-                    if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
-                    {
-                        self.reset_capture(ctx);
-                    }
-                }
-                #[cfg(target_os = "macos")]
-                Event::BeginPinDrag { pin_id: id, press } => {
-                    if self.pins.get(&id).is_some_and(|pin| !pin.locked) {
-                        self.pin_drag.begin(id, press);
-                    }
-                }
-                Event::CopyPin(id) => {
-                    self.copy_pin(id, ctx);
-                    self.close_pin_menu(ctx);
-                }
-                Event::ClosePin(id) => self.close_pin(id, ctx),
-                Event::ToggleLock(id) => self.toggle_pin_lock(id, ctx),
-                Event::ZoomPin {
-                    pin_id: id,
-                    commands,
-                    observed,
-                } => self.zoom_pin(id, &commands, observed, ctx),
-                Event::MenuPin {
-                    pin_id: id,
-                    position: anchor,
-                } => self.open_pin_menu(id, anchor, ctx),
-                Event::MovePin {
-                    pin_id: id,
-                    steps,
-                    observed,
-                } => self.move_pin(id, steps, observed, ctx),
-                Event::ClosePinMenu => self.close_pin_menu(ctx),
-                Event::Tray(action) => self.tray_action(action, ctx),
-                Event::QuitDecision {
-                    request_id: id,
-                    outcome,
-                } => self.quit_decision(id, outcome, ctx),
-            }
+            self.handle_event(event, ctx);
         }
         let menu_state = self.menu_state();
         if let Some(tray) = &mut self.tray {
@@ -2101,6 +2081,42 @@ impl eframe::App for Snip2Pin {
 
 fn layer_id(display_id: u32) -> ViewportId {
     ViewportId::from_hash_of(("selection", display_id))
+}
+
+fn register_shortcut(
+    binding: Binding,
+    events: &Sender<Event>,
+    ctx: &egui::Context,
+) -> Result<(Shortcut, Option<Message>), Message> {
+    let capture_events = events.clone();
+    let unlock_events = events.clone();
+    let capture_ctx = ctx.clone();
+    let unlock_ctx = ctx.clone();
+    Shortcut::register(
+        binding,
+        move || {
+            let _ = capture_events.send(Event::Capture);
+            capture_ctx.request_repaint_of(ViewportId::ROOT);
+        },
+        move || {
+            let _ = unlock_events.send(Event::Tray(crate::tray::Action::UnlockPins));
+            unlock_ctx.request_repaint_of(ViewportId::ROOT);
+        },
+    )
+}
+
+/// Read one work-area snapshot per operation; demo hosts never query the desktop.
+fn display_areas(displays: &[Display], demo: bool) -> Vec<egui::Rect> {
+    if demo {
+        displays
+            .iter()
+            .map(|display| {
+                egui::Rect::from_min_size(display.position().into(), display.logical_size().into())
+            })
+            .collect()
+    } else {
+        platform::pin_work_areas(displays)
+    }
 }
 
 fn pin_focused(ctx: &egui::Context, id: u64) -> bool {

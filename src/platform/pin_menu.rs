@@ -1,27 +1,26 @@
 //! Native context menus use the current pointer and the owning pin window.
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(target_os = "macos")]
 use snip2pin::i18n::Text;
 use snip2pin::i18n::{Locale, Message};
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+use snip2pin::pin::MenuCommand;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray_icon::menu::{ContextMenu, Menu, MenuItem};
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
-fn entries(id: u64, locale: Locale, locked: bool) -> [(String, &'static str, bool); 4] {
-    [
-        (format!("pin-copy:{id}"), locale.text(Text::Copy), true),
+fn entries(
+    id: u64,
+    locale: Locale,
+    locked: bool,
+) -> [(String, &'static str, bool); MenuCommand::ALL.len()] {
+    MenuCommand::ALL.map(|command| {
         (
-            format!("pin-lock:{id}"),
-            locale.text(if locked { Text::Unlock } else { Text::Lock }),
-            true,
-        ),
-        (
-            format!("pin-restore:{id}"),
-            locale.text(Text::RestoreSize),
-            !locked,
-        ),
-        (format!("pin-close:{id}"), locale.text(Text::Close), !locked),
-    ]
+            format!("{}:{id}", command.key()),
+            locale.text(command.text(locked)),
+            command.enabled(locked),
+        )
+    })
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
