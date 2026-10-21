@@ -63,6 +63,8 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Repository checks
         run: cargo xtask check
+      - name: Release-profile executable size (no packages/upload)
+        run: cargo xtask check-release-size ${{ matrix.target }}
       - name: Package structure and CLI smoke check (no credentials/upload)
         run: cargo xtask package ${{ matrix.target }} debug
       - name: macOS packaging storage
