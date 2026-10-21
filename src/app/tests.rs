@@ -1,5 +1,7 @@
 use super::*;
 
+mod pin_pipeline;
+
 #[cfg(target_os = "macos")]
 #[path = "tests/macos_drag.rs"]
 mod macos_drag;
@@ -2093,7 +2095,7 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
     let pin = &app.pins[&1];
     let second = Pin {
         name: String::new(),
-        zoom_window: None,
+        zoom: platform::pin_zoom::PinZoom::new(2),
         texture: pin.texture.clone(),
         pixels: pin.pixels.clone(),
         initial: pin.initial,

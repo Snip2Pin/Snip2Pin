@@ -63,14 +63,64 @@ pub const MENU_SIZE: egui::Vec2 = egui::vec2(
 pub struct Interaction {
     pub native_edges: bool,
     pub locked: bool,
-    pub excluded: Option<Rect>,
+    pub toolbar: Option<Toolbar>,
     /// Virtual hosts supply per-image focus; native hosts use viewport focus.
     pub keyboard_focus: Option<bool>,
+    pub space: InputSpace,
 }
 
-/// The web sandbox intercepts these requests; desktop hosts handle the gesture.
-/// This view never computes or requests a new window position or size.
-pub fn image_with_host(
+/// Host-observed image origin and native screen units per UI point.
+#[derive(Clone, Copy, Debug)]
+pub struct InputSpace {
+    /// Unknown on hosts that cannot report a global window position.
+    pub origin: Option<Pos2>,
+    pub scale: f32,
+}
+
+impl Default for InputSpace {
+    fn default() -> Self {
+        Self {
+            origin: None,
+            scale: 1.0,
+        }
+    }
+}
+
+/// Paint one complete pin; hosts supply observed layout and handle native gestures.
+pub fn show(
+    ui: &mut egui::Ui,
+    id: u64,
+    texture: &TextureHandle,
+    interaction: Interaction,
+    events: &dyn Fn(Action),
+    host: impl FnMut(ViewportCommand),
+) {
+    let hovered = ui
+        .input(|input| input.pointer.hover_pos())
+        .is_some_and(|point| ui.max_rect().contains(point));
+    image_with_host(ui, id, texture, interaction, events, host);
+    if interaction
+        .keyboard_focus
+        .unwrap_or_else(|| ui.input(|input| input.viewport().focused == Some(true)))
+    {
+        ui.painter().rect_stroke(
+            ui.max_rect(),
+            0,
+            egui::Stroke::new(
+                PIN.highlight_stroke_pixels / ui.ctx().pixels_per_point(),
+                PIN.highlight,
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if hovered && let Some(toolbar) = interaction.toolbar {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(toolbar.bounds), |ui| {
+            controls(ui, id, interaction.locked, toolbar, events);
+        });
+    }
+}
+
+fn image_with_host(
     ui: &mut egui::Ui,
     id: u64,
     texture: &TextureHandle,
@@ -81,9 +131,11 @@ pub fn image_with_host(
     let Interaction {
         native_edges,
         locked,
-        excluded,
+        toolbar,
         keyboard_focus,
+        ..
     } = interaction;
+    let excluded = toolbar.map(|toolbar| toolbar.bounds);
     let bounds = ui.max_rect();
     let focused =
         keyboard_focus.unwrap_or_else(|| ui.input(|input| input.viewport().focused == Some(true)));
@@ -179,13 +231,7 @@ pub fn image_with_host(
     response.contains_pointer()
 }
 
-pub fn controls(
-    ui: &mut egui::Ui,
-    id: u64,
-    locked: bool,
-    toolbar: Toolbar,
-    events: &dyn Fn(Action),
-) {
+fn controls(ui: &mut egui::Ui, id: u64, locked: bool, toolbar: Toolbar, events: &dyn Fn(Action)) {
     let locale = crate::i18n::locale(ui.ctx());
     let step = METRICS.button + METRICS.button_gap;
     for (index, control) in Control::ALL

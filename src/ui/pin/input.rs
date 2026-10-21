@@ -83,8 +83,8 @@ pub(super) fn adjust(
         bounds.contains(*point)
             && ui.clip_rect().contains(*point)
             && !interaction
-                .excluded
-                .is_some_and(|rect| rect.contains(*point))
+                .toolbar
+                .is_some_and(|toolbar| toolbar.bounds.contains(*point))
             && ui.ctx().layer_id_at(*point) == Some(ui.layer_id())
     });
     let mut session = ui
@@ -107,16 +107,7 @@ pub(super) fn adjust(
     let target = Target {
         hovered,
         bounds,
-        screen_scale: if cfg!(target_os = "macos") {
-            zoom
-        } else {
-            ui.ctx().pixels_per_point()
-        },
-        screen_origin: if interaction.keyboard_focus.is_some() {
-            Some(bounds.min)
-        } else {
-            ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min))
-        },
+        space: interaction.space,
     };
     let scroll_zoom_speed = ui
         .ctx()

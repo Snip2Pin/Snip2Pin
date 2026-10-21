@@ -2,6 +2,8 @@
 use eframe::egui::{self, Pos2, TouchPhase};
 use snip2pin::pin::ZoomAnchor;
 
+use super::InputSpace;
+
 // egui's wheel fallback also ends phase-less input after a 150 ms quiet gap.
 // Native Start/End signals take precedence. No timer or idle polling is needed.
 const PHASELESS_IDLE: f64 = 0.150;
@@ -17,8 +19,7 @@ pub(super) struct Session {
 pub(super) struct Target {
     pub hovered: Option<Pos2>,
     pub bounds: egui::Rect,
-    pub screen_origin: Option<Pos2>,
-    pub screen_scale: f32,
+    pub space: InputSpace,
 }
 
 #[derive(Clone, Copy)]
@@ -65,8 +66,9 @@ impl Session {
                 fraction.is_finite().then_some(ZoomAnchor {
                     fraction: fraction.into(),
                     screen: target
-                        .screen_origin
-                        .map(|origin| ((origin + offset) * target.screen_scale).into()),
+                        .space
+                        .origin
+                        .map(|origin| ((origin + offset) * target.space.scale).into()),
                 })
             });
             *slot = Some(Self {

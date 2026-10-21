@@ -284,22 +284,22 @@ fn main() {
                             .firstObject()
                             .expect("primary screen");
                         let top = primary.frame().origin.y + primary.frame().size.height;
-                        let mut zoom_window = None;
+                        let mut zoom = platform::pin_zoom::PinZoom::new(index as u64);
                         for factor in [1.25, 0.8, 1.01] {
-                            platform::zoom_pin_native(
-                                index as u64,
-                                [600, 400],
-                                native.backingScaleFactor() as f32,
-                                &[pin::Zoom::At {
-                                    factor,
-                                    anchor: pin::ZoomAnchor {
-                                        fraction: anchor,
-                                        screen: Some([point.0 as f32, (top - point.1) as f32]),
-                                    },
-                                }],
-                                &mut zoom_window,
-                            )
-                            .expect("atomic anchored zoom");
+                            let outcome = zoom
+                                .apply(
+                                    [600, 400],
+                                    native.backingScaleFactor() as f32,
+                                    &[pin::Zoom::At {
+                                        factor,
+                                        anchor: pin::ZoomAnchor {
+                                            fraction: anchor,
+                                            screen: Some([point.0 as f32, (top - point.1) as f32]),
+                                        },
+                                    }],
+                                )
+                                .expect("atomic anchored zoom");
+                            assert_eq!(outcome, platform::pin_zoom::Outcome::Applied);
                             let actual = native.contentRectForFrameRect(native.frame());
                             let moved = (
                                 actual.origin.x + actual.size.width * f64::from(anchor[0]),
@@ -491,7 +491,7 @@ fn main() {
             let primary = screens.iter().next().expect("native display").frame();
             let desktop_top = primary.origin.y + primary.size.height;
             let mut aligned_windows = Vec::new();
-            for zoom in [1.0, 1.25, 2.0] {
+            for (index, zoom) in [1.0, 1.25, 2.0].into_iter().enumerate() {
                 let ctx = egui::Context::default();
                 ctx.set_zoom_factor(zoom);
                 let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -510,7 +510,7 @@ fn main() {
                     ),
                 )
                 .image;
-                let title = format!("Snip2Pin · 贴图 aligned-{zoom}");
+                let title = platform::pin_window::title((images.len() + index) as u64);
                 let builder = egui::ViewportBuilder::default()
                     .with_title(&title)
                     .with_decorations(false)
@@ -546,6 +546,14 @@ fn main() {
                     .into_iter()
                     .find(|window| window.title().to_string() == title)
                     .expect("canonical native image");
+                assert_eq!(
+                    native.collectionBehavior(),
+                    objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
+                        | objc2_app_kit::NSWindowCollectionBehavior::Stationary
+                        | objc2_app_kit::NSWindowCollectionBehavior::IgnoresCycle
+                        | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                    "canonical image must pass through native preparation"
+                );
                 let content = native.contentRectForFrameRect(native.frame());
                 let view = native.contentView().expect("content view");
                 let view_screen =

@@ -33,7 +33,7 @@ impl Fixture {
         let mut app = tiny_pin_app(&ctx);
         let pin = &app.pins[&1];
         let second = Pin {
-            zoom_window: None,
+            zoom: platform::pin_zoom::PinZoom::new(2),
             lock_limits: None,
             name: String::new(),
             texture: pin.texture.clone(),

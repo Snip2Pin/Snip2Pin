@@ -14,6 +14,18 @@ pub mod pin_menu;
 #[path = "platform/pin_window.rs"]
 pub mod pin_window;
 
+/// Convert the native viewport's observed coordinates at the desktop seam.
+pub fn pin_input_space(ui: &egui::Ui) -> snip2pin::ui::pin::InputSpace {
+    snip2pin::ui::pin::InputSpace {
+        origin: ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min)),
+        scale: if cfg!(target_os = "macos") {
+            ui.ctx().zoom_factor()
+        } else {
+            ui.ctx().pixels_per_point()
+        },
+    }
+}
+
 /// Lay out controls using the native window's presentation constraints.
 pub fn pin_toolbar(
     _id: u64,
@@ -31,24 +43,6 @@ pub fn pin_toolbar(
 
 #[path = "platform/pin_zoom.rs"]
 pub mod pin_zoom;
-
-pub fn zoom_pin_native(
-    id: u64,
-    pixels: [usize; 2],
-    scale: f32,
-    commands: &[snip2pin::pin::Zoom],
-    cache: &mut Option<pin_zoom::Window>,
-) -> Result<bool, Message> {
-    if cache.is_none() {
-        *cache = pin_zoom::Window::find(id)?;
-    }
-    if let Some(window) = cache {
-        window.apply(pixels, scale, commands)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
 
 #[path = "platform/quit_prompt.rs"]
 pub mod quit_prompt;
@@ -243,7 +237,8 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
         let application = NSApplication::sharedApplication(main_thread);
         for window in application.windows() {
             let title = window.title().to_string();
-            let pin_or_menu = title.starts_with("Snip2Pin · 贴图") || title == "Snip2Pin · 操作";
+            let pin_or_menu =
+                pin_window::id_from_title(&title).is_some() || title == "Snip2Pin · 操作";
             if title == snip2pin::SELECTION_WINDOW_TITLE || pin_or_menu {
                 let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::Stationary

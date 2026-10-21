@@ -130,7 +130,7 @@ struct UnlockHint {
 
 struct Pin {
     name: String,
-    zoom_window: Option<platform::pin_zoom::Window>,
+    zoom: platform::pin_zoom::PinZoom,
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
     initial: egui::Rect,
@@ -144,6 +144,17 @@ struct Pin {
     lock_limits: Option<platform::PinLock>,
     #[cfg(target_os = "macos")]
     presented: Cell<bool>,
+}
+
+impl Pin {
+    fn release(self, id: u64, ctx: &egui::Context) {
+        launcher::forget_pin_name(ctx, id);
+        ui::pin::forget_input(ctx, id);
+        ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
+        if self.ready.load(Ordering::Acquire) {
+            ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
+        }
+    }
 }
 
 struct PinMenu {
@@ -810,7 +821,7 @@ impl Snip2Pin {
                 self.next_pin,
                 Pin {
                     name: String::new(),
-                    zoom_window: None,
+                    zoom: platform::pin_zoom::PinZoom::new(self.next_pin),
                     texture,
                     pixels,
                     initial: {
@@ -890,12 +901,7 @@ impl Snip2Pin {
             self.close_pin_menu(ctx);
         }
         if let Some(pin) = self.pins.remove(&id) {
-            launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_input(ctx, id);
-            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
-            if pin.ready.load(Ordering::Acquire) {
-                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
-            }
+            pin.release(id, ctx);
         }
         if matches!(&self.phase, Phase::Selecting { pending_pin: Some(pending), .. } if *pending == id)
         {
@@ -1031,20 +1037,17 @@ impl Snip2Pin {
             })
         });
         if !self.demo
-            && commands
-                .iter()
-                .any(|command| matches!(command, pin::Zoom::At { .. }))
             && let Some((_, scale)) = geometry
         {
             let Some(pin) = self.pins.get_mut(&id) else {
                 return;
             };
-            match platform::zoom_pin_native(id, pixels, scale, commands, &mut pin.zoom_window) {
-                Ok(true) => {
+            match pin.zoom.apply(pixels, scale, commands) {
+                Ok(platform::pin_zoom::Outcome::Applied) => {
                     self.close_pin_menu(ctx);
                     return;
                 }
-                Ok(false) => {} // Native Wayland has no global positioning request.
+                Ok(platform::pin_zoom::Outcome::SizeOnly) => {}
                 Err(error) => {
                     self.message = Some(error);
                     return;
@@ -1127,12 +1130,7 @@ impl Snip2Pin {
         }
         self.close_pin_menu(ctx);
         for (id, pin) in std::mem::take(&mut self.pins) {
-            launcher::forget_pin_name(ctx, id);
-            ui::pin::forget_input(ctx, id);
-            ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
-            if pin.ready.load(Ordering::Acquire) {
-                ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
-            }
+            pin.release(id, ctx);
         }
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
     }
@@ -1585,7 +1583,7 @@ impl Snip2Pin {
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
                 .window_icon(egui::ViewportBuilder::default())
-                .with_title(format!("Snip2Pin · 贴图 {id}"))
+                .with_title(platform::pin_window::title(id))
                 .with_decorations(false)
                 .with_transparent(false)
                 .with_has_shadow(true)
@@ -1632,9 +1630,6 @@ impl Snip2Pin {
                     let bounds = ui.max_rect();
                     pin::toolbar_geometry(bounds, &[], bounds, 1.0)
                 };
-                let hovered = ui
-                    .input(|input| input.pointer.hover_pos())
-                    .is_some_and(|point| ui.max_rect().contains(point));
                 let ctx = ui.ctx().clone();
                 let menu_position = fallback_menu
                     .then(|| {
@@ -1659,15 +1654,16 @@ impl Snip2Pin {
                 ui::pin::route_gesture(ui, &dispatch);
                 #[cfg(target_os = "macos")]
                 let press_origin = ui.input(|input| input.pointer.press_origin());
-                ui::pin::image_with_host(
+                ui::pin::show(
                     ui,
                     id,
                     &texture,
                     ui::pin::Interaction {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
-                        excluded: controls.map(|toolbar| toolbar.bounds),
+                        toolbar: controls,
                         keyboard_focus: None,
+                        space: platform::pin_input_space(ui),
                     },
                     &dispatch,
                     |command| {
@@ -1688,17 +1684,6 @@ impl Snip2Pin {
                         ctx.send_viewport_cmd(command);
                     },
                 );
-                if pin_focused(&ctx, id) {
-                    ui.painter().rect_stroke(
-                        ui.max_rect(),
-                        0,
-                        egui::Stroke::new(
-                            ui::style::PIN.highlight_stroke_pixels / ctx.pixels_per_point(),
-                            ui::style::PIN.highlight,
-                        ),
-                        egui::StrokeKind::Inside,
-                    );
-                }
                 let small = launcher::pin_is_small(ui.max_rect().size());
                 let changed = ctx.data_mut(|data| {
                     let key = pin_hint_state_id(id);
@@ -1716,11 +1701,6 @@ impl Snip2Pin {
                         .any(|event| matches!(event, egui::Event::WindowFocused(_)))
                 }) {
                     ctx.request_repaint_of(ViewportId::ROOT);
-                }
-                if hovered && let Some(row) = controls {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(row.bounds), |ui| {
-                        ui::pin::controls(ui, id, locked, row, &dispatch);
-                    });
                 }
                 if !ready.swap(true, Ordering::AcqRel) {
                     let _ = events.send(Event::PinReady(session, id));

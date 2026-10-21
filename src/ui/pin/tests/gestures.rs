@@ -74,6 +74,34 @@ fn wheel(unit: egui::MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event
 }
 
 #[test]
+fn zoom_anchor_uses_explicit_host_space_independently_of_keyboard_focus() {
+    let point = egui::pos2(80.0, 80.0);
+    for keyboard_focus in [None, Some(false), Some(true)] {
+        for origin in [None, Some(egui::pos2(-600.0, 30.0))] {
+            for scale in [1.0, 2.5] {
+                let mut fixture = Fixture::new();
+                let (actions, commands) = fixture.paint(
+                    vec![Event::PointerMoved(point), Event::Zoom(1.2)],
+                    Interaction {
+                        keyboard_focus,
+                        space: InputSpace { origin, scale },
+                        ..Default::default()
+                    },
+                );
+                assert!(commands.is_empty());
+                assert!(matches!(actions.as_slice(),
+                    [Action::Zoom(7, zooms)] if matches!(zooms.as_slice(),
+                        [Zoom::At { anchor, .. }]
+                            if anchor.fraction == [1.0 / 3.0, 0.5]
+                                && anchor.screen == origin.map(|origin| ((origin + point.to_vec2()) * scale).into())
+                    )
+                ));
+            }
+        }
+    }
+}
+
+#[test]
 fn plain_precision_scroll_does_not_move_or_resize_the_pin() {
     let mut fixture = Fixture::new();
     let (actions, commands) = fixture.paint(
@@ -418,7 +446,10 @@ fn pinch_ignores_invalid_factors_and_excluded_targets() {
                 Event::Zoom(1.2),
             ],
             Interaction {
-                excluded: excluded.then_some(Rect::from_center_size(point, Vec2::splat(20.0))),
+                toolbar: excluded.then_some(Toolbar {
+                    bounds: Rect::from_center_size(point, Vec2::splat(20.0)),
+                    count: 0,
+                }),
                 ..Default::default()
             },
         );
