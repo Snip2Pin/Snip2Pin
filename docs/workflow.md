@@ -165,6 +165,28 @@ macOS 首次打开被阻止时由用户按[Apple 官方指引](https://support.a
 该提交的计数。首期发版入口只接受稳定版 `MAJOR.MINOR.PATCH`，不带 `v`；Git tag
 为 `vMAJOR.MINOR.PATCH`。不在普通提交中自动升级版本，也不发布 crate。
 
+### 体积检查
+
+PR CI 在四个原生目标上运行 `cargo xtask check-release-size TARGET`，只构建
+发行优化配置的可执行文件和临时安装内容并记录字节数，不创建候选包、上传文件或执行发版。
+完整 payload 递归统计普通文件、不跟随符号链接；打包时另行记录候选归档及
+每一种最终安装包的字节数，结果写入日志和 GitHub job summary。
+压缩下载大小与安装后的 payload 大小分别验收。
+
+预算以 `xtask/src/sizes.rs` 为准，根据四个原生 runner 的发行构建实测设置，
+不以调试包推算。系统提供的动态库和字体不属于 payload，包管理器的额外下载与
+占用仍需在安装验收中核对。
+
+| 目标 | 可执行文件上限 | payload 上限 |
+| --- | --- | --- |
+| macOS ARM | 10 MiB | 12 MiB |
+| macOS Intel | 12 MiB | 14 MiB |
+| Windows x64 | 12 MiB | 14 MiB |
+| Linux x64 | 20 MiB | 22 MiB |
+
+新增依赖、内嵌资源或预算调整须说明体积变化和理由，不使用
+UPX 等压缩壳掩盖体积，也不牺牲启动速度、可访问性或必要的平台支持。
+
 ## 发版前准备
 
 仅在用户明确要求发版后执行本节及后续步骤。以下命令是操作手册，不是授权。
@@ -291,8 +313,11 @@ cargo xtask prepare-linux CANDIDATE_DIR dist/final signed
 
 签名完成后不得改动应用内容；修改需回到构建步骤。最终清单与安装包一起保留，
 包含原候选包的 SHA-256；正式发布时还会对照候选构建 run 的原始 artifact 核对来源。
-第三方声明从实际依赖的 registry 许可文本生成并随包分发；发行前仍需核对字体及
-系统库要求，不能把自动收集当成法律审查。
+第三方声明使用固定版本 cargo-about 按应用的四平台普通依赖生成，排除开发／构建工具。
+`about.toml` 校验上游许可来源；少数仅声明许可的上游版本使用经核对的版本、源码提交和
+manifest 哈希，保留原始声明并明确标注标准 SPDX 参考文本。未知回退会阻止打包。
+内置字体的四份声明及 Windows 安装器 NSIS 运行时声明单独保留；来源和更新方法见
+[许可收集说明](../packaging/licenses/README.md)。自动收集不能代替发版前的许可核对。
 
 ## 可选：公开发版后的 AUR 配方
 

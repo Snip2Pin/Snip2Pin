@@ -14,6 +14,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 界面支持中文、英文，默认在启动时按系统首选语言顺序匹配，无匹配或读取失败时回退英文；用户可选择跟随系统、简体中文或 English，手动选择立即生效并持久保存。文案集中在类型化翻译目录，新增文案同时提供中英文，原生界面与 WebAssembly 共用。消息保留语义直到显示时翻译，系统或第三方诊断信息保留原文；翻译不得参与事件路由或原生窗口身份识别。覆盖长英文、小窗口、动态参数及旧设置兼容，不轮询系统语言。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
+- 运行时只读取预生成图标；SVG 渲染依赖仅放在开发工具中，用 `cargo xtask icons` 再生资源并校验像素一致性，避免把开发工具的代码带进应用。
+- 应用和安装包体积也是验收指标：分别报告可执行文件、解包内容及各发行格式的实际字节数，不用压缩包大小代替安装体积。按实测平台基线设置发版构建预算，变更预算须说明原因；调试包不套用发行包上限。不使用可执行压缩壳，不为缩小体积牺牲可访问性、画质、必要的平台能力或启动速度。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
@@ -171,6 +173,11 @@ globally suppress advisories/licenses to obtain a green check. Any scoped
 exception needs an advisory ID, impact analysis and a dated follow-up.
 The project and contributions use MIT; include LICENSE in application packages
 and preserve required third-party license notices.
+Generate notices with the pinned cargo-about tool over the application's normal
+desktop dependencies. Preserve bundled font and installer-runtime notices too.
+Keep upstream clarifications and reviewed fallbacks bound to source versions and
+checksums; unknown attribution gaps block packaging. Never invent copyright
+holders or present a standard-license reference as an upstream copyright notice.
 
 CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
 platform-specific caches. PRs cannot access signing credentials. Daily checks
@@ -279,7 +286,9 @@ root geometry, DPI/UI zoom, cross-viewport continuation and lock checks.
 Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
-Do not commit screenshots, credentials, toolchains, caches, or build output.
+Do not commit private screenshots, credentials, toolchains, caches, or build output.
+Explicitly requested README illustrations may use generated public sample images
+from the shared UI sandbox; label their source and keep binary assets in Git LFS.
 Keep macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
 Settings use the platform configuration root plus `Snip2Pin`; local macOS signing

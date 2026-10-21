@@ -1,265 +1,118 @@
 # Snip2Pin · 截图置顶
 
-[源码 / Source](https://github.com/Snip2Pin/Snip2Pin)
+[![CI](https://img.shields.io/github/actions/workflow/status/Snip2Pin/Snip2Pin/ci.yml?branch=main&label=CI)](https://github.com/Snip2Pin/Snip2Pin/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/Snip2Pin/Snip2Pin)](LICENSE) [![Rust 1.95+](https://img.shields.io/badge/Rust-1.95%2B-b7410e?logo=rust)](Cargo.toml) [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-2563eb)](#支持平台--platforms)
 
 <p>
-  <img src="assets/icons/line.svg" width="96" alt="Light icon: minimal lines" />
-  <img src="assets/icons/metal.svg" width="96" alt="Dark icon: dark metal" />
+  <img src="assets/icons/line.svg" width="64" alt="极简线条图标 / Line icon" />
+  <img src="assets/icons/metal.svg" width="64" alt="深色金属图标 / Metal icon" />
 </p>
-
-A small Rust desktop app for Windows, macOS, and Linux. Capture a region,
-keep it above other windows, and drag to move. Close with × or Esc.
 
 **截图，原位置顶。 / Snip a region. Pin it in place.**
 
-## 使用 / Usage
+用 Rust 编写的轻量截图置顶工具，支持 Windows、macOS 和 Linux。
+A small Rust app that keeps screenshots above other windows.
 
-### 中文
+![主页、贴图列表与悬停操作按钮 / Home, pin list and hover controls](assets/readme/shared-ui.png)
 
-- 点击「截图并置顶」或按快捷键，悬停识别窗口后单击，或在任意显示器上拖动框选；完成后原位置顶，并自动复制到剪贴板。
-- 蓝框标识识别到的窗口，拖动时仅显示框选边界；未选区域略微变暗。按 Esc 取消。
-- 拖动贴图移动，拖动边缘或滚动鼠标缩放，点击 × 或按 Esc 关闭；边缘缩放遵循系统惯例。悬停显示复制、锁定、关闭按钮，窄图逐个隐藏左侧按钮，右键菜单保留所有操作；小图保持原始尺寸，复制始终使用原图。
-- 在贴图上捏合或滚动鼠标缩放，固定开始时鼠标指向的图片点。触摸屏单指框选或拖动。触摸板双指滑动不调整贴图，捏合兼容 Ctrl+滚轮；仅模拟普通滚轮的触摸板仍按滚轮缩放。Wayland 位置由系统管理。
-- 在主页单击贴图所在行可定位并聚焦，双击名称可编辑，也可锁定或关闭。贴图聚焦时高亮，方向键轻按微调一步，长按按系统节拍逐步增大步长；Shift＋方向键固定大步移动，松手停止。`=`／`-` 微调缩放、`0` 恢复原始尺寸。按住 Shift 可加快缩放，滚轮同样支持。名称仅保留到贴图关闭。锁定后不能移动、缩放或关闭；有锁定贴图时，退出需要确认。
-- 菜单栏／托盘和 macOS Dock 提供主页、截图和关闭未锁定贴图等操作。有托盘时关闭主页会留在后台；「开机自启」默认关闭。
+<sub>共享界面的浏览器演示，使用生成图片；不展示原生窗口外观。 / Shared UI preview with generated images; native window chrome is not shown.</sub>
 
-默认快捷键：macOS **⌘⇧2**，Windows / Linux X11 **Ctrl+Shift+2**。
-点击「修改快捷键」可更换。
+## 安装 / Install
 
-解锁全部贴图：macOS **⌘⌥⇧L**，Windows / Linux X11 **Ctrl+Alt+Shift+L**，也可使用菜单中的「解锁全部贴图」。此操作保留图片和位置；尝试拖动锁定图片时，屏幕中上方会短暂提示组合键。Wayland 仅支持窗口内快捷键。
+安装包通过 [GitHub Releases](https://github.com/Snip2Pin/Snip2Pin/releases) 分发。
+项目仍在开发，安装包会在首次发版后提供。
+Installers will be available on GitHub Releases after the first release.
 
-界面默认按系统首选语言选择中英文，无匹配时使用英文；可在「语言」中手动选择。主题默认跟随系统，图标默认跟随主题；设置自动保存。macOS 的 Dock 图标即时更新，Finder／启动台图标在本地更新安装时应用已保存的选择。
-
-macOS 首次截图会请求屏幕录制权限。未授权时，点击应用内「打开授权设置」，
-允许 Snip2Pin 后点击「授权后继续截图」；若仍未生效，点击「重新打开应用」。
-
-窗口识别截取预览框内的可见画面，包含覆盖在窗口上的其他内容；跨屏或越界窗口只截当前屏幕内的部分。窗口内需框选极小区域时，先长按再拖动。未识别到窗口时（包括 Wayland），默认选中当前整屏，单击截图或拖动框选。
-
-采用 GitHub Releases 安装包分发，不上 App Store。标有 `-unverified` 的 macOS 包未经公证、Windows 包未签名，系统可能拦截。macOS 请先将应用放入「应用程序」，首次打开被阻止时，可按[Apple 指引](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中确认。此类包更新后可能需要重新授权截屏。
-
-后续发版提供 macOS DMG、Windows 当前用户安装程序与便携 ZIP、Linux tar.gz 与 `.deb`（Ubuntu 24.04 基线）。AUR 配方在公开发版后单独生成及验收；尚未发布或提交 AUR。
-
-### English
-
-- Click **Capture & pin** or use the shortcut. Hover and click a window, or drag
-  a region on any monitor, to pin it in place and copy it to the clipboard.
-- A blue border marks the recognized window; dragging shows only the selected
-  region's border. Unselected areas are dimmed. Press **Esc** to cancel.
-- Drag a pin to move it, drag its edges to resize, or scroll over it to zoom; proportions, **Shift** and anchors for edge resizing
-  follow the operating system. Click × or press Esc to close. Copy always uses the original
-  screenshot. Hover for copy, lock and close controls. Narrow pins hide leftmost
-  buttons; the right-click menu retains every action without enlarging the image.
-- Pinch or use the mouse wheel over a pin to zoom around the image point initially
-  under the pointer. Use one finger on a touchscreen to select or drag. Two-finger
-  precision scrolling leaves pins unchanged; trackpads that emulate an ordinary
-  wheel retain wheel zoom. Pinch also accepts Ctrl+wheel input. Wayland manages
-  window positioning.
-- Click a pin's row in Home to focus it; double-click its name to edit.
-  Focused pins stay highlighted. Tap an arrow for one fine step; holding uses
-  system key repeats with gradually larger steps. **Shift+arrows** use fixed
-  large steps. Release Shift for fine control; release arrows to stop.
-  Use `=` / `-` for fine zoom and `0` to restore the original size.
-  Hold **Shift** for faster zoom, including wheel zoom.
-  Names last until the pin closes. The list also offers lock
-  and close. Locked pins cannot move, resize or close; quitting
-  with locked pins requires confirmation.
-- The menu bar / tray and macOS Dock offer Home, Capture and Close unlocked pins.
-  Closing Home keeps the app running when a tray is available. Login startup is
-  **off by default**.
-
-Default shortcut: **Command+Shift+2** on macOS, **Ctrl+Shift+2** on Windows / Linux X11.
-Click **Change shortcut** to change it.
-
-Unlock all pins with **Command+Option+Shift+L** on macOS or **Ctrl+Alt+Shift+L** on Windows / Linux X11, or use **Unlock all pins** in the menu. Images and positions are preserved. Trying to drag a locked image briefly shows the shortcut near the top center of the screen. On Wayland, shortcuts work within the app only.
-
-The interface follows your system's preferred languages (Chinese or English),
-falling back to English. Override it under **Language**. Theme follows the system
-and icons follow the theme; settings are saved automatically. On macOS, Dock icons update
-immediately; local update installs apply the saved icon to Finder and Launchpad.
-
-On first capture on macOS, allow screen recording. If access is missing, use
-**Open permission settings**, allow Snip2Pin, then click
-**Allow access & continue**. If needed, use **Reopen app**.
-
-Window selection crops the visible preview, including any overlapping content.
-Spanning or off-screen windows are clipped to the selected monitor. For a tiny
-region inside a window, hold before dragging. When no window is recognized
-(including on Wayland), the current display is selected: click to capture it or
-drag a region.
-
-Distribution uses GitHub Releases, outside the App Store. Packages marked
-`-unverified` are not notarized on macOS and are unsigned on Windows; the OS may
-block them. Move the macOS app to Applications, then follow [Apple's instructions](https://support.apple.com/en-us/102445)
-if opening is blocked. Updates to these packages may require screen capture permission again.
-
-Future releases provide macOS DMGs, a per-user Windows installer and portable ZIP,
-and Linux tar.gz and .deb packages (Ubuntu 24.04 baseline). An AUR recipe can be
-generated and tested after a public release; it has not been published to AUR.
-
-## Platform support
-
-| Platform | Support |
+| 系统 / System | 安装包 / Package |
 | --- | --- |
-| Windows 10/11 | Capture, floating pins, global shortcut |
-| macOS 13+ | Capture, floating pins, global shortcut; screen-recording permission required |
-| Linux X11 | Capture, floating pins, global shortcut; a desktop/window manager is required |
-| Linux Wayland | Uses XWayland for window-level requests when available; capture and global shortcuts depend on the desktop |
+| macOS 13+ · Apple silicon / Intel | DMG，将应用拖入 Applications / Drag the app to Applications |
+| Windows 10/11 · x64 | Setup.exe，或免安装 ZIP / Installer or portable ZIP |
+| Linux · x64 | tar.gz；Ubuntu 24.04 提供 .deb / tar.gz; .deb for Ubuntu 24.04 |
+| Arch Linux | 首次发版后提供 AUR 配方；尚未提交 / AUR recipe planned after the first release; not yet submitted |
 
-Local macOS builds use a fixed development signing certificate; they are not
-Apple-notarized.
+`-unverified` 表示 macOS 未经公证、Windows 未签名，系统可能拦截。
+macOS 首次打开被阻止时，按 [Apple 指引](https://support.apple.com/zh-cn/102445)确认；
+更新此类包可能需要重新授权截屏。
+Packages marked `-unverified` are not notarized on macOS or signed on Windows.
+Follow [Apple's instructions](https://support.apple.com/en-us/102445) if opening is blocked;
+updates may require screen-capture permission again.
 
-On Linux with an X11 display (including XWayland), the app uses the X11 window
-backend so floating pins can request always-on-top through the window manager.
-The Linux tray requires a StatusNotifier-compatible desktop tray host.
-Pure Wayland does not expose a universal always-on-top or global-shortcut API.
-Pin locking blocks application gestures and close commands; external window-manager
-move/resize commands can override native window hints on some desktops.
-It also leaves absolute window placement to the compositor, so selection-layer
-placement and original-position pinning require X11/XWayland.
-Use your compositor's window rules/shortcut settings, or an X11 session, when
-these features are required. Wayland capture also depends on the desktop's
-screenshot/Portal support. Do not assume all compositors behave identically.
-Some Wayland capture backends use a temporary screenshot file, which xcap
-removes after reading. The app itself does not retain files or a capture history.
+## 使用
 
-## Development
+- 点击「截图并置顶」或按快捷键：悬停后单击截取窗口，或在任意显示器拖动框选。完成后自动复制，并原位置顶；Esc 取消。
+- 拖动移动，拖动边缘缩放；鼠标滚轮或触摸板捏合围绕指针缩放。悬停显示复制、锁定、关闭按钮，右键菜单提供全部操作。复制始终使用原图。
+- 主页列表可定位贴图、双击名称编辑、锁定或关闭。锁定后不能移动、缩放或关闭；退出前会确认。
+- 聚焦贴图后，方向键微调位置，长按逐步加速，Shift＋方向键快速移动；`+`／`-` 缩放，`0` 恢复原始尺寸。× 或 Esc 关闭。
+- 语言、主题和图标默认跟随系统，可手动选择；开机自启默认关闭。菜单栏／托盘与 macOS Dock 提供截图和主页入口。
 
-See [Contributing](CONTRIBUTING.md) and [开发与发版流程 / Workflow](docs/workflow.md).
-Development uses short branches, PRs and native CI. Releases require an explicit
-request, a manual build, approved package preparation and a separate manual publication.
+| 快捷键 | macOS | Windows / Linux X11 |
+| --- | --- | --- |
+| 截图（可修改） | ⌘⇧2 | Ctrl+Shift+2 |
+| 解锁全部贴图 | ⌘⌥⇧L | Ctrl+Alt+Shift+L |
 
-Install [Rust](https://rustup.rs/). The toolchain is pinned to 1.99.0.
-Install [Git LFS](https://git-lfs.com/), then fetch the binary icon resources
-before building:
+macOS 首次截图需允许屏幕录制权限，按应用中的授权提示操作即可。
+截图和贴图仅保存在内存中，不上传、不保留历史；系统剪贴板由系统管理。
+
+## Usage
+
+- Click **Capture & pin** or use the shortcut. Hover and click a window, or drag a region on any monitor. The result is copied and pinned in place. **Esc** cancels.
+- Drag to move; drag edges to resize. Use the wheel or trackpad pinch to zoom around the pointer. Hover for copy, lock and close; right-click for every action. Copy always uses the original image.
+- Use Home to locate pins, double-click names to edit, lock or close. Locked pins cannot move, resize or close; quitting asks for confirmation.
+- Focus a pin to move with arrows. Holding gradually increases the step; **Shift+arrows** moves quickly. Use `+` / `-` to zoom, `0` to restore the original size, and **×** or **Esc** to close.
+- Language, theme and icon follow the system with manual overrides. Login startup is off by default. The menu bar / tray and macOS Dock offer Capture and Home.
+
+| Shortcut | macOS | Windows / Linux X11 |
+| --- | --- | --- |
+| Capture, customizable | Command+Shift+2 | Ctrl+Shift+2 |
+| Unlock all pins | Command+Option+Shift+L | Ctrl+Alt+Shift+L |
+
+On macOS, follow the in-app screen-recording permission prompts on first capture.
+Images stay in memory; there is no upload or capture history. The OS manages the clipboard.
+
+## 支持平台 / Platforms
+
+Windows 10/11、macOS 13+、Linux X11 提供截图、置顶和全局快捷键。
+Windows 10/11, macOS 13+ and Linux X11 support capture, floating pins and global shortcuts.
+
+<details>
+<summary>平台差异 / Platform differences</summary>
+
+- 窗口截图只截预览框内的当前可见内容，包括遮挡物；跨屏窗口只截当前显示器内的部分。未识别到窗口时默认选中整屏，仍可拖动框选。窗口内框选极小区域时，先长按再拖动。
+- Native edge resizing follows each OS's conventions. Window capture matches the visible preview, including overlaps, and is clipped to the selected monitor. Hold before dragging a tiny region inside a window.
+- 小图不会为放下按钮而自动放大；窄图隐藏左侧按钮，右键菜单保留全部操作。触摸屏单指框选或拖动；触摸板双指滑动不移动贴图。
+- Small pins retain their size; narrow pins hide leftmost buttons and keep all actions in the context menu. Touchscreens support one-finger selection/dragging; two-finger precision scrolling does not move pins.
+- Linux 有 X11（包括 XWayland）时使用 X11 窗口后端。纯 Wayland 的置顶、全局快捷键和绝对定位由合成器决定，不能保证原位置顶；可使用合成器窗口规则或 X11 会话。托盘需要兼容 StatusNotifier 的桌面。
+- With X11/XWayland available, Linux uses the X11 window backend. Pure Wayland controls pinning, global shortcuts and absolute placement; original-position pinning is not guaranteed. Use compositor rules or X11 when needed. The tray needs a StatusNotifier host.
+- Linux 截图取决于桌面的截图／Portal 支持；部分后端读取后会清理临时文件。发行包基于 Ubuntu 24.04 / glibc 2.39，不保证旧版发行版兼容。
+- Linux capture depends on desktop screenshot/Portal support. Some backends use a temporary file, removed after reading. Packages target Ubuntu 24.04 / glibc 2.39; older distributions are not guaranteed.
+- 中文界面需要系统中文字体；.deb 推荐安装文泉驿微米黑，已有 Noto CJK 也可使用。tar.gz／Arch 用户可安装 `wqy-microhei` 对应的发行版字体包。
+- Chinese UI needs a system CJK font. The .deb recommends WenQuanYi Micro Hei; existing Noto CJK works too. For tar.gz / Arch, install the distribution's Micro Hei font package if needed.
+- macOS 的 Dock 图标即时更新；Finder／启动台图标在本地更新安装时应用保存的选择。
+- macOS Dock icons update immediately; local update installs apply the saved icon to Finder and Launchpad.
+
+</details>
+
+## 开发 / Development
+
+需要 [Rust](https://rustup.rs/)、[Git LFS](https://git-lfs.com/)；开发工具链由 `rust-toolchain.toml` 固定。
+Requires Rust and Git LFS; the development toolchain is pinned in `rust-toolchain.toml`.
 
 ```sh
 git clone https://github.com/Snip2Pin/Snip2Pin.git
 cd Snip2Pin
 git lfs install --local
 git lfs pull
-```
-
-All application code is Rust; egui/eframe renders native windows and xcap captures
-screens. No webview, JavaScript runtime, network service, or external screenshot
-command is required.
-
-Ubuntu/Debian build dependencies:
-
-```sh
-sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libxkbcommon-dev libfontconfig1-dev fonts-noto-cjk
-```
-
-```sh
 cargo xtask check
-cargo xtask check-msrv
-cargo deny check
 cargo run --locked
 ```
 
-Development builds use `target/debug/snip2pin` (`snip2pin.exe` on Windows).
-Version changes, tags and published releases require an explicit release request.
-CI validates temporary package structures without uploading installation packages.
+构建依赖、提交规范和本地安装见 [Contributing](CONTRIBUTING.md)，
+打包、许可与人工发版流程见 [开发与发版流程 / Workflow](docs/workflow.md)。
+See those guides for native build dependencies, local installation, validation and manual releases.
 
-macOS bundle builds require the full Xcode installation and its `ibtool` to
-compile the native Dock menu. Command Line Tools alone are insufficient. See
-[the build instructions](docs/workflow.md#本地-macos-菜单资源).
+原生界面使用 egui/eframe，无 WebView；浏览器演示仅用于安全验证。
+The app uses egui/eframe native windows, without a WebView; the browser preview is a test sandbox.
 
-For local macOS installation, create a development identity once. Its key and
-password stay in a private, app-specific keychain directory outside the repository;
-the private keychain is added to the search list only while signing, then the
-original list is restored. Setup adds a copy of the public
-certificate to the default keychain so macOS can discover it during verification.
-Trust this certificate only for code signing in your user account, using the
-macOS confirmation when requested. Private-key access remains restricted to
-signing tools; this trust does not cover HTTPS or other certificate purposes:
+## 许可证 / License
 
-```sh
-bash packaging/macos/signing.sh --setup
-security add-trusted-cert -r trustRoot -p codeSign \
-  -k "$HOME/Library/Application Support/Snip2Pin/signing/identity.keychain-db" \
-  "$HOME/Library/Application Support/Snip2Pin/signing/certificate.pem"
-bash packaging/macos/test-signing.sh
-bash packaging/macos/build.sh --install
-```
-
-Keep this identity for future updates. The installer rejects a different signing
-identity, keeps the app's bundle ID and version, and refreshes only this app's
-Finder/Launchpad metadata. It does not stop the running application; reopen it
-yourself to use the update. `SNIP2PIN_SIGN_IDENTITY` and optional
-`SNIP2PIN_SIGN_KEYCHAIN` can select an existing signing identity instead.
-Configuration directories use only `Snip2Pin`: `~/Library/Application Support/Snip2Pin`
-on macOS, `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
-(`~/.config/Snip2Pin` by default) on Linux. The app identifier is `io.github.Snip2Pin.Snip2Pin`.
-Explicit identifier migrations use `--install --migrate-identity`, preserving the
-same signing certificate; macOS may require screen permission again after that
-one-time identity change. Migration checks require Snip2Pin and System Settings
-to be fully closed, preventing cached identities from sending permission grants
-to the old app ID. Subsequent updates use ordinary `--install`. Installation
-verifies the app's bundle identity and registered path, restoring the previous
-app if validation fails.
-This script builds and optionally installs a local development bundle. Distribution
-uses the manual workflows in [the release guide](docs/workflow.md). The default
-`unverified` mode needs no paid certificate; `signed` requires production credentials
-and Developer ID notarization on macOS.
-
-SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
-Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
-
-```sh
-cargo run --locked -- --write-icon assets/icons/line.png line
-cargo run --locked -- --write-icon assets/icons/metal.png metal
-cargo test --locked --test settings
-```
-
-For a safe GUI check using generated pixels instead of desktop content:
-
-```sh
-cargo run --locked -- --demo
-```
-
-In demo mode, click the capture button and select part of the generated grid.
-This exercises capture transitions, cropping, and pin windows without requesting
-screen access.
-
-## Structure
-
-```text
-src/
-  capture.rs       Monitor adapter, in-memory capture, validated cropping
-  geometry.rs      Viewport-to-pixel conversion and original-position sizing
-  pin.rs           Initial fitting, coordinates and adaptive controls placement
-  session.rs       Single-capture gate and stale-result rejection
-  permission.rs    User-driven permission state; no native dialogs or polling
-  app.rs           Event-driven capture/window lifecycle
-  platform.rs      Global shortcut and local font/icon adapters
-  settings.rs      Shortcut validation, theme/icon settings, local preferences
-  icon.rs          Icon selection, PNG loading, and SVG resource generation
-  i18n.rs          Typed Chinese/English catalogue and system language matching
-  tray.rs          Native menu bar/tray commands and symbolic status icon
-  startup.rs       Opt-in current-user login startup registration
-  app/tests.rs     Capture/window lifecycle regressions
-  ui/              Views, style profiles, copy artwork and view regressions
-assets/icons/      Line/metal SVG sources and Git LFS PNG resources
-tests/             Generated-image and state-transition tests
-packaging/         macOS bundle script and Linux desktop entry
-xtask/             Shared Rust checks, package manifests and manual release tooling
-docs/workflow.md   Development, native acceptance and release procedures
-AGENTS.md          Scope, cleanup rules, and validation requirements
-```
-
-Capture happens on a worker while the desktop stays visible. Transparent,
-mouse-pass-through selection windows are prepared for all monitors. A capture
-fills these windows without moving or resizing the launcher, entering native
-fullscreen, or hiding existing pins. After selection, the overlay remains until
-the new pin has painted its first frame. Full-display buffers are then released.
-Pins are independent borderless windows. Removing a pin releases its texture and
-in-memory copy buffer; the system manages the image already on the clipboard.
-Platform permission errors appear in the launcher.
-
-CI runs LFS validation, format, Clippy, workspace tests, dependency/MSRV checks,
-development builds and package smoke checks on Windows x64, macOS ARM64/Intel,
-and Linux x64. Image tests use generated pixels; macOS also checks selection
-window geometry using invisible windows with application activation prohibited.
-CI does not verify real desktop permission prompts or compositor rules.
-
-Licensed under [MIT](LICENSE).
+[MIT](LICENSE) © Snip2Pin contributors。依赖与字体保留各自许可证，安装包附带 `THIRD_PARTY_NOTICES.txt`。
+Dependencies and fonts retain their own licenses; packages include `THIRD_PARTY_NOTICES.txt`.

@@ -26,6 +26,62 @@ validation, packaging and manual releases.
 
 Contributions are licensed under the project's MIT license. No CLA is required.
 
+## Local builds
+
+Fetch Git LFS assets before building, as shown in the README. The development
+toolchain is pinned in `rust-toolchain.toml`; `cargo xtask check-msrv` separately
+checks the minimum supported version declared in `Cargo.toml`.
+
+On Ubuntu/Debian, install the native build dependencies:
+
+```sh
+sudo apt-get install pkg-config libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libxkbcommon-dev libfontconfig1-dev fonts-noto-cjk
+cargo xtask check
+cargo xtask check-msrv
+```
+
+Bundle, package and full-payload size checks need the pinned license collector:
+
+```sh
+cargo install cargo-about --version 0.9.2 --locked --features cli
+```
+
+Dependency updates may require reviewing [license sources](packaging/licenses/README.md).
+
+macOS bundle builds require full Xcode and `ibtool`. For a local development
+installation, create the app-specific signing identity once, follow the system
+certificate confirmation, and reuse that identity for later updates:
+
+```sh
+bash packaging/macos/signing.sh --setup
+security add-trusted-cert -r trustRoot -p codeSign \
+  -k "$HOME/Library/Application Support/Snip2Pin/signing/identity.keychain-db" \
+  "$HOME/Library/Application Support/Snip2Pin/signing/certificate.pem"
+bash packaging/macos/test-signing.sh
+bash packaging/macos/build.sh --install
+```
+
+Keep the private key and password outside the repository. Trust the certificate
+only for code signing in your user account. Local development signing is not
+Developer ID notarization; see [the workflow](docs/workflow.md) for distribution.
+The installer preserves signing identity and settings and does not stop the
+running app. Quit it before installing, then reopen it yourself.
+
+Preferences live in `~/Library/Application Support/Snip2Pin` on macOS,
+`%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
+(`~/.config/Snip2Pin` by default) on Linux. The bundle identifier is
+`io.github.Snip2Pin.Snip2Pin`. Only an explicitly requested identifier change
+uses `--install --migrate-identity`; ordinary updates use `--install`.
+
+Regenerate all icon PNGs from their editable SVG sources with `cargo xtask icons`.
+Runtime icon loading uses the committed PNGs; SVG rendering belongs to the
+developer tool. Commit binary resources through Git LFS.
+
+`cargo run --locked -- --demo` uses generated images without reading the desktop.
+For isolated browser validation, use the [shared UI sandbox](docs/workflow.md#本地-gui-沙箱).
+
+## Checks and contributions
+
 Install [pre-commit](https://pre-commit.com/) and cargo-deny once, with Rust and
 Git LFS available on `PATH`:
 
