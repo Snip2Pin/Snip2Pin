@@ -14,9 +14,9 @@ use objc2_foundation::{
     NSAppleEventDescriptor, NSAppleEventManager, NSAppleEventManagerSuspensionID, NSArray,
     NSBundle, NSObject, NSObjectProtocol, NSString,
 };
-use snip2pin::i18n::{Locale, Message, Text};
+use snip2pin::i18n::{Message, Text};
 
-use crate::tray::Action;
+use crate::tray::{Action, MenuState};
 
 const NIB_NAME: &str = "DockMenu";
 // Stable resource identities; titles are translated only after loading.
@@ -135,7 +135,7 @@ struct DockMenu {
     capture: Retained<NSMenuItem>,
     close_pins: Retained<NSMenuItem>,
     unlock_pins: Retained<NSMenuItem>,
-    state: Option<(Locale, bool, bool, bool, bool)>,
+    state: Option<MenuState>,
 }
 
 impl Dock {
@@ -265,43 +265,29 @@ impl Dock {
     }
 
     /// Called with the same event-driven application state as the tray menu.
-    pub fn update(
-        &mut self,
-        locale: Locale,
-        capture_enabled: bool,
-        has_unlocked_pins: bool,
-        has_locked_pins: bool,
-        capturing: bool,
-    ) {
+    pub fn update(&mut self, state: MenuState) {
         let Some(menu) = &mut self.menu else {
             return;
         };
-        let state = (
-            locale,
-            capture_enabled,
-            has_unlocked_pins,
-            has_locked_pins,
-            capturing,
-        );
         if menu.state == Some(state) {
             return;
         }
         menu.home
-            .setTitle(&NSString::from_str(locale.text(Text::Home)));
+            .setTitle(&NSString::from_str(state.locale.text(Text::Home)));
         menu.home.setEnabled(true);
         menu.capture
-            .setTitle(&NSString::from_str(locale.text(if capturing {
+            .setTitle(&NSString::from_str(state.locale.text(if state.capturing {
                 Text::CancelCapture
             } else {
                 Text::Capture
             })));
-        menu.capture.setEnabled(capture_enabled);
+        menu.capture.setEnabled(state.capture_enabled);
         menu.close_pins
-            .setTitle(&NSString::from_str(locale.text(Text::ClosePins)));
-        menu.close_pins.setEnabled(has_unlocked_pins);
+            .setTitle(&NSString::from_str(state.locale.text(Text::ClosePins)));
+        menu.close_pins.setEnabled(state.has_unlocked_pins);
         menu.unlock_pins
-            .setTitle(&NSString::from_str(locale.text(Text::UnlockPins)));
-        menu.unlock_pins.setEnabled(has_locked_pins);
+            .setTitle(&NSString::from_str(state.locale.text(Text::UnlockPins)));
+        menu.unlock_pins.setEnabled(state.has_locked_pins);
         menu.state = Some(state);
     }
 }
