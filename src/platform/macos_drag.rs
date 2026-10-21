@@ -9,7 +9,7 @@ use std::{
 use block2::RcBlock;
 use eframe::egui;
 use objc2::{MainThreadMarker, rc::Retained, runtime::AnyObject};
-use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventType};
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PressId(u64);
@@ -140,15 +140,7 @@ impl DragEvents {
     }
 
     pub fn begin(&self, pin: u64, press: PressId) {
-        let Some(main) = MainThreadMarker::new() else {
-            return;
-        };
-        let title = format!("Snip2Pin · 贴图 {pin}");
-        let Some(window) = NSApplication::sharedApplication(main)
-            .windows()
-            .into_iter()
-            .find(|window| window.title().to_string() == title)
-        else {
+        let Ok(window) = super::pin_window::find(pin) else {
             return;
         };
         if !window.isKeyWindow() {
@@ -208,12 +200,7 @@ fn observe(pending: &RefCell<PendingPress>, event: Retained<NSEvent>, main: Main
 
 fn press_location(event: &NSEvent, main: MainThreadMarker) -> Option<PressLocation> {
     let window = event.window(main)?;
-    let pin = window
-        .title()
-        .to_string()
-        .strip_prefix("Snip2Pin · 贴图 ")?
-        .parse()
-        .ok()?;
+    let pin = super::pin_window::id_from_title(&window.title().to_string())?;
     // WinitView uses this same AppKit conversion, including its flipped origin.
     let point = window
         .contentView()?

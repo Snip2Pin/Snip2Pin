@@ -130,7 +130,7 @@ struct UnlockHint {
 
 struct Pin {
     name: String,
-    zoom_window: Option<platform::pin_zoom::Window>,
+    zoom: platform::pin_zoom::PinZoom,
     texture: TextureHandle,
     pixels: Arc<ColorImage>,
     initial: egui::Rect,
@@ -821,7 +821,7 @@ impl Snip2Pin {
                 self.next_pin,
                 Pin {
                     name: String::new(),
-                    zoom_window: None,
+                    zoom: platform::pin_zoom::PinZoom::new(self.next_pin),
                     texture,
                     pixels,
                     initial: {
@@ -1037,20 +1037,17 @@ impl Snip2Pin {
             })
         });
         if !self.demo
-            && commands
-                .iter()
-                .any(|command| matches!(command, pin::Zoom::At { .. }))
             && let Some((_, scale)) = geometry
         {
             let Some(pin) = self.pins.get_mut(&id) else {
                 return;
             };
-            match platform::zoom_pin_native(id, pixels, scale, commands, &mut pin.zoom_window) {
-                Ok(true) => {
+            match pin.zoom.apply(pixels, scale, commands) {
+                Ok(platform::pin_zoom::Outcome::Applied) => {
                     self.close_pin_menu(ctx);
                     return;
                 }
-                Ok(false) => {} // Native Wayland has no global positioning request.
+                Ok(platform::pin_zoom::Outcome::SizeOnly) => {}
                 Err(error) => {
                     self.message = Some(error);
                     return;
@@ -1586,7 +1583,7 @@ impl Snip2Pin {
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
             let builder = self
                 .window_icon(egui::ViewportBuilder::default())
-                .with_title(format!("Snip2Pin · 贴图 {id}"))
+                .with_title(platform::pin_window::title(id))
                 .with_decorations(false)
                 .with_transparent(false)
                 .with_has_shadow(true)

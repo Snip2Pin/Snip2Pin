@@ -1,8 +1,50 @@
 //! Apply anchored content bounds in one native window transaction.
 use snip2pin::{i18n::Message, pin::Zoom};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Applied,
+    SizeOnly,
+}
+
+/// Own the lazy native binding for one pin, releasing it with that pin.
+pub struct PinZoom {
+    id: u64,
+    window: Option<Window>,
+}
+
+impl PinZoom {
+    pub fn new(id: u64) -> Self {
+        Self { id, window: None }
+    }
+
+    pub fn apply(
+        &mut self,
+        pixels: [usize; 2],
+        scale: f32,
+        commands: &[Zoom],
+    ) -> Result<Outcome, Message> {
+        if !commands
+            .iter()
+            .any(|command| matches!(command, Zoom::At { .. }))
+        {
+            return Ok(Outcome::SizeOnly);
+        }
+        if self.window.is_none() {
+            self.window = Window::find(self.id)?;
+        }
+        if let Some(window) = &self.window {
+            window.apply(pixels, scale, commands)?;
+            Ok(Outcome::Applied)
+        } else {
+            // Native Wayland has no global positioning request.
+            Ok(Outcome::SizeOnly)
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
-pub struct Window(objc2::rc::Retained<objc2_app_kit::NSWindow>);
+struct Window(objc2::rc::Retained<objc2_app_kit::NSWindow>);
 
 #[cfg(target_os = "macos")]
 impl Window {
@@ -16,7 +58,7 @@ impl Window {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn apply_macos(window: &objc2_app_kit::NSWindow, pixels: [usize; 2], commands: &[Zoom]) {
+fn apply_macos(window: &objc2_app_kit::NSWindow, pixels: [usize; 2], commands: &[Zoom]) {
     use eframe::egui::{Rect, pos2, vec2};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     let content = window.contentRectForFrameRect(window.frame());
@@ -50,7 +92,7 @@ pub(super) fn apply_macos(window: &objc2_app_kit::NSWindow, pixels: [usize; 2], 
 }
 
 #[cfg(target_os = "windows")]
-pub struct Window(windows_sys::Win32::Foundation::HWND);
+struct Window(windows_sys::Win32::Foundation::HWND);
 
 #[cfg(target_os = "windows")]
 impl Window {
@@ -125,7 +167,7 @@ impl Window {
 }
 
 #[cfg(target_os = "linux")]
-pub struct Window {
+struct Window {
     connection: x11rb::rust_connection::RustConnection,
     root: u32,
     window: u32,
@@ -220,5 +262,21 @@ impl Window {
             .map_err(|error| error.to_string())?;
         connection.flush().map_err(|error| error.to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn size_only_zoom_does_not_acquire_a_native_window() {
+        use super::{Outcome, PinZoom, Zoom};
+
+        let mut zoom = PinZoom::new(u64::MAX);
+        assert_eq!(
+            zoom.apply([240, 160], 2.0, &[Zoom::In, Zoom::Out, Zoom::Original])
+                .expect("ordinary zoom needs no native binding"),
+            Outcome::SizeOnly
+        );
+        assert!(zoom.window.is_none());
     }
 }

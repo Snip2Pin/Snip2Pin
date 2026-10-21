@@ -284,22 +284,22 @@ fn main() {
                             .firstObject()
                             .expect("primary screen");
                         let top = primary.frame().origin.y + primary.frame().size.height;
-                        let mut zoom_window = None;
+                        let mut zoom = platform::pin_zoom::PinZoom::new(index as u64);
                         for factor in [1.25, 0.8, 1.01] {
-                            platform::zoom_pin_native(
-                                index as u64,
-                                [600, 400],
-                                native.backingScaleFactor() as f32,
-                                &[pin::Zoom::At {
-                                    factor,
-                                    anchor: pin::ZoomAnchor {
-                                        fraction: anchor,
-                                        screen: Some([point.0 as f32, (top - point.1) as f32]),
-                                    },
-                                }],
-                                &mut zoom_window,
-                            )
-                            .expect("atomic anchored zoom");
+                            let outcome = zoom
+                                .apply(
+                                    [600, 400],
+                                    native.backingScaleFactor() as f32,
+                                    &[pin::Zoom::At {
+                                        factor,
+                                        anchor: pin::ZoomAnchor {
+                                            fraction: anchor,
+                                            screen: Some([point.0 as f32, (top - point.1) as f32]),
+                                        },
+                                    }],
+                                )
+                                .expect("atomic anchored zoom");
+                            assert_eq!(outcome, platform::pin_zoom::Outcome::Applied);
                             let actual = native.contentRectForFrameRect(native.frame());
                             let moved = (
                                 actual.origin.x + actual.size.width * f64::from(anchor[0]),

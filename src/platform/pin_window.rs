@@ -1,8 +1,15 @@
 //! Focus this process's pins while keeping the originating Home reachable.
 use snip2pin::i18n::{Message, Text};
 
-pub(super) fn title(id: u64) -> String {
-    format!("Snip2Pin · 贴图 {id}")
+const TITLE_PREFIX: &str = "Snip2Pin · 贴图 ";
+
+pub(crate) fn title(id: u64) -> String {
+    format!("{TITLE_PREFIX}{id}")
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn id_from_title(title: &str) -> Option<u64> {
+    title.strip_prefix(TITLE_PREFIX)?.parse().ok()
 }
 
 #[cfg(target_os = "macos")]

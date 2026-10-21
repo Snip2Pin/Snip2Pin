@@ -54,6 +54,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
 - 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
+- 桌面与网页共用 `ui::pin::show` 完成图片、焦点框、悬停按钮及命中排除的绘制，不在宿主重复编排。宿主明确提供输入原点和比例；焦点参数只表示焦点，不能据此推断宿主或坐标来源。
+- `pin_zoom::PinZoom` 按贴图生命周期管理原生绑定，应用层不持有原生缩放句柄或传递缓存槽；保留各平台原子缩放及仅尺寸调整回退。单张关闭和确认退出复用 `Pin::release` 清理贴图资源，是否允许关闭仍由入口检查锁定。
 - macOS 本机开发构建安装（`build.sh --install`）必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名；GitHub 分发包按明确选择的分发模式处理。
 - 本机开发更新前验证新包符合已安装应用的签名要求；证书缺失时停止，不自动换签名身份。只有用户明确要求更换应用标识时，才使用显式迁移选项，仅替换签名要求中的 identifier，完整保留原证书和信任约束。
 - 本地开发签名私钥保留在独立的本地钥匙串，不导出到 CI；不得修改 TCC 数据库、自动重置截屏授权，或放宽签名要求来保留权限。
@@ -257,6 +259,9 @@ cargo deny check
 Cover reverse drag, DPI conversion, empty and out-of-bounds selections, image
 release, and capture/cancel transitions. Never make CI capture a real desktop or
 require privacy permission. Use generated demo images for visual checks.
+For input-to-window changes, cover the production deferred callback through
+action dispatch and root logic to the final window command, including stale
+root geometry, DPI/UI zoom, cross-viewport continuation and lock checks.
 Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
