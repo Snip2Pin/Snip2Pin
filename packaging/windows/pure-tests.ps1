@@ -35,6 +35,18 @@ try {
         if ($_.Exception.Message -ne 'Windows install verification requires a GitHub-hosted runner') { throw }
     }
     Write-Output 'Pure verification fixtures passed without executing packages'
+    function cargo {
+        if (($args -join ' ') -ne 'xtask verify-candidate fixture x86_64-pc-windows-msvc') {
+            throw 'Candidate source validation was not the first packaging operation'
+        }
+        throw 'Source validation fixture rejection'
+    }
+    try {
+        & "$PSScriptRoot/distribute.ps1" -Candidate fixture -OutputDirectory (Join-Path $temporary 'never-built') -Distribution unverified
+        throw 'Packaging accepted a rejected candidate'
+    } catch {
+        if ($_.Exception.Message -ne 'Source validation fixture rejection') { throw }
+    }
 } finally {
     $env:GITHUB_ACTIONS = $previousActions
     Remove-Item -LiteralPath $temporary -Recurse -Force

@@ -1,6 +1,62 @@
 //! Credential lifecycle tests use dummy data and command stubs, never real stores.
 #[cfg(target_os = "macos")]
 #[test]
+fn macos_packaging_rejects_wrong_source_before_signing() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["bin", "candidate", "final"] {
+        fs::create_dir(root.join(name)).unwrap();
+    }
+    fs::write(
+        root.join("candidate/aarch64-apple-darwin.json"),
+        r#"{"target":"aarch64-apple-darwin"}"#,
+    )
+    .unwrap();
+    for (name, script) in [
+        (
+            "cargo",
+            "#!/bin/bash\nprintf '%s\\n' \"$*\" > \"$TEST_ROOT/cargo-call\"\nexit 23\n",
+        ),
+        (
+            "codesign",
+            "#!/bin/bash\ntouch \"$TEST_ROOT/signed\"\nexit 0\n",
+        ),
+    ] {
+        let file = root.join("bin").join(name);
+        fs::write(&file, script).unwrap();
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let result = Command::new("bash")
+        .arg(repository.join("packaging/macos/distribute.sh"))
+        .arg(root.join("candidate"))
+        .arg(root.join("final"))
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+        )
+        .env("TEST_ROOT", root)
+        .env("SNIP2PIN_SIGN_IDENTITY", "generated-test-identity")
+        .env("SNIP2PIN_NOTARY_PROFILE", "generated-test-profile")
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(!root.join("signed").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("cargo-call")).unwrap().trim(),
+        format!(
+            "xtask verify-candidate {} aarch64-apple-darwin",
+            root.join("candidate").display()
+        )
+    );
+    assert_eq!(fs::read_dir(root.join("final")).unwrap().count(), 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn temporary_macos_credentials_are_cleaned_after_success_and_failure() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;

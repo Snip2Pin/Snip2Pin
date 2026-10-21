@@ -6,9 +6,10 @@ set -euo pipefail
 CANDIDATE="$(cd "$1" && pwd)"
 mkdir -p "$2"
 OUTPUT="$(cd "$2" && pwd)"
-cargo xtask verify "$CANDIDATE"
 MANIFESTS=("$CANDIDATE"/*apple-darwin.json)
 [[ ${#MANIFESTS[@]} -eq 1 && -f "${MANIFESTS[0]}" ]]
+TARGET="$(plutil -extract target raw -o - "${MANIFESTS[0]}")"
+cargo xtask verify-candidate "$CANDIDATE" "$TARGET"
 FILENAME="$(plutil -extract artifacts.0.file raw -o - "${MANIFESTS[0]}")"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/snip2pin-distribution.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

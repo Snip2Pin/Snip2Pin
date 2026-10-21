@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-cargo xtask verify $Candidate
+cargo xtask verify-candidate $Candidate x86_64-pc-windows-msvc
 if ($LASTEXITCODE -ne 0) { throw 'Candidate validation failed' }
 $manifest = Get-Content (Join-Path $Candidate 'x86_64-pc-windows-msvc.json') -Raw | ConvertFrom-Json
 $candidateArchive = @($manifest.artifacts | Where-Object format -eq 'zip')

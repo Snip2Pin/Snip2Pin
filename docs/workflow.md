@@ -196,7 +196,7 @@ Secrets 加密存储但获准运行的代码能够读取明文，因此审批时
 | Secret | `WINDOWS_CERTIFICATE_PFX_BASE64` | 证书提供方允许导出的正式代码签名 PFX 的 Base64 |
 | Secret | `WINDOWS_CERTIFICATE_PASSWORD` | PFX 密码 |
 | Variable | `WINDOWS_CERTIFICATE_SHA1` | 所选正式代码签名证书的 40 位 SHA-1 指纹 |
-| Variable | `WINDOWS_TIMESTAMP_URL` | 提供方的 RFC 3161 时间戳服务 URL |
+| Variable | `WINDOWS_TIMESTAMP_URL` | 提供方的 HTTPS RFC 3161 时间戳服务 URL |
 
 使用 GitHub 环境设置或 `gh secret set NAME --env release` 从安全输入配置，禁止把
 秘密作为命令行字面值。Base64 只是编码，不能代替 Secrets 加密。API Key 权限仅满足
