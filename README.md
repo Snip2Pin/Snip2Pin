@@ -13,7 +13,7 @@
 
 A small Rust app that keeps screenshots above other windows.
 
-[简体中文](#简体中文) · [English](#english) · [安装](#安装) · [使用](#使用)
+[在线体验 / Try the demo](https://snip2pin.github.io/Snip2Pin/) · [简体中文](#简体中文) · [English](#english) · [安装](#安装) · [使用](#使用)
 
 左右滚动查看场景，点击图片可放大。 / Scroll sideways for more scenes; click an image to enlarge.
 
@@ -39,7 +39,9 @@ A small Rust app that keeps screenshots above other windows.
 
 <sub>Rust/WASM 界面实际运行截图，仅用虚构内容；图中标注用于说明。 / Actual Rust/WASM UI screenshots with fictional content and explanatory labels.</sub>
 
-[运行本地交互演示 / Run the local demo](docs/workflow.md#本地-gui-沙箱)
+在线演示只操作模拟桌面，不读取真实屏幕。 / The demo uses a simulated desktop without reading your screen.
+
+[本地运行演示 / Run the demo locally](docs/workflow.md#本地-gui-沙箱)
 
 ## 简体中文
 
