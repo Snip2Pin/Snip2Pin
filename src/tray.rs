@@ -1,4 +1,5 @@
 use snip2pin::i18n::{Locale, Message, Text};
+use snip2pin::pin::MenuCommand;
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -10,10 +11,7 @@ pub enum Action {
     Capture,
     ClosePins,
     UnlockPins,
-    CopyPin(u64),
-    ClosePin(u64),
-    ToggleLock(u64),
-    RestorePin(u64),
+    Pin { id: u64, command: MenuCommand },
     Quit,
 }
 
@@ -157,13 +155,10 @@ fn pin_action(id: &str) -> Option<Action> {
         return None;
     }
     let id = value.parse().ok()?;
-    Some(match command {
-        "pin-copy" => Action::CopyPin(id),
-        "pin-close" => Action::ClosePin(id),
-        "pin-lock" => Action::ToggleLock(id),
-        "pin-restore" => Action::RestorePin(id),
-        _ => return None,
-    })
+    let command = MenuCommand::ALL
+        .into_iter()
+        .find(|item| item.key() == command)?;
+    Some(Action::Pin { id, command })
 }
 
 #[cfg(test)]
@@ -189,11 +184,41 @@ mod tests {
     #[test]
     fn native_pin_menu_ids_route_only_complete_unsigned_pin_ids() {
         for (id, expected) in [
-            ("pin-copy:42", Action::CopyPin(42)),
-            ("pin-close:42", Action::ClosePin(42)),
-            ("pin-lock:42", Action::ToggleLock(42)),
-            ("pin-restore:42", Action::RestorePin(42)),
-            ("pin-copy:18446744073709551615", Action::CopyPin(u64::MAX)),
+            (
+                "pin-copy:42",
+                Action::Pin {
+                    id: 42,
+                    command: snip2pin::pin::MenuCommand::Copy,
+                },
+            ),
+            (
+                "pin-close:42",
+                Action::Pin {
+                    id: 42,
+                    command: snip2pin::pin::MenuCommand::Close,
+                },
+            ),
+            (
+                "pin-lock:42",
+                Action::Pin {
+                    id: 42,
+                    command: snip2pin::pin::MenuCommand::ToggleLock,
+                },
+            ),
+            (
+                "pin-restore:42",
+                Action::Pin {
+                    id: 42,
+                    command: snip2pin::pin::MenuCommand::RestoreSize,
+                },
+            ),
+            (
+                "pin-copy:18446744073709551615",
+                Action::Pin {
+                    id: u64::MAX,
+                    command: snip2pin::pin::MenuCommand::Copy,
+                },
+            ),
         ] {
             assert_eq!(action(id), Some(expected));
         }

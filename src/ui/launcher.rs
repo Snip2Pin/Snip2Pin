@@ -217,21 +217,32 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 let mut icon = model.preferences.icon;
                 let mut language = model.preferences.language;
                 ui.add_enabled_ui(model.idle && !model.recording, |ui| {
-                    setting_row(ui, text(Text::Theme), |ui, label| {
-                        egui::ComboBox::from_id_salt("theme")
-                            .width(LAUNCHER.control_width)
-                            .selected_text(theme.label(locale))
-                            .show_ui(ui, |ui| {
-                                for choice in [Theme::System, Theme::Light, Theme::Dark] {
-                                    ui.selectable_value(&mut theme, choice, choice.label(locale));
-                                }
-                            })
-                            .response
-                            .labelled_by(label);
-                    });
-                    setting_row(ui, text(Text::Icon), |ui, label| {
+                    setting_row(
+                        ui,
+                        text(Text::Theme),
+                        LAUNCHER.control_width,
+                        |ui, label| {
+                            egui::ComboBox::from_id_salt("theme")
+                                .width(LAUNCHER.control_width.min(ui.available_width()))
+                                .truncate()
+                                .selected_text(theme.label(locale))
+                                .show_ui(ui, |ui| {
+                                    for choice in [Theme::System, Theme::Light, Theme::Dark] {
+                                        ui.selectable_value(
+                                            &mut theme,
+                                            choice,
+                                            choice.label(locale),
+                                        );
+                                    }
+                                })
+                                .response
+                                .labelled_by(label);
+                        },
+                    );
+                    setting_row(ui, text(Text::Icon), LAUNCHER.control_width, |ui, label| {
                         egui::ComboBox::from_id_salt("icon")
-                            .width(LAUNCHER.control_width)
+                            .width(LAUNCHER.control_width.min(ui.available_width()))
+                            .truncate()
                             .selected_text(icon.label(locale))
                             .show_ui(ui, |ui| {
                                 for choice in [Icon::Auto, Icon::Line, Icon::Metal] {
@@ -241,35 +252,46 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                             .response
                             .labelled_by(label);
                     });
-                    setting_row(ui, text(Text::Language), |ui, label| {
-                        egui::ComboBox::from_id_salt("language")
-                            .width(LAUNCHER.control_width)
-                            .selected_text(language.label(locale))
-                            .show_ui(ui, |ui| {
-                                for choice in
-                                    [Language::System, Language::Chinese, Language::English]
-                                {
-                                    ui.selectable_value(
-                                        &mut language,
-                                        choice,
-                                        choice.label(locale),
-                                    );
-                                }
-                            })
-                            .response
-                            .labelled_by(label);
-                    });
+                    setting_row(
+                        ui,
+                        text(Text::Language),
+                        LAUNCHER.control_width,
+                        |ui, label| {
+                            egui::ComboBox::from_id_salt("language")
+                                .width(LAUNCHER.control_width.min(ui.available_width()))
+                                .truncate()
+                                .selected_text(language.label(locale))
+                                .show_ui(ui, |ui| {
+                                    for choice in
+                                        [Language::System, Language::Chinese, Language::English]
+                                    {
+                                        ui.selectable_value(
+                                            &mut language,
+                                            choice,
+                                            choice.label(locale),
+                                        );
+                                    }
+                                })
+                                .response
+                                .labelled_by(label);
+                        },
+                    );
                     if let Some(mut enabled) = model.startup {
-                        setting_row(ui, text(Text::Startup), |ui, label| {
-                            if ui
-                                .checkbox(&mut enabled, "")
-                                .labelled_by(label)
-                                .on_hover_ui(|ui| super::tooltip(ui, text(Text::StartupHelp)))
-                                .changed()
-                            {
-                                action = Some(Action::Startup(enabled));
-                            }
-                        });
+                        setting_row(
+                            ui,
+                            text(Text::Startup),
+                            ui.spacing().interact_size.y,
+                            |ui, label| {
+                                if ui
+                                    .checkbox(&mut enabled, "")
+                                    .labelled_by(label)
+                                    .on_hover_ui(|ui| super::tooltip(ui, text(Text::StartupHelp)))
+                                    .changed()
+                                {
+                                    action = Some(Action::Startup(enabled));
+                                }
+                            },
+                        );
                     }
                 });
                 if theme != model.preferences.theme || icon != model.preferences.icon {
@@ -315,8 +337,12 @@ fn pin_list_rows(
                     }
                 })
                 .collect::<Vec<_>>();
+            let mut counts = std::collections::HashMap::new();
+            for name in &names {
+                *counts.entry(name.as_str()).or_insert(0_usize) += 1;
+            }
             for (pin, name) in pins.iter().zip(&names) {
-                let duplicate = names.iter().filter(|other| *other == name).take(2).count() > 1;
+                let duplicate = counts.get(name.as_str()).is_some_and(|&count| count > 1);
                 if let Some(selected) = ui
                     .push_id(("pin-row", pin.id), |ui| {
                         pin_row(ui, pin, locale, name, duplicate)
@@ -616,8 +642,26 @@ fn footer(ui: &mut egui::Ui, locale: Locale) {
 fn setting_row<R>(
     ui: &mut egui::Ui,
     label: &str,
+    control_width: f32,
     control: impl FnOnce(&mut egui::Ui, egui::Id) -> R,
 ) -> R {
+    let label_width = egui::WidgetText::from(label)
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        )
+        .size()
+        .x;
+    if label_width + ui.spacing().item_spacing.x + control_width > ui.available_width() {
+        return ui
+            .vertical(|ui| {
+                let label = ui.label(label);
+                control(ui, label.id)
+            })
+            .inner;
+    }
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), LAUNCHER.row_height),
         egui::Layout::left_to_right(egui::Align::Center),

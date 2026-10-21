@@ -56,7 +56,7 @@ pub fn read(display: &Display) -> Option<Rect> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn read(display: &Display) -> Option<Rect> {
+fn desktop_area() -> Option<Rect> {
     use x11rb::{
         connection::Connection,
         protocol::xproto::{AtomEnum, ConnectionExt},
@@ -101,7 +101,24 @@ pub fn read(display: &Display) -> Option<Rect> {
     let mut values = work.value32()?;
     let origin = Pos2::new(values.next()? as i32 as f32, values.next()? as i32 as f32);
     let size = Vec2::new(values.next()? as f32, values.next()? as f32);
-    on_display(display, Rect::from_min_size(origin, size))
+    Some(Rect::from_min_size(origin, size))
+}
+
+pub fn read_many(displays: &[Display]) -> Vec<Option<Rect>> {
+    #[cfg(target_os = "linux")]
+    {
+        on_displays(displays, desktop_area())
+    }
+    #[cfg(target_os = "windows")]
+    displays.iter().map(read).collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn on_displays(displays: &[Display], area: Option<Rect>) -> Vec<Option<Rect>> {
+    displays
+        .iter()
+        .map(|display| area.and_then(|area| on_display(display, area)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -131,5 +148,46 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn shared_work_area_preserves_display_order_and_missing_intersections() {
+        let displays = [
+            Display {
+                id: 2,
+                origin: [0.0, -900.0],
+                size: [1600.0, 900.0],
+                scale: 1.0,
+            },
+            Display {
+                id: 1,
+                origin: [-1280.0, 0.0],
+                size: [1280.0, 1024.0],
+                scale: 2.0,
+            },
+            Display {
+                id: 3,
+                origin: [3000.0, 0.0],
+                size: [100.0, 100.0],
+                scale: 1.0,
+            },
+        ];
+        let area = Rect::from_min_max(Pos2::new(-1280.0, -880.0), Pos2::new(1600.0, 1000.0));
+        let areas = on_displays(&displays, Some(area));
+        assert_eq!(
+            areas,
+            vec![
+                Some(Rect::from_min_max(
+                    Pos2::new(0.0, -880.0),
+                    Pos2::new(1600.0, 0.0)
+                )),
+                Some(Rect::from_min_max(
+                    Pos2::new(-640.0, 0.0),
+                    Pos2::new(0.0, 500.0)
+                )),
+                None,
+            ]
+        );
+        assert_eq!(on_displays(&displays, None), vec![None; 3]);
     }
 }

@@ -21,6 +21,43 @@ pub const FINE_ZOOM_FACTOR: f32 = 1.01;
 pub const FAST_ZOOM_FACTOR: f32 = 1.25;
 pub const FAST_MOVE_STEPS: i32 = 50;
 
+/// Commands shared by native and application context menus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuCommand {
+    Copy,
+    ToggleLock,
+    RestoreSize,
+    Close,
+}
+
+impl MenuCommand {
+    pub const ALL: [Self; 4] = [Self::Copy, Self::ToggleLock, Self::RestoreSize, Self::Close];
+
+    pub fn text(self, locked: bool) -> crate::i18n::Text {
+        use crate::i18n::Text;
+        match self {
+            Self::Copy => Text::Copy,
+            Self::ToggleLock if locked => Text::Unlock,
+            Self::ToggleLock => Text::Lock,
+            Self::RestoreSize => Text::RestoreSize,
+            Self::Close => Text::Close,
+        }
+    }
+
+    pub fn enabled(self, locked: bool) -> bool {
+        !locked || matches!(self, Self::Copy | Self::ToggleLock)
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Copy => "pin-copy",
+            Self::ToggleLock => "pin-lock",
+            Self::RestoreSize => "pin-restore",
+            Self::Close => "pin-close",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Zoom {
     In,

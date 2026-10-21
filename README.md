@@ -200,8 +200,7 @@ SVG files are editable sources; PNG/ICO/ICNS and other binary image assets use
 Git LFS. After editing an icon, regenerate its PNG and run the resource tests:
 
 ```sh
-cargo run --locked -- --write-icon assets/icons/line.png line
-cargo run --locked -- --write-icon assets/icons/metal.png metal
+cargo xtask icons
 cargo test --locked --test settings
 ```
 
