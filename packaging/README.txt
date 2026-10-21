@@ -15,6 +15,8 @@ Linux: 安装 .deb，或在 tar.gz 解压目录运行 ./snip2pin。
 Install the .deb, or run ./snip2pin from the extracted tar.gz directory.
 Linux builds target Ubuntu 24.04 or compatible systems with the required desktop
 libraries. Wayland behavior depends on the compositor; X11/XWayland is preferred.
+中文界面需系统中文字体，例如 Noto CJK 或文泉驿微米黑。
+Chinese UI needs a system CJK font, such as Noto CJK or WenQuanYi Micro Hei.
 
 点击截图按钮或按快捷键，拖动框选，松手后置顶并复制。拖动贴图移动，拖动边缘
 缩放，遵循系统惯例；点击 × 或按 Esc 关闭。悬停显示复制、锁定和关闭按钮，窄图通过右键操作。

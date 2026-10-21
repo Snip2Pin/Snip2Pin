@@ -58,7 +58,7 @@ pub fn debian(
     fs::write(
         root.join("DEBIAN/control"),
         format!(
-            "Package: snip2pin\nVersion: {}\nArchitecture: amd64\nMaintainer: Snip2Pin contributors <noreply@github.com>\nSection: graphics\nPriority: optional\nDepends: {depends}\nDescription: Capture a region and keep it floating on screen\n Built on Ubuntu 24.04; other Debian derivatives require native acceptance.\n",
+            "Package: snip2pin\nVersion: {}\nArchitecture: amd64\nMaintainer: Snip2Pin contributors <noreply@github.com>\nSection: graphics\nPriority: optional\nDepends: {depends}\nRecommends: fonts-wqy-microhei | fonts-noto-cjk\nDescription: Capture a region and keep it floating on screen\n Built on Ubuntu 24.04; other Debian derivatives require native acceptance.\n",
             data.version
         ),
     )?;
@@ -159,7 +159,8 @@ arch=('x86_64')
 url='https://github.com/Snip2Pin/Snip2Pin'
 license=('MIT')
 depends=('glibc' 'gcc-libs' 'libxcb' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'dbus' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'libglvnd')
-optdepends=('xdg-desktop-portal: screen capture under Wayland; install a portal backend for your desktop')
+optdepends=('xdg-desktop-portal: screen capture under Wayland; install a portal backend for your desktop'
+            'wqy-microhei: Chinese UI font when no Noto CJK font is installed')
 provides=('snip2pin')
 conflicts=('snip2pin')
 source=('snip2pin.tar.gz::{url}')

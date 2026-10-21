@@ -482,6 +482,8 @@ pub fn install_fonts(ctx: &egui::Context) {
         "C:\\Windows\\Fonts\\msyh.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
     ];
     for path in candidates {
         if let Ok(bytes) = std::fs::read(path) {
