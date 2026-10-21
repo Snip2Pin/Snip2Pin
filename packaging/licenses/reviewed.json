@@ -1,0 +1,230 @@
+[
+  {
+    "name": "block2",
+    "version": "0.5.1",
+    "commit": "4fc083f1c6d6784577e38b0ee8dbd344481e2fd2",
+    "manifest_sha256": "5b1e38f82e1a70cf6493c2d2b0c6085bb671bd1c98316d2d71baea53674f227c",
+    "statement": "packaging/licenses/objc2-LICENSE.txt",
+    "statement_sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "name": "block2",
+    "version": "0.6.2",
+    "commit": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+    "manifest_sha256": "e325c51f01145af3e11f2ee5ce7c47f10697d936c1d90b9ee81a0cf4f700f6d7",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "dispatch",
+    "version": "0.2.0",
+    "commit": "82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748",
+    "manifest_sha256": "bd6cecbea33be54304d73d48e29182b4baff69695a25e68d7ac67ff3e69263a9"
+  },
+  {
+    "name": "dispatch2",
+    "version": "0.3.1",
+    "commit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+    "manifest_sha256": "f246cf8997c346fdcabb8925ad5be967f397fd8b92630ef7bcc9bdce5d33f775",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "drm-fourcc",
+    "version": "2.2.0",
+    "commit": "7b9f80060ffd4b35cd236437e65a17fb517d163c",
+    "manifest_sha256": "34f07ca023625382197f9956d9894c1bcabbfa4c118424dd5a4b59efd68da3af"
+  },
+  {
+    "name": "objc2",
+    "version": "0.5.3",
+    "commit": "5237cbf081d04ef75a1f6a207b4018e7c1ae7438",
+    "manifest_sha256": "4260f0dabe9357f8f2be6cccd12876d8950bc8f74edf59f82609a62e8d19c260",
+    "statement": "packaging/licenses/objc2-LICENSE.txt",
+    "statement_sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "name": "objc2",
+    "version": "0.6.5",
+    "commit": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df",
+    "manifest_sha256": "5556dba493fc18e98ebf82f587011f76df6c8c26532613e4c8f904ee586d7cf0",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-app-kit",
+    "version": "0.2.2",
+    "commit": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+    "manifest_sha256": "3ae36868a6318fb30bc564f207821b311ee1fb0081d29294266440be29b08280",
+    "statement": "packaging/licenses/objc2-LICENSE.txt",
+    "statement_sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "name": "objc2-app-kit",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "11a761a52774ed9738fb854ba3eecb48fa360b6ce43dddc00c338346853717b5",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-av-foundation",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "11f9fea3e046ac951cb2b2e1248c28bd2130b73ff470a9f6a333a52c32367abd",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-avf-audio",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "34d2f324811ae1be1ec767394fff06f5405a2c72bb0259cf3649fd61b59ac387",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-cloud-kit",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "64e059344995e74ca1d22cee17edd17dde101cc3e37eb4bd7c7967a54f54a6f5",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-audio",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "62763a0b5d7e8d78402f464c83c2d31e69138b00ec1e19361f6359d500a4274c",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-audio-types",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "f26066fe0a9932213e31793ec1b72578746e3ceb07dd667be2595daaf84760e1",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-data",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "cac3cd4dd382310e930b39f922ea650c83688bbb65a680b5b8fa76d9e2db674c",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-foundation",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "c0f54260fa1396923f2db4edf1e2d54e8ab09dea214af4b8ce37aaefa7185e60",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-graphics",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "9756d343dc626faf07cdef1cdef29a2b3efed0f6a2fc44ae35fd828e2f482dc1",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-image",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "11e6de07b724221273af1609c9833d06c9c7623354ee7f5821da0846f0b988b8",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-media",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "6fc9ece7e51d21c2884220bf7f53f88985e080286c4a6202c624eff05d0c56f5",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-services",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "3a8a1cd082ba4d328efb9e347584940f782eb6245ae179a6afd40750d31dc0c3",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-text",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "ee9c5dd4f36414afdf971820df60d8b4ea4f0767f93c6ea7fdbcf71e6cbab250",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-core-video",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "9d19223267d245d2258aa63244090345c16e0099e6e828841abd72e2e1e4d880",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-encode",
+    "version": "4.1.0",
+    "commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+    "manifest_sha256": "cf9a8cc812710344d7fe618a5e615530baeeceae5c2826b9d5bb557dc419f159",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-foundation",
+    "version": "0.2.2",
+    "commit": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+    "manifest_sha256": "32e045ebbc4c009b67f63070744b1a443958eb5807f4a8facdc4de2754e1bfa9",
+    "statement": "packaging/licenses/objc2-LICENSE.txt",
+    "statement_sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5"
+  },
+  {
+    "name": "objc2-foundation",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "eabbe24e325c7b474c6f5de2e955f4f942ecd385608e4b6609b89a1f68ef39cc",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-image-io",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "3b944c934cc3db5e031db1cb3bb4390c1682845781e727fbdfc46415e24d351d",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-media-toolbox",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "4f386856f2e8fa5a7c2b64bb7187f494392ec21199301cb883dd101fc2803646",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-metal",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "8ea9d2d00d2e462d2f1e0a5bb242ccc8753c2bcd3441edd1d2cf05cba69092ff",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  },
+  {
+    "name": "objc2-quartz-core",
+    "version": "0.3.2",
+    "commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+    "manifest_sha256": "7af27150fadd5ac0b3e86ec173b4e3e2b0dd42d614de963a0c9f0bf55cc7b4d9",
+    "statement": "packaging/licenses/objc2-LICENSE.md",
+    "statement_sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+  }
+]

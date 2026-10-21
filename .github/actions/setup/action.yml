@@ -23,3 +23,6 @@ runs:
           ~/.cargo/git
           target
         key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+    - name: Pinned license collector
+      shell: bash
+      run: cargo install cargo-about --version 0.9.2 --locked --features cli
