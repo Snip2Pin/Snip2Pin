@@ -45,7 +45,9 @@ pub fn write(destination: &Path) -> Result {
     {
         return Err(format!("license generation requires {VERSION}").into());
     }
-    let data: Value = serde_json::from_str(&output(
+    let directory = tempfile::tempdir()?;
+    let collected = directory.path().join("licenses.json");
+    output(
         Command::new("cargo-about")
             .args([
                 "generate",
@@ -56,8 +58,11 @@ pub fn write(destination: &Path) -> Result {
                 "json",
                 "--fail",
             ])
+            .arg("--output-file")
+            .arg(&collected)
             .current_dir(crate::root()),
-    )?)?;
+    )?;
+    let data: Value = serde_json::from_slice(&fs::read(collected)?)?;
     let reviewed: Vec<Reviewed> = serde_json::from_str(REVIEWED)?;
     fs::write(destination, render(&data, &reviewed)?)?;
     Ok(())
