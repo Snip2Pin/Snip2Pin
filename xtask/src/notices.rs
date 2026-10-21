@@ -37,6 +37,14 @@ struct Reviewed {
 }
 
 pub fn write(destination: &Path) -> Result {
+    write_for(destination, false)
+}
+
+pub fn write_web(destination: &Path) -> Result {
+    write_for(destination, true)
+}
+
+fn write_for(destination: &Path, web: bool) -> Result {
     if output(
         Command::new("cargo-about")
             .arg("--version")
@@ -47,24 +55,33 @@ pub fn write(destination: &Path) -> Result {
     }
     let directory = tempfile::tempdir()?;
     let collected = directory.path().join("licenses.json");
-    output(
-        Command::new("cargo-about")
-            .args([
-                "generate",
-                "--locked",
-                "--manifest-path",
-                "Cargo.toml",
-                "--format",
-                "json",
-                "--fail",
-            ])
-            .arg("--output-file")
-            .arg(&collected)
-            .current_dir(crate::root()),
-    )?;
+    let mut command = Command::new("cargo-about");
+    command
+        .args([
+            "generate",
+            "--locked",
+            "--manifest-path",
+            if web {
+                "preview/Cargo.toml"
+            } else {
+                "Cargo.toml"
+            },
+            "--config",
+            "about.toml",
+            "--format",
+            "json",
+            "--fail",
+        ])
+        .arg("--output-file")
+        .arg(&collected)
+        .current_dir(crate::root());
+    if web {
+        command.args(["--target", "wasm32-unknown-unknown"]);
+    }
+    output(&mut command)?;
     let data: Value = serde_json::from_slice(&fs::read(collected)?)?;
     let reviewed: Vec<Reviewed> = serde_json::from_str(REVIEWED)?;
-    fs::write(destination, render(&data, &reviewed)?)?;
+    fs::write(destination, render(&data, &reviewed, web)?)?;
     Ok(())
 }
 
@@ -146,9 +163,14 @@ fn reviewed_declaration(package: &Value, reviewed: &[Reviewed]) -> Result<String
     Ok(text)
 }
 
-fn render(data: &Value, reviewed: &[Reviewed]) -> Result<String> {
-    let mut text = String::from(
-        "Snip2Pin third-party notices\n\nThe desktop app's normal dependencies for supported platforms are listed below. Build/development-only dependencies are excluded. Upstream texts and attributions are preserved; explicitly reviewed standard-license references are labelled separately. System libraries and fonts read from the installed operating system are not bundled here.\n",
+fn render(data: &Value, reviewed: &[Reviewed], web: bool) -> Result<String> {
+    let scope = if web {
+        "browser demo's normal dependencies for WebAssembly"
+    } else {
+        "desktop app's normal dependencies for supported platforms"
+    };
+    let mut text = format!(
+        "Snip2Pin third-party notices\n\nThe {scope} are listed below. Build/development-only dependencies are excluded. Upstream texts and attributions are preserved; explicitly reviewed standard-license references are labelled separately. System libraries and fonts read from the installed operating system are not bundled here.\n",
     );
     let mut covered = BTreeSet::new();
     for license in data["licenses"].as_array().ok_or("collected licenses")? {
@@ -204,11 +226,13 @@ fn render(data: &Value, reviewed: &[Reviewed]) -> Result<String> {
             "\n\n=== Embedded font notice: {file} ===\n{contents}\n"
         ));
     }
-    let nsis = checked_text(
-        &crate::root().join("packaging/licenses/NSIS-3.13-COPYING.txt"),
-        "9afab55b28917f993049218d52d5ed9ec56498bc6d53fe422aea5b60c867ee4b",
-    )?;
-    text.push_str(&format!("\n\n=== NSIS 3.13: Windows installer runtime only ===\nOfficial distribution copyright and license information:\n{nsis}\n"));
+    if !web {
+        let nsis = checked_text(
+            &crate::root().join("packaging/licenses/NSIS-3.13-COPYING.txt"),
+            "9afab55b28917f993049218d52d5ed9ec56498bc6d53fe422aea5b60c867ee4b",
+        )?;
+        text.push_str(&format!("\n\n=== NSIS 3.13: Windows installer runtime only ===\nOfficial distribution copyright and license information:\n{nsis}\n"));
+    }
     Ok(text)
 }
 

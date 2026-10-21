@@ -13,6 +13,8 @@ use snip2pin::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
+use crate::desktop;
+
 struct Pin {
     id: u64,
     name: String,
@@ -70,6 +72,11 @@ struct Sandbox {
     source: Arc<ColorImage>,
     windows: Vec<snip2pin::geometry::PixelRect>,
     texture: TextureHandle,
+    wallpaper: TextureHandle,
+    scene: desktop::Scene,
+    capture_pending: Option<u64>,
+    window_rects: Vec<(egui::LayerId, Rect)>,
+    desktop_bounds: Rect,
     icon: TextureHandle,
     selection: Option<overlay::Selection>,
     pins: Vec<Pin>,
@@ -81,7 +88,7 @@ struct Sandbox {
 }
 
 impl Sandbox {
-    fn new(cc: &eframe::CreationContext<'_>, font: Vec<u8>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, font: Vec<u8>, wallpaper: ColorImage) -> Self {
         if !font.is_empty() {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
@@ -93,8 +100,7 @@ impl Sandbox {
             }
             cc.egui_ctx.set_fonts(fonts);
         }
-        let scene = capture::demo_windows(None);
-        let source = scene.pixels.clone();
+        let source = Arc::new(ColorImage::filled([1, 1], egui::Color32::TRANSPARENT));
         Self {
             preferences: Preferences::default(),
             recording: false,
@@ -106,6 +112,13 @@ impl Sandbox {
                 source.clone(),
                 Default::default(),
             ),
+            wallpaper: cc
+                .egui_ctx
+                .load_texture("preview-wallpaper", wallpaper, Default::default()),
+            scene: desktop::Scene::default(),
+            capture_pending: None,
+            window_rects: Vec::new(),
+            desktop_bounds: Rect::NOTHING,
             icon: cc.egui_ctx.load_texture(
                 "brand",
                 snip2pin::icon::render(snip2pin::icon::Variant::Line, 64)
@@ -114,7 +127,7 @@ impl Sandbox {
                 Default::default(),
             ),
             source,
-            windows: scene.window_regions([1, 1]),
+            windows: Vec::new(),
             selection: None,
             pins: Vec::new(),
             menu: None,
@@ -125,12 +138,60 @@ impl Sandbox {
     }
 
     fn capture(&mut self, ctx: &egui::Context) {
+        if self.capture_pending.is_some() {
+            return;
+        }
         for pin in &self.pins {
             pin_view::forget_input(ctx, pin.id);
         }
         self.message = None;
         self.menu = None;
         self.unlock_hint = None;
+        let request = ctx.cumulative_frame_nr();
+        self.capture_pending = Some(request);
+        // Eframe's web backend reads the painted WebGL canvas. Keep the normal
+        // desktop visible until that immutable frame returns as a screenshot.
+        ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::new(request)));
+    }
+
+    fn receive_capture(&mut self, ctx: &egui::Context) {
+        let Some(request) = self.capture_pending else {
+            return;
+        };
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.capture_pending = None;
+            return;
+        }
+        let screenshot = ctx.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Screenshot {
+                    image, user_data, ..
+                } if user_data
+                    .data
+                    .as_deref()
+                    .and_then(|data| data.downcast_ref::<u64>())
+                    == Some(&request) =>
+                {
+                    Some(image.clone())
+                }
+                _ => None,
+            })
+        });
+        let Some(source) = screenshot else {
+            return;
+        };
+        self.capture_pending = None;
+        let layers = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());
+        self.window_rects
+            .sort_by_key(|(layer, _)| layers.iter().position(|candidate| candidate == layer));
+        let windows = self
+            .window_rects
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>();
+        self.windows = desktop::pixel_regions(self.desktop_bounds, source.size, &windows);
+        self.source = source;
+        self.texture.set(self.source.clone(), Default::default());
         self.selection = Some(overlay::Selection {
             texture: self.texture.clone(),
             pixels: self.source.size.map(|n| n as u32),
@@ -138,7 +199,8 @@ impl Sandbox {
             windows: self.windows.clone(),
             press: None,
             start: None,
-            focus_requested: false,
+            // A browser simulation must not request native window activation.
+            focus_requested: true,
         });
     }
 
@@ -224,6 +286,13 @@ impl eframe::App for Sandbox {
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         let bounds = ui.max_rect();
+        // A frozen desktop belongs to one canvas layout. Resizing cancels the
+        // selection rather than stretching stale window coordinates over a new scene.
+        if bounds != self.desktop_bounds {
+            self.capture_pending = None;
+            self.selection = None;
+        }
+        self.receive_capture(ui.ctx());
         if !ui.input(|input| input.focused) {
             self.focused_pin = None;
         } else if self.menu.is_none() && ui.input(|input| input.pointer.any_pressed()) {
@@ -270,6 +339,7 @@ impl eframe::App for Sandbox {
                 }
             }
         } else if self.selection.is_none()
+            && self.capture_pending.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| {
                 input.events.iter().any(|event| {
@@ -324,15 +394,8 @@ impl eframe::App for Sandbox {
             }
             return;
         }
-        ui.painter()
-            .rect_filled(bounds, 0, ui.visuals().extreme_bg_color);
-        ui.painter().text(
-            bounds.right_bottom() - Vec2::splat(20.0),
-            egui::Align2::RIGHT_BOTTOM,
-            locale.text(Text::Sandbox),
-            egui::FontId::proportional(13.0),
-            ui.visuals().weak_text_color(),
-        );
+        self.desktop_bounds = bounds;
+        self.window_rects = desktop::show(ui, &self.wallpaper, &mut self.scene);
         let mut action = None;
         let message = self.message.as_ref().map(|message| message.render(locale));
         let pins = self
@@ -349,11 +412,13 @@ impl eframe::App for Sandbox {
                 selected: self.focused_pin == Some(pin.id),
             })
             .collect::<Vec<_>>();
-        egui::Window::new("Snip2Pin")
+        let home = egui::Window::new("Snip2Pin")
             .id(egui::Id::new("home"))
             .title_bar(false)
-            .fixed_pos(egui::pos2(24.0, 24.0))
+            .default_pos(bounds.min + egui::vec2(36.0_f32.min(bounds.width() * 0.04), 66.0))
             .default_size(snip2pin::ui::style::LAUNCHER.window)
+            .max_size((bounds.size() - egui::vec2(24.0, 90.0)).max(Vec2::splat(1.0)))
+            .constrain_to(bounds.shrink2(egui::vec2(12.0, 42.0)))
             .resizable(true)
             .show(ui.ctx(), |ui| {
                 action = launcher::show(
@@ -374,6 +439,10 @@ impl eframe::App for Sandbox {
                     },
                 );
             });
+        if let Some(home) = home {
+            self.window_rects
+                .push((home.response.layer_id, home.response.rect));
+        }
         match action {
             Some(launcher::Action::RenamePin(id, name)) => {
                 if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
@@ -438,6 +507,10 @@ impl eframe::App for Sandbox {
             if !ui.input(|input| input.pointer.primary_down()) {
                 pin.gesture = None;
             }
+            self.window_rects.push((
+                egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("pin", pin.id))),
+                pin.image,
+            ));
             let mut requested = None;
             egui::Area::new(egui::Id::new(("pin", pin.id)))
                 .order(egui::Order::Foreground)
@@ -543,7 +616,22 @@ impl eframe::App for Sandbox {
 }
 
 #[wasm_bindgen]
-pub async fn start(font: Vec<u8>) -> Result<(), JsValue> {
+pub async fn start(
+    font: Vec<u8>,
+    wallpaper: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Result<(), JsValue> {
+    let size = [width as usize, height as usize];
+    if size.contains(&0)
+        || size[0]
+            .checked_mul(size[1])
+            .and_then(|pixels| pixels.checked_mul(4))
+            != Some(wallpaper.len())
+    {
+        return Err(JsValue::from_str("invalid preview wallpaper"));
+    }
+    let wallpaper = ColorImage::from_rgba_unmultiplied(size, &wallpaper);
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| JsValue::from_str("document unavailable"))?;
@@ -555,7 +643,7 @@ pub async fn start(font: Vec<u8>) -> Result<(), JsValue> {
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(move |cc| Ok(Box::new(Sandbox::new(cc, font)))),
+            Box::new(move |cc| Ok(Box::new(Sandbox::new(cc, font, wallpaper)))),
         )
         .await
 }

@@ -155,7 +155,6 @@ catalogue! {
     DemoAppearance => ("Demo appearance updated for this session.", "演示外观已更新，本次有效。"),
     DemoPinned => ("Copied & pinned (simulated clipboard).", "已复制并置顶（沙箱仅模拟复制）。"),
     DemoCopied => ("Copied (simulated; system clipboard unchanged).", "已复制（沙箱仅模拟，不写系统剪贴板）。"),
-    Sandbox => ("Local UI sandbox · Generated images · Simulated window gestures · No desktop or clipboard access", "本地 UI 沙箱 · 生成图片 · 拖动/自由缩放为模拟 · 不访问桌面/剪贴板"),
     GlobalShortcutError => ("Global shortcut unavailable: {value}", "全局快捷键不可用：{value}"),
     TrayError => ("Tray unavailable: {value}", "菜单栏图标不可用：{value}"),
     StartupError => ("Launch at login unavailable: {value}", "开机自启不可用：{value}"),
