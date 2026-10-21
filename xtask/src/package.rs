@@ -260,9 +260,6 @@ pub fn prepare_payload(binary: &Path, target: &str, payload: &Path) -> Result {
     let executable = binary.file_name().ok_or("missing executable filename")?;
     if target.contains("apple") {
         macos_bundle(binary, &payload.join("Snip2Pin.app"), "line")?;
-        crate::notices::write(
-            &payload.join("Snip2Pin.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"),
-        )?;
     } else {
         crate::notices::write(&payload.join("THIRD_PARTY_NOTICES.txt"))?;
         fs::copy(binary, payload.join(executable))?;
@@ -373,6 +370,7 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     let plist = destination.join("Contents/Info.plist");
     fs::copy("packaging/macos/Info.plist", &plist)?;
     fs::copy("LICENSE", resources.join("LICENSE"))?;
+    crate::notices::write(&resources.join("THIRD_PARTY_NOTICES.txt"))?;
     fs::copy("packaging/README.txt", resources.join("README.txt"))?;
     for locale in ["en", "zh-Hans"] {
         let directory = resources.join(format!("{locale}.lproj"));
@@ -705,6 +703,12 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
         let plist = app.join("Contents/Info.plist");
         if !app.join("Contents/Resources/DockMenu.nib").exists() {
             return Err("macOS package is missing its native Dock menu".into());
+        }
+        for file in ["LICENSE", "THIRD_PARTY_NOTICES.txt"] {
+            let metadata = fs::symlink_metadata(app.join("Contents/Resources").join(file))?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err("macOS package is missing its license notices".into());
+            }
         }
         for locale in ["en", "zh-Hans"] {
             let strings = app.join(format!(
