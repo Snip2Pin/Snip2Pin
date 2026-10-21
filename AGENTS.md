@@ -175,8 +175,10 @@ and preserve required third-party license notices.
 CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
 platform-specific caches. PRs cannot access signing credentials. Daily checks
 may build unsigned debug packages and verify final unverified package layout
-without GUI activation, installing, uploading distribution files, using signing
-credentials, tagging or creating Releases. macOS debug bundle integrity checks
+without GUI activation, uploading distribution files, using signing credentials,
+tagging or creating Releases. Installation checks use only disposable hosted
+runners or containers and temporary destinations; never install on a developer's
+machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
 Only explicit manual candidate builds upload unsigned release-profile artifacts.
 Formal publication requires a complete set of four native targets, matching
@@ -215,7 +217,8 @@ dependencies derive from ELF plus runtime-loaded libraries on Ubuntu 24.04; do
 not claim untested Debian compatibility. AUR generation is a separate manual
 post-publication command, verifies the public tarball, uses makepkg for .SRCINFO,
 and never pushes or uploads to AUR. Daily CI may verify temporary silent Windows
-fixture installs on hosted runners; no desktop activation or real user settings.
+installs and generated upgrade fixtures on hosted runners; no desktop activation
+or real user settings.
 
 Use the pinned Rust toolchain and commit `Cargo.lock`. Keep dependencies small.
 Use published crates instead of unpinned Git branches. Avoid unsafe code,
