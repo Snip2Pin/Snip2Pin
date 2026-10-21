@@ -59,34 +59,19 @@ impl Window {
 
 #[cfg(target_os = "macos")]
 fn apply_macos(window: &objc2_app_kit::NSWindow, pixels: [usize; 2], commands: &[Zoom]) {
-    use eframe::egui::{Rect, pos2, vec2};
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
     let content = window.contentRectForFrameRect(window.frame());
-    let Some(main) = objc2::MainThreadMarker::new() else {
+    let Some(top) = super::macos::desktop_top() else {
         return;
     };
-    let Some(primary) = objc2_app_kit::NSScreen::screens(main).firstObject() else {
-        return;
-    };
-    let top = primary.frame().origin.y + primary.frame().size.height;
     // Match the backend's top-left coordinates using the real primary screen.
-    let current = Rect::from_min_size(
-        pos2(
-            content.origin.x as f32,
-            (top - content.origin.y - content.size.height) as f32,
-        ),
-        vec2(content.size.width as f32, content.size.height as f32),
-    );
+    let current = super::macos::backend_rect(content, top);
     if let Some(target) = snip2pin::pin::zoom_rect(
         current,
         pixels,
         window.backingScaleFactor() as f32,
         commands,
     ) {
-        let content = NSRect::new(
-            NSPoint::new(f64::from(target.min.x), top - f64::from(target.max.y)),
-            NSSize::new(f64::from(target.width()), f64::from(target.height())),
-        );
+        let content = super::macos::native_rect(target, top);
         window.setFrame_display(window.frameRectForContentRect(content), false);
     }
 }
