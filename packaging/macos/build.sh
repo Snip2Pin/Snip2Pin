@@ -17,15 +17,19 @@ if "$MIGRATE" && ! "$INSTALL"; then
     exit 2
 fi
 PROFILE=release
+CARGO_BUILD_TARGET="$(rustc -vV | awk '/^host:/ {print $2}')"
+export CARGO_BUILD_TARGET
+TARGET_DIR="$(cargo metadata --locked --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)"
+BINARY="$TARGET_DIR/$CARGO_BUILD_TARGET/$PROFILE/snip2pin"
 OUTPUT_DIR="$PROJECT_DIR/.build/macos"
 cargo build --locked --release
 APP_DIR="$OUTPUT_DIR/Snip2Pin.app"
 rm -rf "$APP_DIR"
 ICON_VARIANT=line
 if "$INSTALL"; then
-    ICON_VARIANT="$("target/$PROFILE/snip2pin" --selected-icon)"
+    ICON_VARIANT="$("$BINARY" --selected-icon)"
 fi
-cargo xtask bundle-macos "target/$PROFILE/snip2pin" "$APP_DIR" "$ICON_VARIANT"
+cargo xtask bundle-macos "$BINARY" "$APP_DIR" "$ICON_VARIANT"
 bash packaging/macos/signing.sh --sign "$APP_DIR"
 if "$INSTALL"; then
     DESTINATION=/Applications/Snip2Pin.app
@@ -40,7 +44,7 @@ if "$INSTALL"; then
         OLD_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$DESTINATION/Contents/Info.plist")"
         NEW_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_DIR/Contents/Info.plist")"
         if [[ "$OLD_ID" != "$NEW_ID" ]]; then
-            "target/$PROFILE/snip2pin" --check-identity-migration "$DESTINATION"
+            "$BINARY" --check-identity-migration "$DESTINATION"
             MIGRATING=true
         fi
     fi

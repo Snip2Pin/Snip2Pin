@@ -243,12 +243,27 @@ pub fn build_binary(target: &str, profile: &str) -> Result<PathBuf> {
     } else {
         "snip2pin"
     };
-    let binary = PathBuf::from("target")
+    let metadata = output(Command::new("cargo").args([
+        "metadata",
+        "--locked",
+        "--no-deps",
+        "--format-version",
+        "1",
+    ]))?;
+    let binary = target_directory(&metadata)?
         .join(target)
         .join(profile)
         .join(executable);
     verify_version(&binary, &version()?)?;
     Ok(binary)
+}
+
+fn target_directory(metadata: &str) -> Result<PathBuf> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata)?;
+    metadata["target_directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Cargo metadata is missing its target directory".into())
 }
 
 /// Construct the installed files without archiving, signing, or publishing them.
@@ -813,6 +828,28 @@ fn verify_version(binary: &Path, version: &str) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_metadata_resolves_custom_target_directories_without_global_env_changes() {
+        let directory = tempfile::tempdir().expect("temporary Cargo target");
+        let custom = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary directory")
+            .join("custom target with spaces");
+        let metadata = output(
+            Command::new("cargo")
+                .current_dir(crate::root())
+                .env("CARGO_TARGET_DIR", &custom)
+                .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
+        )
+        .expect("Cargo metadata with configured output directory");
+        assert_eq!(
+            target_directory(&metadata).expect("resolved output"),
+            custom
+        );
+        assert!(target_directory("{}").is_err());
+    }
 
     #[test]
     fn release_size_builds_only_the_locked_application_binary() {
