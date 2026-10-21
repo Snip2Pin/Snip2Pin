@@ -4,6 +4,7 @@ mod messages;
 mod notices;
 mod package;
 mod release;
+mod sizes;
 // Keep xtask's tests inside the test binary. Integration-test targets make Cargo
 // rebuild the normal executable, which Windows locks while `xtask check` runs.
 #[cfg(test)]

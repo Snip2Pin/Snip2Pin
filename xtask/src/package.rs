@@ -305,6 +305,7 @@ pub fn build(target: &str, profile: &str) -> Result {
             )?;
         }
     }
+    crate::sizes::candidate(target, profile, &binary, &payload, &archive)?;
     write_manifest(
         &base,
         &Manifest {
@@ -420,6 +421,7 @@ pub fn finalize(candidate: &Path, destination: &Path, distribution: Distribution
             if !fs::symlink_metadata(&path)?.file_type().is_file() {
                 return Err("final artifact must be a regular file".into());
             }
+            crate::sizes::final_artifact(&data.target, &file, &path)?;
             Ok(Artifact {
                 format: *format,
                 sha256: digest(&path)?,
