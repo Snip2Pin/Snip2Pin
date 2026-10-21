@@ -251,33 +251,21 @@ pub fn build_binary(target: &str, profile: &str) -> Result<PathBuf> {
     Ok(binary)
 }
 
-pub fn build(target: &str, profile: &str) -> Result {
-    let version = version()?;
-    crate::release::validate_inputs(&version, &revision()?)?;
-    let binary = build_binary(target, profile)?;
-    let base = PathBuf::from(".build/packages").join(profile).join(target);
-    if base.exists() {
-        fs::remove_dir_all(&base)?;
+/// Construct the installed files without archiving, signing, or publishing them.
+pub fn prepare_payload(binary: &Path, target: &str, payload: &Path) -> Result {
+    if !TARGETS.contains(&target) {
+        return Err("unsupported payload target".into());
     }
-    let payload = base.join("payload");
-    fs::create_dir_all(&payload)?;
+    fs::create_dir_all(payload)?;
     let executable = binary.file_name().ok_or("missing executable filename")?;
-    let archive = base.join(candidate_filename(&version, target));
     if target.contains("apple") {
-        macos_bundle(&binary, &payload.join("Snip2Pin.app"), "line")?;
+        macos_bundle(binary, &payload.join("Snip2Pin.app"), "line")?;
         crate::notices::write(
             &payload.join("Snip2Pin.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"),
         )?;
-        execute(
-            Command::new("ditto")
-                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
-                .arg(payload.join("Snip2Pin.app"))
-                .arg(&archive),
-        )?;
-        execute(Command::new("unzip").arg("-tq").arg(&archive))?;
     } else {
         crate::notices::write(&payload.join("THIRD_PARTY_NOTICES.txt"))?;
-        fs::copy(&binary, payload.join(executable))?;
+        fs::copy(binary, payload.join(executable))?;
         fs::copy("packaging/README.txt", payload.join("README.txt"))?;
         if let Some(license) = manifest()?["package"]
             .get("license-file")
@@ -296,25 +284,49 @@ pub fn build(target: &str, profile: &str) -> Result {
                 "assets/icons/line.png",
                 payload.join("io.github.Snip2Pin.Snip2Pin.png"),
             )?;
-            execute(Command::new("ldd").arg(&binary))?;
-            execute(
-                Command::new("tar")
-                    .arg("-czf")
-                    .arg(&archive)
-                    .arg("-C")
-                    .arg(&payload)
-                    .arg("."),
-            )?;
-            execute(Command::new("tar").arg("-tzf").arg(&archive))?;
-        } else {
-            // PowerShell receives paths as arguments, never interpolated script fragments.
-            execute(
-                Command::new("pwsh")
-                    .args(["-NoProfile", "-File", "packaging/windows/archive.ps1"])
-                    .arg(&payload)
-                    .arg(&archive),
-            )?;
         }
+    }
+    Ok(())
+}
+
+pub fn build(target: &str, profile: &str) -> Result {
+    let version = version()?;
+    crate::release::validate_inputs(&version, &revision()?)?;
+    let binary = build_binary(target, profile)?;
+    let base = PathBuf::from(".build/packages").join(profile).join(target);
+    if base.exists() {
+        fs::remove_dir_all(&base)?;
+    }
+    let payload = base.join("payload");
+    prepare_payload(&binary, target, &payload)?;
+    let archive = base.join(candidate_filename(&version, target));
+    if target.contains("apple") {
+        execute(
+            Command::new("ditto")
+                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
+                .arg(payload.join("Snip2Pin.app"))
+                .arg(&archive),
+        )?;
+        execute(Command::new("unzip").arg("-tq").arg(&archive))?;
+    } else if target.contains("linux") {
+        execute(Command::new("ldd").arg(&binary))?;
+        execute(
+            Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&payload)
+                .arg("."),
+        )?;
+        execute(Command::new("tar").arg("-tzf").arg(&archive))?;
+    } else {
+        // PowerShell receives paths as arguments, never interpolated script fragments.
+        execute(
+            Command::new("pwsh")
+                .args(["-NoProfile", "-File", "packaging/windows/archive.ps1"])
+                .arg(&payload)
+                .arg(&archive),
+        )?;
     }
     crate::sizes::candidate(target, profile, &binary, &payload, &archive)?;
     write_manifest(
