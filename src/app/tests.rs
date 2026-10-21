@@ -1,5 +1,7 @@
 use super::*;
 
+mod pin_pipeline;
+
 #[cfg(target_os = "macos")]
 #[path = "tests/macos_drag.rs"]
 mod macos_drag;
