@@ -14,8 +14,25 @@ canvas { width: 100%; height: 100%; display: block; }
 import init, { start } from './pkg/snip2pin_preview.js';
 try {
   await init();
-  const font = await fetch('./pkg/font.ttf');
-  await start(font.ok ? new Uint8Array(await font.arrayBuffer()) : new Uint8Array());
+  const [font, wallpaper] = await Promise.all([
+    fetch('./pkg/font.ttf'),
+    fetch('./assets/wallpaper.webp').then(response => {
+      if (!response.ok) throw new Error('Wallpaper unavailable');
+      return response.blob();
+    }).then(createImageBitmap),
+  ]);
+  // Browser-native decoding keeps the preview asset/decoder out of native builds.
+  const surface = document.createElement('canvas');
+  surface.width = wallpaper.width;
+  surface.height = wallpaper.height;
+  const context = surface.getContext('2d', { willReadFrequently: true });
+  context.drawImage(wallpaper, 0, 0);
+  const pixels = context.getImageData(0, 0, surface.width, surface.height);
+  wallpaper.close();
+  await start(
+    font.ok ? new Uint8Array(await font.arrayBuffer()) : new Uint8Array(),
+    new Uint8Array(pixels.data.buffer), surface.width, surface.height,
+  );
   document.querySelector('#status').remove();
 } catch (error) {
   document.querySelector('#status').textContent = `加载失败：${error}`;
