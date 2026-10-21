@@ -134,6 +134,28 @@ Git 忽略的 `preview/pkg/`，不提交或对外发布。自动化使用独立 
 顶部菜单可切换数据、代码和待办场景，示例窗口使用标准 egui 控件，可拖动或切换页签。
 调整画布尺寸会取消正在进行的框选，避免使用旧窗口坐标。
 
+### GitHub Pages 交互演示
+
+公开网页使用独立构建入口，不上传本地沙箱目录或系统字体。需要 Python 3.12、
+上文的 WASM 工具链及 `cargo-about 0.9.2`：
+
+```sh
+python3 -m pip install --require-hashes -r preview/requirements.txt
+cargo xtask preview-site
+python3 -m http.server 8766 --bind 127.0.0.1 --directory .build/site
+```
+
+构建使用 `web` 优化配置，从固定上游提交下载 Noto Sans SC 并校验 SHA-256。
+只保留常用简体字、界面文案及示例所需字形，固定为 400 字重并重命名为
+`Snip2Pin Preview Sans`，保留原字体版权与 OFL 许可。原生应用不打包这份字体。
+输出 `.build/site/` 包含网页、WASM、壁纸、字体、项目许可证及实际 Web 依赖声明，
+不包含本地字体、设置或源码；第三方声明由现有许可收集器按 WASM 依赖图生成。
+
+`pages.yml` 在 PR 中构建验证，在 `main` 更新或手动运行时部署。仓库 Pages 来源设置为
+GitHub Actions，`github-pages` 环境仅允许 `main`；只有部署任务持有 Pages 写权限与
+OIDC 权限。它只发布交互演示，与桌面安装包、签名和 GitHub Releases 流程独立。
+首次部署成功并验证实际页面后，再将演示链接加入 README。
+
 Dependabot 每周提交 Cargo 和 Actions 更新 PR，不自动合并；Cargo.lock 必须提交。
 `deny.toml` 检查 RustSec、依赖许可证及来源，重复版本作为提示；不得为通过检查
 整体关闭策略。确需忽略公告时注明公告 ID、影响分析、上游修复和复查日期。

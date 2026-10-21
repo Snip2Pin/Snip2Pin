@@ -258,7 +258,7 @@ pub fn build_binary(target: &str, profile: &str) -> Result<PathBuf> {
     Ok(binary)
 }
 
-fn target_directory(metadata: &str) -> Result<PathBuf> {
+pub(crate) fn target_directory(metadata: &str) -> Result<PathBuf> {
     let metadata: serde_json::Value = serde_json::from_str(metadata)?;
     metadata["target_directory"]
         .as_str()

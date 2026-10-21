@@ -56,6 +56,12 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = true
+panic = "abort"
+
 [[test]]
 name = "macos_overlay"
 harness = false

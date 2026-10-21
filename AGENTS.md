@@ -9,7 +9,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
 - 主页采用紧凑直达布局，使用系统原生边缘拖拽调整窗口大小：一个截图主按钮，快捷键与主题、图标、开机自启直接可见；版本与 GitHub Releases 入口固定在底部。长快捷键可换行，小窗口内容可滚动，不把设置拆成多页，不增加常驻操作说明。
 - 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
-- 项目网站后续使用 GitHub Pages；建立并验证页面之前，不添加尚不存在的主页链接。
+- 网页交互演示使用 GitHub Pages，复用实际 Rust/WASM 界面；建立并验证页面之前，不添加尚不存在的演示链接。
+- 公开演示使用 `cargo xtask preview-site` 构建，只打包生成的网页资源、开源字体及许可声明，不上传本机系统字体、源码目录、配置或凭据。字体来源固定版本并校验 SHA-256，子集化后保留许可和版权、使用独立字体名称。网页字体不进入原生应用资源。
+- `pages.yml` 对 PR 只构建检查，仅从 `main` 部署到 `github-pages` 环境；网页资源可随主分支更新，不触发应用发版、签名、标签或 GitHub Release。网站部署权限仅授予部署任务，不使用 `release` 环境或本机身份。
 - 主题默认跟随系统，用户可选择跟随系统、浅色或深色，设置需要持久保存。
 - 界面支持中文、英文，默认在启动时按系统首选语言顺序匹配，无匹配或读取失败时回退英文；用户可选择跟随系统、简体中文或 English，手动选择立即生效并持久保存。文案集中在类型化翻译目录，新增文案同时提供中英文，原生界面与 WebAssembly 共用。消息保留语义直到显示时翻译，系统或第三方诊断信息保留原文；翻译不得参与事件路由或原生窗口身份识别。覆盖长英文、小窗口、动态参数及旧设置兼容，不轮询系统语言。
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
@@ -102,7 +104,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - `src/pin.rs`: initial proportional fitting, display coordinate conversion and adaptive visible image controls placement.
 - `src/app.rs`: capture state machine, events, and window lifecycle.
 - `src/ui/`: launcher, selection overlay, floating image views, shared style profiles, and copy artwork.
-- `preview/`: local WebAssembly sandbox using the same Rust UI and generated images; no native services.
+- `preview/`: WebAssembly demo and local sandbox using the same Rust UI and fictional documents; no native services. Public builds use a redistributable font; local system fonts stay local.
 - `src/app/tests.rs`, `src/ui/pin/tests.rs`, `src/ui/launcher/tests.rs`: lifecycle and view regressions, separate from production logic.
 - `src/platform.rs`: keyboard shortcut and local system-font adapters.
 - `src/platform/macos.rs`: explicit application activation and floating levels, preserving backend classes and observation lifecycle.

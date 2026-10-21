@@ -4,6 +4,7 @@ mod installers;
 mod messages;
 mod notices;
 mod package;
+mod preview;
 mod release;
 mod sizes;
 // Keep xtask's tests inside the test binary. Integration-test targets make Cargo
@@ -32,7 +33,8 @@ fn run() -> Result {
         ["lint"] => lint(),
         ["check-release-size", target] => sizes::check_release(target),
         ["icons"] => icons::generate(),
-        ["preview", font] => preview(Path::new(font)),
+        ["preview", font] => preview::local(Path::new(font)),
+        ["preview-site"] => preview::site(),
         ["check-messages", base, head, title] => messages::check(base, head, title),
         ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
         ["verify-candidate", directory, target] => release::verify_candidate(Path::new(directory), target).map(|_| ()),
@@ -65,7 +67,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, distribution, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory), package::Distribution::parse(distribution)?)
         }
-        _ => Err("usage: cargo xtask check | lint | icons | check-release-size TARGET | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | prepare-linux CANDIDATE_DIR OUTPUT_DIR signed|unverified | dmg APP OUTPUT_DMG | finalize CANDIDATE_DIR OUTPUT_DIR signed|unverified | aur-package FINAL_DIR NEW_OUTPUT_DIR | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
+        _ => Err("usage: cargo xtask check | lint | icons | preview FONT | preview-site | check-release-size TARGET | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | prepare-linux CANDIDATE_DIR OUTPUT_DIR signed|unverified | dmg APP OUTPUT_DMG | finalize CANDIDATE_DIR OUTPUT_DIR signed|unverified | aur-package FINAL_DIR NEW_OUTPUT_DIR | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
     }
 }
 
@@ -74,56 +76,6 @@ fn root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_owned()
-}
-
-fn preview(font: &Path) -> Result {
-    if !font.is_file() {
-        return Err("preview requires an existing local CJK font file".into());
-    }
-    let lock: toml::Value = toml::from_str(&std::fs::read_to_string("Cargo.lock")?)?;
-    let version = lock["package"]
-        .as_array()
-        .and_then(|packages| {
-            packages
-                .iter()
-                .find(|package| package["name"].as_str() == Some("wasm-bindgen"))
-        })
-        .and_then(|package| package["version"].as_str())
-        .ok_or("wasm-bindgen missing from lock file")?;
-    let installed = output(Command::new("wasm-bindgen").arg("--version"))?;
-    if installed != format!("wasm-bindgen {version}") {
-        return Err(format!(
-            "install matching tool: cargo install wasm-bindgen-cli --version {version} --locked"
-        )
-        .into());
-    }
-    execute(Command::new("cargo").args([
-        "build",
-        "--locked",
-        "--package",
-        "snip2pin-preview",
-        "--target",
-        "wasm32-unknown-unknown",
-    ]))?;
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target"));
-    execute(
-        Command::new("wasm-bindgen")
-            .arg(target.join("wasm32-unknown-unknown/debug/snip2pin_preview.wasm"))
-            .args([
-                "--target",
-                "web",
-                "--out-dir",
-                "preview/pkg",
-                "--no-typescript",
-            ]),
-    )?;
-    std::fs::copy(font, "preview/pkg/font.ttf")?;
-    println!(
-        "Sandbox ready. Serve preview/ on 127.0.0.1; generated files and local font are ignored by Git."
-    );
-    Ok(())
 }
 
 fn output(command: &mut Command) -> Result<String> {
