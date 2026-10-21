@@ -8,6 +8,13 @@ const MIB: u64 = 1024 * 1024;
 const MAC_ARM_BINARY_LIMIT: u64 = 10 * MIB;
 const MAC_ARM_PAYLOAD_LIMIT: u64 = 12 * MIB;
 
+pub fn check_release(target: &str) -> Result {
+    let binary = crate::package::build_binary(target, "release")?;
+    let bytes = regular_file_bytes(&binary)?;
+    report(target, "release executable", bytes)?;
+    check_budget(target, "release", bytes, 0)
+}
+
 pub fn candidate(
     target: &str,
     profile: &str,

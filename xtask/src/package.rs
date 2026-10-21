@@ -212,21 +212,17 @@ pub fn verify(directory: &Path) -> Result<Vec<Manifest>> {
     Ok(manifests)
 }
 
-pub fn build(target: &str, profile: &str) -> Result {
+fn binary_build_command(target: &str, profile: &str) -> Result<Command> {
     if !TARGETS.contains(&target) || !["debug", "release"].contains(&profile) {
         return Err("unsupported target/profile".into());
     }
-    let host = output(Command::new("rustc").arg("-vV"))?;
-    if !host.contains(target) {
-        return Err("package on a native runner for its target".into());
-    }
-    let version = version()?;
-    crate::release::validate_inputs(&version, &revision()?)?;
     let mut build = Command::new("cargo");
     build.args([
         "build",
         "--locked",
         "--package",
+        "snip2pin",
+        "--bin",
         "snip2pin",
         "--target",
         target,
@@ -234,13 +230,14 @@ pub fn build(target: &str, profile: &str) -> Result {
     if profile == "release" {
         build.arg("--release");
     }
+    Ok(build)
+}
+
+/// Build and verify only the native application executable, without packaging.
+pub fn build_binary(target: &str, profile: &str) -> Result<PathBuf> {
+    let mut build = binary_build_command(target, profile)?;
+    native_host(target)?;
     execute(&mut build)?;
-    let base = PathBuf::from(".build/packages").join(profile).join(target);
-    if base.exists() {
-        fs::remove_dir_all(&base)?;
-    }
-    let payload = base.join("payload");
-    fs::create_dir_all(&payload)?;
     let executable = if target.contains("windows") {
         "snip2pin.exe"
     } else {
@@ -250,7 +247,21 @@ pub fn build(target: &str, profile: &str) -> Result {
         .join(target)
         .join(profile)
         .join(executable);
-    verify_version(&binary, &version)?;
+    verify_version(&binary, &version()?)?;
+    Ok(binary)
+}
+
+pub fn build(target: &str, profile: &str) -> Result {
+    let version = version()?;
+    crate::release::validate_inputs(&version, &revision()?)?;
+    let binary = build_binary(target, profile)?;
+    let base = PathBuf::from(".build/packages").join(profile).join(target);
+    if base.exists() {
+        fs::remove_dir_all(&base)?;
+    }
+    let payload = base.join("payload");
+    fs::create_dir_all(&payload)?;
+    let executable = binary.file_name().ok_or("missing executable filename")?;
     let archive = base.join(candidate_filename(&version, target));
     if target.contains("apple") {
         macos_bundle(&binary, &payload.join("Snip2Pin.app"), "line")?;
@@ -786,6 +797,30 @@ fn verify_version(binary: &Path, version: &str) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_size_builds_only_the_locked_application_binary() {
+        for target in TARGETS {
+            let command = binary_build_command(target, "release").expect("native build command");
+            assert_eq!(command.get_program(), "cargo");
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [
+                    "build",
+                    "--locked",
+                    "--package",
+                    "snip2pin",
+                    "--bin",
+                    "snip2pin",
+                    "--target",
+                    target,
+                    "--release"
+                ]
+            );
+        }
+        assert!(binary_build_command("unknown", "release").is_err());
+        assert!(binary_build_command(TARGETS[0], "custom").is_err());
+    }
 
     fn final_fixture(target: &str) -> Manifest {
         Manifest {

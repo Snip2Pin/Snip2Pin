@@ -29,6 +29,7 @@ fn run() -> Result {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["check"] => check(),
         ["lint"] => lint(),
+        ["check-release-size", target] => sizes::check_release(target),
         ["preview", font] => preview(Path::new(font)),
         ["check-messages", base, head, title] => messages::check(base, head, title),
         ["candidate-check", version, revision, run_id] => release::check_candidates(version, revision, run_id),
@@ -62,7 +63,7 @@ fn run() -> Result {
         ["publish", version, revision, run_id, directory, distribution, "--confirm"] => {
             release::publish(version, revision, run_id, Path::new(directory), package::Distribution::parse(distribution)?)
         }
-        _ => Err("usage: cargo xtask check | lint | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | prepare-linux CANDIDATE_DIR OUTPUT_DIR signed|unverified | dmg APP OUTPUT_DMG | finalize CANDIDATE_DIR OUTPUT_DIR signed|unverified | aur-package FINAL_DIR NEW_OUTPUT_DIR | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
+        _ => Err("usage: cargo xtask check | lint | check-release-size TARGET | check-msrv | check-messages BASE_SHA HEAD_SHA PR_TITLE | candidate-check VERSION SHA RUN | verify-candidate DIR TARGET | package TARGET debug|release | bundle-macos BINARY DEST line|metal | verify DIR | verify-native DIR TARGET signed|unverified | prepare-unverified CANDIDATE_DIR OUTPUT_DIR TARGET | prepare-linux CANDIDATE_DIR OUTPUT_DIR signed|unverified | dmg APP OUTPUT_DMG | finalize CANDIDATE_DIR OUTPUT_DIR signed|unverified | aur-package FINAL_DIR NEW_OUTPUT_DIR | release-check VERSION SHA | stage VERSION SHA DIR NOTES signed|unverified --confirm | publish VERSION SHA BUILD_RUN DIR signed|unverified --confirm".into()),
     }
 }
 
