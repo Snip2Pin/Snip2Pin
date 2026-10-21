@@ -491,7 +491,7 @@ fn main() {
             let primary = screens.iter().next().expect("native display").frame();
             let desktop_top = primary.origin.y + primary.size.height;
             let mut aligned_windows = Vec::new();
-            for zoom in [1.0, 1.25, 2.0] {
+            for (index, zoom) in [1.0, 1.25, 2.0].into_iter().enumerate() {
                 let ctx = egui::Context::default();
                 ctx.set_zoom_factor(zoom);
                 let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -510,7 +510,7 @@ fn main() {
                     ),
                 )
                 .image;
-                let title = format!("Snip2Pin · 贴图 aligned-{zoom}");
+                let title = platform::pin_window::title((images.len() + index) as u64);
                 let builder = egui::ViewportBuilder::default()
                     .with_title(&title)
                     .with_decorations(false)
@@ -546,6 +546,14 @@ fn main() {
                     .into_iter()
                     .find(|window| window.title().to_string() == title)
                     .expect("canonical native image");
+                assert_eq!(
+                    native.collectionBehavior(),
+                    objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
+                        | objc2_app_kit::NSWindowCollectionBehavior::Stationary
+                        | objc2_app_kit::NSWindowCollectionBehavior::IgnoresCycle
+                        | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                    "canonical image must pass through native preparation"
+                );
                 let content = native.contentRectForFrameRect(native.frame());
                 let view = native.contentView().expect("content view");
                 let view_screen =
