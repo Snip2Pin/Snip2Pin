@@ -15,6 +15,8 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 图标默认跟随主题：浅色使用极简线条，深色使用深色金属；用户也可手动固定任一图标。
 - PNG、ICO、ICNS 等二进制资源使用 Git LFS；SVG 源文件使用普通 Git，并保持源文件与 PNG 一致。
 - 运行时只读取预生成图标；SVG 渲染依赖仅放在开发工具中，用 `cargo xtask icons` 再生资源并校验像素一致性，避免把开发工具的代码带进应用。
+- 应用和安装包体积也是验收指标：分别报告可执行文件、解包内容及各发行格式的实际字节数，不用压缩包大小代替安装体积。按实测平台基线设置发版构建预算，变更预算须说明原因；调试包不套用发行包上限。不使用可执行压缩壳，不为缩小体积牺牲可访问性、画质、必要的平台能力或启动速度。
+- Windows MSVC 构建使用 Rust 内置的静态 C 运行库链接选项，避免要求用户另装 Visual C++ 运行库；CI 核对实际发行优化 EXE 的导入表并计入体积预算，不能只以带开发工具的 runner 上能启动作为依赖验收。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
@@ -172,12 +174,19 @@ globally suppress advisories/licenses to obtain a green check. Any scoped
 exception needs an advisory ID, impact analysis and a dated follow-up.
 The project and contributions use MIT; include LICENSE in application packages
 and preserve required third-party license notices.
+Generate notices with the pinned cargo-about tool over the application's normal
+desktop dependencies. Preserve bundled font and installer-runtime notices too.
+Keep upstream clarifications and reviewed fallbacks bound to source versions and
+checksums; unknown attribution gaps block packaging. Never invent copyright
+holders or present a standard-license reference as an upstream copyright notice.
 
 CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
 platform-specific caches. PRs cannot access signing credentials. Daily checks
 may build unsigned debug packages and verify final unverified package layout
-without GUI activation, installing, uploading distribution files, using signing
-credentials, tagging or creating Releases. macOS debug bundle integrity checks
+without GUI activation, uploading distribution files, using signing credentials,
+tagging or creating Releases. Installation checks use only disposable hosted
+runners or containers and temporary destinations; never install on a developer's
+machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
 Only explicit manual candidate builds upload unsigned release-profile artifacts.
 Formal publication requires a complete set of four native targets, matching
@@ -206,6 +215,18 @@ adapter instead of attempts to export them.
 Use Cargo.toml as the single version source; generate package metadata and bind
 manifests to a full commit SHA. Publish the verified files without rebuilding;
 never overwrite published tags/assets. Fix a release with a new patch version.
+Keep one unsigned candidate archive per native target. Schema 3 manifests list
+typed artifacts: final macOS DMG, Windows portable ZIP plus per-user NSIS Setup.exe,
+and Linux tar.gz plus Debian package. Require the complete exact format set and
+preserve the original candidate hash for every target. Signed Windows mode signs
+the application, embedded uninstaller and installer; signed macOS mode signs and
+notarizes the outer DMG after the app, without later content changes. Debian
+dependencies derive from ELF plus runtime-loaded libraries on Ubuntu 24.04; do
+not claim untested Debian compatibility. AUR generation is a separate manual
+post-publication command, verifies the public tarball, uses makepkg for .SRCINFO,
+and never pushes or uploads to AUR. Daily CI may verify temporary silent Windows
+installs and generated upgrade fixtures on hosted runners; no desktop activation
+or real user settings.
 
 Use the pinned Rust toolchain and commit `Cargo.lock`. Keep dependencies small.
 Use published crates instead of unpinned Git branches. Avoid unsafe code,
@@ -266,7 +287,9 @@ root geometry, DPI/UI zoom, cross-viewport continuation and lock checks.
 Distinguish compile/test coverage from interactive checks on Windows, macOS,
 Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 
-Do not commit screenshots, credentials, toolchains, caches, or build output.
+Do not commit private screenshots, credentials, toolchains, caches, or build output.
+Explicitly requested README illustrations may use generated public sample images
+from the shared UI sandbox; label their source and keep binary assets in Git LFS.
 Keep macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
 Settings use the platform configuration root plus `Snip2Pin`; local macOS signing

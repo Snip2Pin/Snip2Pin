@@ -136,15 +136,13 @@ jobs:
           WINDOWS_CERTIFICATE_SHA1: ${{ vars.WINDOWS_CERTIFICATE_SHA1 }}
           WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
         run: ./packaging/windows/ci-sign.ps1 -Candidate dist/candidate -OutputDirectory dist/final
-      - name: Finalize Linux archive in signed distribution
+      - name: Prepare Linux portable and Debian packages in signed distribution
         if: inputs.distribution == 'signed' && runner.os == 'Linux'
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          mkdir -p dist/final
-          cp "dist/candidate/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu-unsigned.tar.gz" "dist/final/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
-          cargo xtask finalize dist/candidate "dist/final/Snip2Pin-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          cargo xtask prepare-linux dist/candidate dist/final signed
       - name: Verify final files on the native platform
         env:
           DISTRIBUTION: ${{ inputs.distribution }}

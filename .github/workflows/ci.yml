@@ -63,8 +63,30 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Repository checks
         run: cargo xtask check
+      - name: Release-profile application size (no packages/upload)
+        run: cargo xtask check-release-size ${{ matrix.target }}
+      - name: Windows runtime dependency check
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tool = Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue
+          $reader = if ($tool) { $tool.Source } else { Join-Path $env:ProgramFiles 'LLVM/bin/llvm-readobj.exe' }
+          if (!(Test-Path $reader -PathType Leaf)) { throw 'LLVM object reader is unavailable' }
+          $imports = & $reader --coff-imports "target/$env:CARGO_BUILD_TARGET/release/snip2pin.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Windows runtime imports' }
+          $imports
+          if ($imports -match '(?i)^\s*Name:\s*(vcruntime|msvcp|msvcr|concrt|vcomp)[^\r\n]*\.dll\s*$') {
+            throw 'Windows packages must not require a separately installed Visual C++ runtime'
+          }
       - name: Package structure and CLI smoke check (no credentials/upload)
         run: cargo xtask package ${{ matrix.target }} debug
+      - name: macOS packaging storage
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          df -h .
+          du -sh target .build
       - name: Check unverified package integrity without credentials or upload
         shell: bash
         run: |
@@ -72,6 +94,31 @@ jobs:
           cargo xtask verify-native .build/unverified-final/${{ matrix.target }} ${{ matrix.target }} unverified
       - name: Minimum supported Rust
         run: cargo xtask check-msrv
+      - name: Windows installer fixture and uninstall checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/tests.ps1
+      - name: Debian package fixture and payload checks
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p xtask debian_fixture -- --ignored
+      - name: Debian install and removal on a clean Ubuntu baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker run --rm --env DEBIAN_FRONTEND=noninteractive --volume "$PWD/.build/unverified-final/${{ matrix.target }}:/packages:ro" \
+            ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+            bash -eu -c '
+              apt-get update
+              apt-get install --yes /packages/*.deb
+              test -r /usr/share/fonts/truetype/wqy/wqy-microhei.ttc
+              snip2pin --version
+              apt-get install --yes --reinstall /packages/*.deb
+              snip2pin --version
+              apt-get remove --yes snip2pin
+              hash -r
+              test ! -e /usr/bin/snip2pin
+              ! command -v snip2pin
+            '
   dependencies:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

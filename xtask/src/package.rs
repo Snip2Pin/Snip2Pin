@@ -31,6 +31,24 @@ impl Distribution {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct Artifact {
+    pub format: Format,
+    pub file: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Format {
+    Zip,
+    Dmg,
+    Nsis,
+    TarGz,
+    Deb,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema: u8,
     pub version: String,
@@ -38,18 +56,16 @@ pub struct Manifest {
     pub target: String,
     pub final_package: bool,
     pub distribution: Option<Distribution>,
-    pub file: String,
-    pub sha256: String,
+    pub artifacts: Vec<Artifact>,
     pub candidate_sha256: Option<String>,
 }
 
 impl Manifest {
     pub fn validate(&self) -> Result {
-        if self.schema != 2 || !TARGETS.contains(&self.target.as_str()) {
+        if self.schema != 3 || !TARGETS.contains(&self.target.as_str()) {
             return Err("unsupported package manifest".into());
         }
         crate::release::validate_inputs(&self.version, &self.revision)?;
-        let expected = distribution_filename(&self.version, &self.target, self.distribution);
         if self.final_package != self.distribution.is_some() {
             return Err("candidate/final distribution state mismatch".into());
         }
@@ -60,40 +76,88 @@ impl Manifest {
         {
             return Err("missing or invalid unsigned candidate provenance".into());
         }
-        if self.file != expected
-            || self.sha256.len() != 64
-            || !self.sha256.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Err("invalid package filename or checksum".into());
+        let formats = formats(&self.target, self.final_package);
+        if self.artifacts.len() != formats.len() {
+            return Err("incomplete or duplicate package formats".into());
+        }
+        for format in formats {
+            let matches: Vec<_> = self
+                .artifacts
+                .iter()
+                .filter(|a| a.format == *format)
+                .collect();
+            if matches.len() != 1 {
+                return Err("incomplete or duplicate package formats".into());
+            }
+            let artifact = matches[0];
+            if artifact.file
+                != artifact_filename(&self.version, &self.target, self.distribution, *format)
+                || artifact.sha256.len() != 64
+                || !artifact.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("invalid package filename or checksum".into());
+            }
         }
         Ok(())
     }
+
+    pub fn artifact(&self, format: Format) -> Result<&Artifact> {
+        self.artifacts
+            .iter()
+            .find(|a| a.format == format)
+            .ok_or_else(|| "missing package format".into())
+    }
 }
 
-pub fn filename(version: &str, target: &str, final_package: bool) -> String {
-    distribution_filename(
+pub fn formats(target: &str, final_package: bool) -> &'static [Format] {
+    if !final_package {
+        if target.contains("linux") {
+            &[Format::TarGz]
+        } else {
+            &[Format::Zip]
+        }
+    } else if target.contains("apple") {
+        &[Format::Dmg]
+    } else if target.contains("windows") {
+        &[Format::Zip, Format::Nsis]
+    } else {
+        &[Format::TarGz, Format::Deb]
+    }
+}
+
+pub fn candidate_filename(version: &str, target: &str) -> String {
+    artifact_filename(
         version,
         target,
-        final_package.then_some(Distribution::Signed),
+        None,
+        if target.contains("linux") {
+            Format::TarGz
+        } else {
+            Format::Zip
+        },
     )
 }
 
-fn distribution_filename(
+pub fn artifact_filename(
     version: &str,
     target: &str,
     distribution: Option<Distribution>,
+    format: Format,
 ) -> String {
     let suffix = match distribution {
         None => "-unsigned",
         Some(Distribution::Signed) => "",
         Some(Distribution::Unverified) => "-unverified",
     };
-    let extension = if target.contains("linux") {
-        "tar.gz"
-    } else {
-        "zip"
+    let extension = match format {
+        Format::Zip => "zip",
+        Format::Dmg => "dmg",
+        Format::Nsis => "exe",
+        Format::TarGz => "tar.gz",
+        Format::Deb => "deb",
     };
-    format!("Snip2Pin-{version}-{target}{suffix}.{extension}")
+    let installer = if format == Format::Nsis { "-Setup" } else { "" };
+    format!("Snip2Pin-{version}-{target}{suffix}{installer}.{extension}")
 }
 
 pub fn digest(path: &Path) -> Result<String> {
@@ -123,15 +187,22 @@ pub fn verify(directory: &Path) -> Result<Vec<Manifest>> {
         if !path.exists() {
             continue;
         }
+        if !fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err("package manifest must be a regular file".into());
+        }
         let data: Manifest = serde_json::from_slice(&fs::read(path)?)?;
         data.validate()?;
-        if data.target != target
-            || fs::symlink_metadata(directory.join(&data.file))?
+        if data.target != target {
+            return Err("package target mismatch".into());
+        }
+        for artifact in &data.artifacts {
+            if !fs::symlink_metadata(directory.join(&artifact.file))?
                 .file_type()
-                .is_symlink()
-            || digest(&directory.join(&data.file))? != data.sha256
-        {
-            return Err("package checksum, target, or file type mismatch".into());
+                .is_file()
+                || digest(&directory.join(&artifact.file))? != artifact.sha256
+            {
+                return Err("package checksum or file type mismatch".into());
+            }
         }
         manifests.push(data);
     }
@@ -141,21 +212,17 @@ pub fn verify(directory: &Path) -> Result<Vec<Manifest>> {
     Ok(manifests)
 }
 
-pub fn build(target: &str, profile: &str) -> Result {
+fn binary_build_command(target: &str, profile: &str) -> Result<Command> {
     if !TARGETS.contains(&target) || !["debug", "release"].contains(&profile) {
         return Err("unsupported target/profile".into());
     }
-    let host = output(Command::new("rustc").arg("-vV"))?;
-    if !host.contains(target) {
-        return Err("package on a native runner for its target".into());
-    }
-    let version = version()?;
-    crate::release::validate_inputs(&version, &revision()?)?;
     let mut build = Command::new("cargo");
     build.args([
         "build",
         "--locked",
         "--package",
+        "snip2pin",
+        "--bin",
         "snip2pin",
         "--target",
         target,
@@ -163,39 +230,54 @@ pub fn build(target: &str, profile: &str) -> Result {
     if profile == "release" {
         build.arg("--release");
     }
+    Ok(build)
+}
+
+/// Build and verify only the native application executable, without packaging.
+pub fn build_binary(target: &str, profile: &str) -> Result<PathBuf> {
+    let mut build = binary_build_command(target, profile)?;
+    native_host(target)?;
     execute(&mut build)?;
-    let base = PathBuf::from(".build/packages").join(profile).join(target);
-    if base.exists() {
-        fs::remove_dir_all(&base)?;
-    }
-    let payload = base.join("payload");
-    fs::create_dir_all(&payload)?;
     let executable = if target.contains("windows") {
         "snip2pin.exe"
     } else {
         "snip2pin"
     };
-    let binary = PathBuf::from("target")
+    let metadata = output(Command::new("cargo").args([
+        "metadata",
+        "--locked",
+        "--no-deps",
+        "--format-version",
+        "1",
+    ]))?;
+    let binary = target_directory(&metadata)?
         .join(target)
         .join(profile)
         .join(executable);
-    verify_version(&binary, &version)?;
-    let archive = base.join(filename(&version, target, false));
+    verify_version(&binary, &version()?)?;
+    Ok(binary)
+}
+
+fn target_directory(metadata: &str) -> Result<PathBuf> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata)?;
+    metadata["target_directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Cargo metadata is missing its target directory".into())
+}
+
+/// Construct the installed files without archiving, signing, or publishing them.
+pub fn prepare_payload(binary: &Path, target: &str, payload: &Path) -> Result {
+    if !TARGETS.contains(&target) {
+        return Err("unsupported payload target".into());
+    }
+    fs::create_dir_all(payload)?;
+    let executable = binary.file_name().ok_or("missing executable filename")?;
     if target.contains("apple") {
-        macos_bundle(&binary, &payload.join("Snip2Pin.app"), "line")?;
-        crate::notices::write(
-            &payload.join("Snip2Pin.app/Contents/Resources/THIRD_PARTY_NOTICES.txt"),
-        )?;
-        execute(
-            Command::new("ditto")
-                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
-                .arg(payload.join("Snip2Pin.app"))
-                .arg(&archive),
-        )?;
-        execute(Command::new("unzip").arg("-tq").arg(&archive))?;
+        macos_bundle(binary, &payload.join("Snip2Pin.app"), "line")?;
     } else {
         crate::notices::write(&payload.join("THIRD_PARTY_NOTICES.txt"))?;
-        fs::copy(&binary, payload.join(executable))?;
+        fs::copy(binary, payload.join(executable))?;
         fs::copy("packaging/README.txt", payload.join("README.txt"))?;
         if let Some(license) = manifest()?["package"]
             .get("license-file")
@@ -214,41 +296,69 @@ pub fn build(target: &str, profile: &str) -> Result {
                 "assets/icons/line.png",
                 payload.join("io.github.Snip2Pin.Snip2Pin.png"),
             )?;
-            execute(Command::new("ldd").arg(&binary))?;
-            execute(
-                Command::new("tar")
-                    .arg("-czf")
-                    .arg(&archive)
-                    .arg("-C")
-                    .arg(&payload)
-                    .arg("."),
-            )?;
-            execute(Command::new("tar").arg("-tzf").arg(&archive))?;
-        } else {
-            // PowerShell receives paths as arguments, never interpolated script fragments.
-            execute(
-                Command::new("pwsh")
-                    .args(["-NoProfile", "-File", "packaging/windows/archive.ps1"])
-                    .arg(&payload)
-                    .arg(&archive),
-            )?;
         }
     }
+    Ok(())
+}
+
+pub fn build(target: &str, profile: &str) -> Result {
+    let version = version()?;
+    crate::release::validate_inputs(&version, &revision()?)?;
+    let binary = build_binary(target, profile)?;
+    let base = PathBuf::from(".build/packages").join(profile).join(target);
+    if base.exists() {
+        fs::remove_dir_all(&base)?;
+    }
+    let payload = base.join("payload");
+    prepare_payload(&binary, target, &payload)?;
+    let archive = base.join(candidate_filename(&version, target));
+    if target.contains("apple") {
+        execute(
+            Command::new("ditto")
+                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
+                .arg(payload.join("Snip2Pin.app"))
+                .arg(&archive),
+        )?;
+        execute(Command::new("unzip").arg("-tq").arg(&archive))?;
+    } else if target.contains("linux") {
+        execute(Command::new("ldd").arg(&binary))?;
+        execute(
+            Command::new("tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&payload)
+                .arg("."),
+        )?;
+        execute(Command::new("tar").arg("-tzf").arg(&archive))?;
+    } else {
+        // PowerShell receives paths as arguments, never interpolated script fragments.
+        execute(
+            Command::new("pwsh")
+                .args(["-NoProfile", "-File", "packaging/windows/archive.ps1"])
+                .arg(&payload)
+                .arg(&archive),
+        )?;
+    }
+    crate::sizes::candidate(target, profile, &binary, &payload, &archive)?;
     write_manifest(
         &base,
         &Manifest {
-            schema: 2,
+            schema: 3,
             version,
             revision: revision()?,
             target: target.into(),
             final_package: false,
             distribution: None,
-            file: archive
-                .file_name()
-                .ok_or("archive name")?
-                .to_string_lossy()
-                .into(),
-            sha256: digest(&archive)?,
+            artifacts: vec![Artifact {
+                format: formats(target, false)[0],
+                file: archive
+                    .file_name()
+                    .ok_or("archive name")?
+                    .to_string_lossy()
+                    .into(),
+                sha256: digest(&archive)?,
+            }],
             candidate_sha256: None,
         },
     )?;
@@ -275,6 +385,7 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     let plist = destination.join("Contents/Info.plist");
     fs::copy("packaging/macos/Info.plist", &plist)?;
     fs::copy("LICENSE", resources.join("LICENSE"))?;
+    crate::notices::write(&resources.join("THIRD_PARTY_NOTICES.txt"))?;
     fs::copy("packaging/README.txt", resources.join("README.txt"))?;
     for locale in ["en", "zh-Hans"] {
         let directory = resources.join(format!("{locale}.lproj"));
@@ -326,40 +437,57 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     Ok(())
 }
 
-pub fn finalize(candidate: &Path, archive: &Path) -> Result {
-    finalize_as(candidate, archive, Distribution::Signed)
-}
-
-fn finalize_as(candidate: &Path, archive: &Path, distribution: Distribution) -> Result {
+pub fn finalize(candidate: &Path, destination: &Path, distribution: Distribution) -> Result {
     let data = verify(candidate)?;
     if data.len() != 1 || data[0].final_package {
         return Err("expected one unsigned candidate".into());
     }
     let mut data = data.into_iter().next().ok_or("missing candidate")?;
-    let expected = distribution_filename(&data.version, &data.target, Some(distribution));
-    if archive.file_name().and_then(|p| p.to_str()) != Some(&expected) {
-        return Err("final archive name mismatch".into());
-    }
+    let candidate_hash = data
+        .artifacts
+        .first()
+        .ok_or("missing candidate archive")?
+        .sha256
+        .clone();
+    let artifacts = formats(&data.target, true)
+        .iter()
+        .map(|format| {
+            let file = artifact_filename(&data.version, &data.target, Some(distribution), *format);
+            let path = destination.join(&file);
+            if !fs::symlink_metadata(&path)?.file_type().is_file() {
+                return Err("final artifact must be a regular file".into());
+            }
+            crate::sizes::final_artifact(&data.target, &file, &path)?;
+            Ok(Artifact {
+                format: *format,
+                sha256: digest(&path)?,
+                file,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     data.final_package = true;
     data.distribution = Some(distribution);
-    data.file = expected;
-    data.candidate_sha256 = Some(data.sha256.clone());
-    data.sha256 = digest(archive)?;
-    write_manifest(archive.parent().ok_or("archive directory")?, &data)
+    data.artifacts = artifacts;
+    data.candidate_sha256 = Some(candidate_hash);
+    write_manifest(destination, &data)
 }
 
 pub fn prepare_unverified(candidate: &Path, destination: &Path, target: &str) -> Result {
-    crate::release::verify_candidate(candidate, target)?;
+    let data = crate::release::verify_candidate(candidate, target)?;
     native_host(target)?;
-    let data = verify(candidate)?.remove(0);
     fs::create_dir_all(destination)?;
-    let archive = destination.join(distribution_filename(
-        &data.version,
-        target,
-        Some(Distribution::Unverified),
-    ));
-    if archive.exists() {
-        return Err("refusing to replace an existing package".into());
+    for format in formats(target, true) {
+        if destination
+            .join(artifact_filename(
+                &data.version,
+                target,
+                Some(Distribution::Unverified),
+                *format,
+            ))
+            .exists()
+        {
+            return Err("refusing to replace an existing package".into());
+        }
     }
     if target.contains("apple") {
         let unpacked = PathBuf::from(".build/unverified").join(target);
@@ -370,7 +498,7 @@ pub fn prepare_unverified(candidate: &Path, destination: &Path, target: &str) ->
         execute(
             Command::new("ditto")
                 .args(["-x", "-k"])
-                .arg(candidate.join(&data.file))
+                .arg(candidate.join(&data.artifact(Format::Zip)?.file))
                 .arg(&unpacked),
         )?;
         let app = unpacked.join("Snip2Pin.app");
@@ -387,17 +515,102 @@ pub fn prepare_unverified(candidate: &Path, destination: &Path, target: &str) ->
                 ])
                 .arg(&app),
         )?;
-        execute(
-            Command::new("ditto")
-                .args(["-c", "-k", "--sequesterRsrc", "--keepParent"])
-                .arg(&app)
-                .arg(&archive),
-        )?;
+        let archive = destination.join(artifact_filename(
+            &data.version,
+            target,
+            Some(Distribution::Unverified),
+            Format::Dmg,
+        ));
+        create_dmg(&app, &archive)?;
         fs::remove_dir_all(unpacked)?;
+    } else if target.contains("windows") {
+        execute(
+            Command::new("pwsh")
+                .args([
+                    "-NoProfile",
+                    "-File",
+                    "packaging/windows/distribute.ps1",
+                    "-Candidate",
+                ])
+                .arg(candidate)
+                .arg("-OutputDirectory")
+                .arg(destination)
+                .args(["-Distribution", "unverified"]),
+        )?;
+        return Ok(());
     } else {
-        fs::copy(candidate.join(&data.file), &archive)?;
+        prepare_linux(&data, candidate, destination, Distribution::Unverified)?;
     }
-    finalize_as(candidate, &archive, Distribution::Unverified)
+    finalize(candidate, destination, Distribution::Unverified)
+}
+
+pub fn create_dmg(app: &Path, destination: &Path) -> Result {
+    if destination.exists() {
+        return Err("refusing to replace a disk image".into());
+    }
+    let staging = tempfile::tempdir()?;
+    execute(
+        Command::new("ditto")
+            .arg(app)
+            .arg(staging.path().join("Snip2Pin.app")),
+    )?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/Applications", staging.path().join("Applications"))?;
+    // A transport image must not inherit the host filesystem. APFS image
+    // auto-sizing can exhaust the image while copying a real application.
+    execute(
+        Command::new("hdiutil")
+            .args([
+                "create",
+                "-fs",
+                "HFS+",
+                "-format",
+                "UDZO",
+                "-volname",
+                "Snip2Pin",
+                "-srcfolder",
+            ])
+            .arg(staging.path())
+            .arg(destination),
+    )?;
+    Ok(())
+}
+
+pub fn prepare_linux(
+    data: &Manifest,
+    candidate: &Path,
+    destination: &Path,
+    distribution: Distribution,
+) -> Result {
+    native_host(&data.target)?;
+    let archive = destination.join(artifact_filename(
+        &data.version,
+        &data.target,
+        Some(distribution),
+        Format::TarGz,
+    ));
+    if archive.exists() {
+        return Err("refusing to replace an archive".into());
+    }
+    fs::copy(
+        candidate.join(&data.artifact(Format::TarGz)?.file),
+        &archive,
+    )?;
+    let unpacked = PathBuf::from(".build/debian").join(&data.target);
+    if unpacked.exists() {
+        fs::remove_dir_all(&unpacked)?;
+    }
+    fs::create_dir_all(&unpacked)?;
+    execute(
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&unpacked),
+    )?;
+    crate::installers::debian(&unpacked, destination, data, distribution)?;
+    fs::remove_dir_all(unpacked)?;
+    Ok(())
 }
 
 fn native_host(target: &str) -> Result {
@@ -424,16 +637,54 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
     if unpacked.exists() {
         fs::remove_dir_all(&unpacked)?;
     }
-    fs::create_dir_all(&unpacked)?;
-    let archive = directory.join(&data.file).canonicalize()?;
+    if !target.contains("windows") {
+        fs::create_dir_all(&unpacked)?;
+    }
+    let archive = directory
+        .join(
+            &data
+                .artifact(if target.contains("apple") {
+                    Format::Dmg
+                } else if target.contains("windows") {
+                    Format::Zip
+                } else {
+                    Format::TarGz
+                })?
+                .file,
+        )
+        .canonicalize()?;
+    let mut mounted = None;
     if target.contains("apple") {
+        if distribution == Distribution::Signed {
+            execute(Command::new("codesign").args(["--verify", "--strict", "-R", "=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"]).arg(&archive))?;
+            execute(
+                Command::new("xcrun")
+                    .args(["stapler", "validate"])
+                    .arg(&archive),
+            )?;
+            execute(
+                Command::new("spctl")
+                    .args([
+                        "--assess",
+                        "--type",
+                        "open",
+                        "--context",
+                        "context:primary-signature",
+                    ])
+                    .arg(&archive),
+            )?;
+        }
         execute(
-            Command::new("ditto")
-                .args(["-x", "-k"])
-                .arg(&archive)
-                .arg(&unpacked),
+            Command::new("hdiutil")
+                .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+                .arg(&unpacked)
+                .arg(&archive),
         )?;
+        mounted = Some(MountedImage(unpacked.clone()));
         let app = unpacked.join("Snip2Pin.app");
+        if fs::read_link(unpacked.join("Applications"))? != Path::new("/Applications") {
+            return Err("disk image Applications link mismatch".into());
+        }
         execute(
             Command::new("codesign")
                 .args(["--verify", "--strict"])
@@ -467,6 +718,12 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
         let plist = app.join("Contents/Info.plist");
         if !app.join("Contents/Resources/DockMenu.nib").exists() {
             return Err("macOS package is missing its native Dock menu".into());
+        }
+        for file in ["LICENSE", "THIRD_PARTY_NOTICES.txt"] {
+            let metadata = fs::symlink_metadata(app.join("Contents/Resources").join(file))?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err("macOS package is missing its license notices".into());
+            }
         }
         for locale in ["en", "zh-Hans"] {
             let strings = app.join(format!(
@@ -504,7 +761,16 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
             Command::new("pwsh")
                 .args(["-NoProfile", "-File", "packaging/windows/verify.ps1"])
                 .arg(&archive)
+                .arg("-Installer")
+                .arg(
+                    directory
+                        .join(&data.artifact(Format::Nsis)?.file)
+                        .canonicalize()?,
+                )
+                .arg("-Destination")
                 .arg(&unpacked)
+                .arg("-InstallSmoke")
+                .arg("-Distribution")
                 .arg(if distribution == Distribution::Signed {
                     "signed"
                 } else {
@@ -525,9 +791,31 @@ pub fn verify_native(directory: &Path, target: &str, distribution: Distribution)
         if dependencies.contains("not found") {
             return Err("unresolved Linux runtime dependency".into());
         }
+        crate::installers::verify_debian(directory, &unpacked, &data)?;
+    }
+    if let Some(image) = mounted {
+        image.detach()?;
     }
     fs::remove_dir_all(unpacked)?;
     Ok(())
+}
+
+struct MountedImage(PathBuf);
+
+impl MountedImage {
+    fn detach(mut self) -> Result {
+        execute(Command::new("hdiutil").arg("detach").arg(&self.0))?;
+        self.0.clear();
+        Ok(())
+    }
+}
+
+impl Drop for MountedImage {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            let _ = Command::new("hdiutil").arg("detach").arg(&self.0).status();
+        }
+    }
 }
 
 fn verify_version(binary: &Path, version: &str) -> Result {
@@ -540,6 +828,167 @@ fn verify_version(binary: &Path, version: &str) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_metadata_resolves_custom_target_directories_without_global_env_changes() {
+        let directory = tempfile::tempdir().expect("temporary Cargo target");
+        let custom = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary directory")
+            .join("custom target with spaces");
+        let metadata = output(
+            Command::new("cargo")
+                .current_dir(crate::root())
+                .env("CARGO_TARGET_DIR", &custom)
+                .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
+        )
+        .expect("Cargo metadata with configured output directory");
+        assert_eq!(
+            target_directory(&metadata).expect("resolved output"),
+            custom
+        );
+        assert!(target_directory("{}").is_err());
+    }
+
+    #[test]
+    fn release_size_builds_only_the_locked_application_binary() {
+        for target in TARGETS {
+            let command = binary_build_command(target, "release").expect("native build command");
+            assert_eq!(command.get_program(), "cargo");
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [
+                    "build",
+                    "--locked",
+                    "--package",
+                    "snip2pin",
+                    "--bin",
+                    "snip2pin",
+                    "--target",
+                    target,
+                    "--release"
+                ]
+            );
+        }
+        assert!(binary_build_command("unknown", "release").is_err());
+        assert!(binary_build_command(TARGETS[0], "custom").is_err());
+    }
+
+    fn final_fixture(target: &str) -> Manifest {
+        Manifest {
+            schema: 3,
+            version: "0.2.0".into(),
+            revision: "a".repeat(40),
+            target: target.into(),
+            final_package: true,
+            distribution: Some(Distribution::Unverified),
+            candidate_sha256: Some("c".repeat(64)),
+            artifacts: formats(target, true)
+                .iter()
+                .map(|format| Artifact {
+                    format: *format,
+                    file: artifact_filename(
+                        "0.2.0",
+                        target,
+                        Some(Distribution::Unverified),
+                        *format,
+                    ),
+                    sha256: "b".repeat(64),
+                })
+                .collect(),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn disk_image_contains_generated_app_and_applications_link_without_opening_finder() {
+        let directory = tempfile::tempdir().expect("disk image fixture");
+        let app = directory.path().join("fixture.app");
+        fs::create_dir_all(app.join("Contents")).expect("fixture app");
+        fs::write(app.join("Contents/payload"), b"inert fixture").expect("payload");
+        let image = directory.path().join("fixture.dmg");
+        create_dmg(&app, &image).expect("create generated disk image");
+        assert!(create_dmg(&app, &image).is_err());
+        let mount = directory.path().join("mount");
+        fs::create_dir(&mount).expect("mount directory");
+        execute(
+            Command::new("hdiutil")
+                .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+                .arg(&mount)
+                .arg(&image),
+        )
+        .expect("read-only fixture mount");
+        let mounted = MountedImage(mount.clone());
+        assert_eq!(
+            fs::read(mount.join("Snip2Pin.app/Contents/payload")).expect("mounted payload"),
+            b"inert fixture"
+        );
+        assert_eq!(
+            fs::read_link(mount.join("Applications")).expect("Applications link"),
+            Path::new("/Applications")
+        );
+        mounted.detach().expect("detach fixture image");
+    }
+
+    #[test]
+    fn final_manifests_require_each_native_format_exactly_once() {
+        for target in TARGETS {
+            let valid = final_fixture(target);
+            valid.validate().expect("complete native formats");
+            let mut missing = final_fixture(target);
+            missing.artifacts.pop();
+            assert!(missing.validate().is_err());
+            let mut extra = final_fixture(target);
+            extra.artifacts.push(Artifact {
+                format: Format::Dmg,
+                file: "extra.dmg".into(),
+                sha256: "b".repeat(64),
+            });
+            assert!(extra.validate().is_err());
+            let mut wrong = final_fixture(target);
+            wrong.artifacts[0].format = Format::Nsis;
+            assert!(wrong.validate().is_err());
+            let mut bad_hash = final_fixture(target);
+            bad_hash.artifacts[0].sha256 = "z".repeat(64);
+            assert!(bad_hash.validate().is_err());
+            let mut bad_source = final_fixture(target);
+            bad_source.revision = "main".into();
+            assert!(bad_source.validate().is_err());
+            if valid.artifacts.len() > 1 {
+                let mut duplicate = final_fixture(target);
+                duplicate.artifacts[1].format = duplicate.artifacts[0].format;
+                assert!(duplicate.validate().is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn verification_checks_every_final_artifact() {
+        let directory = tempfile::tempdir().expect("fixture");
+        let mut data = final_fixture(TARGETS[2]);
+        for artifact in &mut data.artifacts {
+            let path = directory.path().join(&artifact.file);
+            fs::write(&path, artifact.file.as_bytes()).expect("artifact");
+            artifact.sha256 = digest(&path).expect("digest");
+        }
+        write_manifest(directory.path(), &data).expect("manifest");
+        verify(directory.path()).expect("all valid");
+        let installer = directory
+            .path()
+            .join(&data.artifact(Format::Nsis).expect("installer").file);
+        fs::write(&installer, b"tampered").expect("tamper");
+        assert!(verify(directory.path()).is_err());
+        fs::remove_file(&installer).expect("remove installer");
+        assert!(verify(directory.path()).is_err());
+        #[cfg(unix)]
+        {
+            let target = directory.path().join("outside.exe");
+            fs::write(&target, b"payload").expect("external artifact");
+            std::os::unix::fs::symlink(target, installer).expect("symlink artifact");
+            assert!(verify(directory.path()).is_err());
+        }
+    }
 
     #[test]
     fn sha256_matches_known_vectors_with_lowercase_and_leading_zeroes() {
@@ -563,20 +1012,29 @@ mod tests {
     #[test]
     fn manifest_rejects_path_traversal_and_unknown_targets() {
         let mut data = Manifest {
-            schema: 2,
+            schema: 3,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[0].into(),
             final_package: true,
             distribution: Some(Distribution::Signed),
-            file: filename("0.2.0", TARGETS[0], true),
-            sha256: "b".repeat(64),
+            artifacts: vec![Artifact {
+                format: Format::Dmg,
+                file: artifact_filename(
+                    "0.2.0",
+                    TARGETS[0],
+                    Some(Distribution::Signed),
+                    Format::Dmg,
+                ),
+                sha256: "b".repeat(64),
+            }],
             candidate_sha256: Some("c".repeat(64)),
         };
         assert!(data.validate().is_ok());
-        data.file = "../secret.key".into();
+        data.artifacts[0].file = "../secret.key".into();
         assert!(data.validate().is_err());
-        data.file = filename("0.2.0", TARGETS[0], true);
+        data.artifacts[0].file =
+            artifact_filename("0.2.0", TARGETS[0], Some(Distribution::Signed), Format::Dmg);
         data.target = "unknown".into();
         assert!(data.validate().is_err());
     }
@@ -584,14 +1042,22 @@ mod tests {
     #[test]
     fn distribution_state_and_filename_cannot_be_silently_relabelled() {
         let mut data = Manifest {
-            schema: 2,
+            schema: 3,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[0].into(),
             final_package: true,
             distribution: Some(Distribution::Unverified),
-            file: distribution_filename("0.2.0", TARGETS[0], Some(Distribution::Unverified)),
-            sha256: "b".repeat(64),
+            artifacts: vec![Artifact {
+                format: Format::Dmg,
+                file: artifact_filename(
+                    "0.2.0",
+                    TARGETS[0],
+                    Some(Distribution::Unverified),
+                    Format::Dmg,
+                ),
+                sha256: "b".repeat(64),
+            }],
             candidate_sha256: Some("c".repeat(64)),
         };
         assert!(data.validate().is_ok());
@@ -612,31 +1078,43 @@ mod tests {
         let final_dir = directory.path().join("final");
         fs::create_dir_all(&candidate).expect("candidate directory");
         fs::create_dir_all(&final_dir).expect("final directory");
-        let file = filename("0.2.0", TARGETS[3], false);
+        let file = candidate_filename("0.2.0", TARGETS[3]);
         fs::write(candidate.join(&file), b"original").expect("payload");
         let data = Manifest {
-            schema: 2,
+            schema: 3,
             version: "0.2.0".into(),
             revision: "a".repeat(40),
             target: TARGETS[3].into(),
             final_package: false,
             distribution: None,
-            sha256: digest(&candidate.join(&file)).expect("candidate digest"),
-            file,
+            artifacts: vec![Artifact {
+                format: Format::TarGz,
+                sha256: digest(&candidate.join(&file)).expect("candidate digest"),
+                file,
+            }],
             candidate_sha256: None,
         };
         write_manifest(&candidate, &data).expect("manifest");
         assert_eq!(verify(&candidate).expect("valid").len(), 1);
-        let archive = final_dir.join(filename("0.2.0", TARGETS[3], true));
-        fs::write(&archive, b"signed bytes").expect("final payload");
-        finalize(&candidate, &archive).expect("finalize");
+        assert!(finalize(&candidate, &final_dir, Distribution::Signed).is_err());
+        assert!(!final_dir.join(format!("{}.json", TARGETS[3])).exists());
+        for format in formats(TARGETS[3], true) {
+            let archive = final_dir.join(artifact_filename(
+                "0.2.0",
+                TARGETS[3],
+                Some(Distribution::Signed),
+                *format,
+            ));
+            fs::write(&archive, b"signed bytes").expect("final payload");
+        }
+        finalize(&candidate, &final_dir, Distribution::Signed).expect("finalize");
         let final_data = verify(&final_dir).expect("final manifest");
         assert_eq!(
             final_data[0].candidate_sha256.as_deref(),
-            Some(data.sha256.as_str())
+            Some(data.artifacts[0].sha256.as_str())
         );
-        assert_ne!(final_data[0].sha256, data.sha256);
-        fs::write(candidate.join(&data.file), b"tampered").expect("tamper");
+        assert_ne!(final_data[0].artifacts[0].sha256, data.artifacts[0].sha256);
+        fs::write(candidate.join(&data.artifacts[0].file), b"tampered").expect("tamper");
         assert!(verify(&candidate).is_err());
     }
 }

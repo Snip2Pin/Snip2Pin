@@ -30,7 +30,7 @@ try {
     $tool = Get-ChildItem "$sdkRoot\*\x64\signtool.exe" | Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
     if ($null -eq $tool) { throw 'Windows SDK SignTool is unavailable' }
     $env:PATH = "$($tool.Directory.FullName);$env:PATH"
-    & "$PSScriptRoot/distribute.ps1" -Candidate $Candidate -OutputDirectory $OutputDirectory -CertificateThumbprint $env:WINDOWS_CERTIFICATE_SHA1 -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
+    & "$PSScriptRoot/distribute.ps1" -Candidate $Candidate -OutputDirectory $OutputDirectory -Distribution signed -CertificateThumbprint $env:WINDOWS_CERTIFICATE_SHA1 -TimestampUrl $env:WINDOWS_TIMESTAMP_URL
 } finally {
     try {
         foreach ($certificate in @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -notin $existing })) {

@@ -6,10 +6,11 @@ set -euo pipefail
 CANDIDATE="$(cd "$1" && pwd)"
 mkdir -p "$2"
 OUTPUT="$(cd "$2" && pwd)"
-cargo xtask verify "$CANDIDATE"
 MANIFESTS=("$CANDIDATE"/*apple-darwin.json)
 [[ ${#MANIFESTS[@]} -eq 1 && -f "${MANIFESTS[0]}" ]]
-FILENAME="$(plutil -extract file raw -o - "${MANIFESTS[0]}")"
+TARGET="$(plutil -extract target raw -o - "${MANIFESTS[0]}")"
+cargo xtask verify-candidate "$CANDIDATE" "$TARGET"
+FILENAME="$(plutil -extract artifacts.0.file raw -o - "${MANIFESTS[0]}")"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/snip2pin-distribution.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 ditto -x -k "$CANDIDATE/$FILENAME" "$WORK"
@@ -28,7 +29,15 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/notarize.zip"
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl --assess --type execute "$APP"
-ARCHIVE="$OUTPUT/${FILENAME/-unsigned.zip/.zip}"
+ARCHIVE="$OUTPUT/${FILENAME/-unsigned.zip/.dmg}"
 [[ ! -e "$ARCHIVE" ]] || { printf 'Refusing to replace an archive.\n' >&2; exit 1; }
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
-cargo xtask finalize "$CANDIDATE" "$ARCHIVE"
+cargo xtask dmg "$APP" "$ARCHIVE"
+"${SIGN_COMMAND[@]}" --sign "$SNIP2PIN_SIGN_IDENTITY" "$ARCHIVE"
+DMG_NOTARY_COMMAND=(xcrun notarytool submit "$ARCHIVE" --keychain-profile "$SNIP2PIN_NOTARY_PROFILE" --wait --timeout 20m)
+if [[ -n "${SNIP2PIN_SIGN_KEYCHAIN:-}" ]]; then
+  DMG_NOTARY_COMMAND+=(--keychain "$SNIP2PIN_SIGN_KEYCHAIN")
+fi
+"${DMG_NOTARY_COMMAND[@]}"
+xcrun stapler staple "$ARCHIVE"
+xcrun stapler validate "$ARCHIVE"
+cargo xtask finalize "$CANDIDATE" "$OUTPUT" signed
