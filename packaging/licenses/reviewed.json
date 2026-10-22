@@ -36,6 +36,54 @@
     "manifest_sha256": "34f07ca023625382197f9956d9894c1bcabbfa4c118424dd5a4b59efd68da3af"
   },
   {
+    "name": "ecolor",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "b1cac5e838c5f53f918ab8361d3b1c4f97f8ef6aaf929a07d91e5a7b3e413841",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "name": "egui",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "04147827bf0cac30c4f516fedae90e9fdce9b000a2760f305514f76fb68ba9fd",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "name": "egui-winit",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "4b2b033fd1fa6c163698b363e7ee2df3ae0d5234a0a17c98053a95a8b77271d0",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "name": "egui_glow",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "6ae3379c820a001bb0404ef3b655eeb2eaa85187f8deda3660057fba72d4f001",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "name": "emath",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "42bf6854f98649f93cc99c411cbe9be2547dbb08e450debe18abaa8d6a677e06",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
+    "name": "epaint",
+    "version": "0.37.0",
+    "commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+    "manifest_sha256": "8c6fdca7a7d0e981dd023ff08a900d9e76d15d452f485fae16648bd7c5e11cea",
+    "statement": "packaging/licenses/egui-0.37-LICENSE-MIT.txt",
+    "statement_sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+  },
+  {
     "name": "objc2",
     "version": "0.5.3",
     "commit": "5237cbf081d04ef75a1f6a207b4018e7c1ae7438",

@@ -9,6 +9,8 @@ updates:
       prefix: chore
       include: scope
     groups:
+      gui:
+        patterns: [eframe, egui, egui-winit]
       compatible:
         update-types: [minor, patch]
   - package-ecosystem: github-actions

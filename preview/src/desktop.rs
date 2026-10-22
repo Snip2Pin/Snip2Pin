@@ -64,7 +64,7 @@ fn sample_rect(bounds: Rect) -> Rect {
 fn source_window(ui: &egui::Ui, bounds: Rect, scene: &mut Scene) -> Option<(egui::LayerId, Rect)> {
     let initial = sample_rect(bounds);
     egui::Window::new(scene.kind.title())
-        .id(egui::Id::new("preview-source"))
+        .id(egui::Id::unique("preview-source"))
         .default_pos(initial.min)
         .default_size(initial.size())
         .min_width(240.0)

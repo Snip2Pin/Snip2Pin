@@ -28,7 +28,7 @@ impl Hold {
 }
 
 fn state_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-held-arrows", id))
+    egui::Id::unique(("pin-held-arrows", id))
 }
 
 pub(super) fn forget(ctx: &egui::Context, id: u64) {

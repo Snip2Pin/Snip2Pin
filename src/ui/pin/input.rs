@@ -205,6 +205,7 @@ pub(super) fn adjust(
                     delta,
                     modifiers,
                     phase,
+                    ..
                 } if gesture_enabled
                     && !pointer_down
                     && (!reserved(*modifiers)

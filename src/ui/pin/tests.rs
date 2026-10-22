@@ -1094,6 +1094,7 @@ fn wheel_units_and_precision_are_independent_of_ui_zoom() {
                         events: vec![
                             Event::PointerMoved(egui::pos2(40.0, 40.0) / zoom),
                             Event::MouseWheel {
+                                source: egui::MouseWheelSource::Unknown,
                                 unit,
                                 delta: egui::vec2(0.0, delta),
                                 phase: egui::TouchPhase::Move,
@@ -1165,6 +1166,7 @@ fn wheel_batches_preserve_reset_order_and_ignore_reserved_or_excluded_input() {
             _ => Modifiers::NONE,
         };
         let wheel = || Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: match blocked {
                 "horizontal" => egui::vec2(1.0, 0.0),
@@ -1276,6 +1278,7 @@ fn wheel_zoom_tracks_hover_without_requiring_keyboard_focus() {
                             bounds.max + Vec2::splat(10.0)
                         }),
                         Event::MouseWheel {
+                            source: egui::MouseWheelSource::Unknown,
                             unit: egui::MouseWheelUnit::Line,
                             delta: egui::vec2(0.0, 1.0),
                             phase: egui::TouchPhase::Move,

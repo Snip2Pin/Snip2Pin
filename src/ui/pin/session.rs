@@ -30,11 +30,11 @@ pub(super) struct Owner {
 }
 
 pub(super) fn owner_key() -> egui::Id {
-    egui::Id::new("pin-gesture-owner")
+    egui::Id::unique("pin-gesture-owner")
 }
 
 pub(super) fn key(id: u64) -> egui::Id {
-    egui::Id::new(("pin-input-session", id))
+    egui::Id::unique(("pin-input-session", id))
 }
 
 impl Session {

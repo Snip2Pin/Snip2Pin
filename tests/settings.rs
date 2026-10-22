@@ -86,6 +86,146 @@ fn typing_keys_and_malformed_shortcuts_are_rejected() {
 }
 
 #[test]
+fn meta_shortcuts_keep_legacy_aliases_labels_and_saved_preferences() {
+    use global_hotkey::hotkey::{Code, Modifiers as HotkeyModifiers};
+    let directory = tempfile::tempdir().expect("isolated meta preferences");
+    let path = directory.path().join("preferences.toml");
+    let legacy = directory.path().join("shortcut.txt");
+    let expected = Binding::parse("Meta+Shift+K").expect("meta shortcut");
+    assert_eq!(
+        expected.0.mods,
+        HotkeyModifiers::META | HotkeyModifiers::SHIFT
+    );
+    assert_eq!(expected.0.key, Code::KeyK);
+    assert_eq!(String::from(expected), "shift+super+KeyK");
+    assert_eq!(
+        expected.label(),
+        if cfg!(target_os = "macos") {
+            "Shift + Command + K"
+        } else {
+            "Shift + Windows + K"
+        }
+    );
+    for alias in ["super", "command", "cmd", "meta"] {
+        let saved = format!("shift+{alias}+KeyK");
+        std::fs::write(&legacy, &saved).expect("legacy shortcut fixture");
+        let migrated = Preferences::load(&path).expect("legacy alias loads");
+        assert_eq!(migrated.binding, expected);
+        assert_eq!(
+            std::fs::read_to_string(&legacy).expect("legacy file"),
+            saved
+        );
+        std::fs::write(&path, format!("binding = '{saved}'\ntheme = 'dark'\n"))
+            .expect("saved preferences fixture");
+        let preferences = Preferences::load(&path).expect("saved alias loads");
+        assert_eq!(preferences.binding, expected);
+        assert_eq!(preferences.theme, Theme::Dark);
+        preferences
+            .save(&path)
+            .expect("save compatible shortcut format");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("canonical preferences")
+                .contains("shift+super+KeyK")
+        );
+        assert_eq!(Preferences::load(&path).expect("restart"), preferences);
+        std::fs::remove_file(&path).expect("test next legacy alias");
+    }
+}
+
+#[test]
+fn meta_and_control_recording_match_distinct_physical_shortcuts() {
+    for (modifiers, text) in [
+        (
+            Modifiers {
+                mac_cmd: true,
+                command: true,
+                ..Default::default()
+            },
+            "Meta+K",
+        ),
+        (
+            Modifiers {
+                ctrl: true,
+                command: !cfg!(target_os = "macos"),
+                ..Default::default()
+            },
+            "Ctrl+K",
+        ),
+        (
+            Modifiers {
+                ctrl: true,
+                mac_cmd: true,
+                command: true,
+                ..Default::default()
+            },
+            "Ctrl+Meta+K",
+        ),
+    ] {
+        let binding = Binding::parse(text).expect("expected shortcut");
+        assert_eq!(
+            Binding::from_key(Key::K, modifiers).expect("recorded"),
+            binding
+        );
+        let event = Event::Key {
+            key: Key::J,
+            physical_key: Some(Key::K),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        assert!(binding.matches(&event));
+        assert!(binding.capture_requested(&[event]));
+        assert_eq!(
+            Binding::parse(&String::from(binding)).expect("round trip"),
+            binding
+        );
+    }
+    assert_ne!(Binding::parse("Meta+K"), Binding::parse("Ctrl+K"));
+}
+
+#[test]
+fn expanded_keys_round_trip_without_changing_physical_key_mapping() {
+    for (key, code) in [
+        (Key::Equals, "Equal"),
+        (Key::OpenBracket, "BracketLeft"),
+        (Key::CloseBracket, "BracketRight"),
+        (Key::Backtick, "Backquote"),
+        (Key::IntlBackslash, "IntlBackslash"),
+        (Key::BrowserBack, "BrowserBack"),
+        (Key::Copy, "Copy"),
+        (Key::Cut, "Cut"),
+        (Key::Paste, "Paste"),
+        (Key::F25, "F25"),
+        (Key::F35, "F35"),
+    ] {
+        let expected = Binding::parse(&format!("Ctrl+{code}")).expect("supported code");
+        assert_eq!(
+            Binding::from_key(key, Modifiers::CTRL).expect("record"),
+            expected
+        );
+        assert_eq!(
+            Binding::parse(&String::from(expected)).expect("reload"),
+            expected
+        );
+    }
+    for code in [
+        "IntlRo",
+        "NumpadEqual",
+        "LaunchApp1",
+        "KeyboardLayoutSelect",
+        "F35",
+    ] {
+        let binding = Binding::parse(&format!("Ctrl+{code}")).expect("extended key");
+        assert_eq!(
+            Binding::parse(&String::from(binding)).expect("reload"),
+            binding
+        );
+        assert_eq!(binding.label(), format!("Ctrl + {code}"));
+    }
+}
+
+#[test]
 fn icon_assets_render_at_small_and_large_sizes() {
     for variant in [Variant::Line, Variant::Metal] {
         for size in [16, 64, 1024] {
@@ -322,4 +462,15 @@ fn recovery_shortcut_requires_exact_modifiers_and_is_reserved_for_unlocking() {
     )));
     assert!(binding.validate_capture().is_err());
     assert!(Binding::default().validate_capture().is_ok());
+    for modifier in if cfg!(target_os = "macos") {
+        ["super", "command", "meta"]
+    } else {
+        ["control", "ctrl", "Ctrl"]
+    } {
+        let loaded =
+            Binding::parse(&format!("{modifier}+alt+shift+KeyL")).expect("saved recovery alias");
+        assert_eq!(loaded, binding);
+        assert!(loaded.validate_capture().is_err());
+        assert!(!loaded.capture_requested(&[event(modifiers, false)]));
+    }
 }

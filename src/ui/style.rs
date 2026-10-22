@@ -1,5 +1,5 @@
 //! Visual choices live here; positions are derived from bounds in each view.
-use eframe::egui::Color32;
+use egui::Color32;
 
 pub struct LauncherStyle {
     pub window: [f32; 2],

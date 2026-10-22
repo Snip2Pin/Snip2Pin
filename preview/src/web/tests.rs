@@ -76,7 +76,9 @@ fn menu_and_recording_own_input_until_the_end_of_the_frame() {
         let mut sandbox = sandbox(&ctx);
         let _ = frame(&ctx, &mut sandbox, vec![]);
         sandbox.focused_pin = Some(1);
-        sandbox.recording = recording;
+        if recording {
+            sandbox.recording.start();
+        }
         if !recording {
             sandbox.menu = Some((1, egui::pos2(600.0, 400.0)));
         }
@@ -96,7 +98,7 @@ fn menu_and_recording_own_input_until_the_end_of_the_frame() {
             2,
             "Escape dismisses the active interaction"
         );
-        assert!(!sandbox.recording && sandbox.menu.is_none());
+        assert!(!sandbox.recording.active() && sandbox.menu.is_none());
         let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::Escape)]);
         assert_eq!(
             sandbox.pins.iter().map(|pin| pin.id).collect::<Vec<_>>(),
@@ -111,11 +113,14 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
     let mut sandbox = sandbox(&ctx);
     let _ = frame(&ctx, &mut sandbox, vec![]);
     let old = sandbox.preferences.binding;
-    sandbox.recording = true;
+    sandbox.recording.start();
     let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::A)]);
-    assert!(sandbox.recording);
+    assert!(sandbox.recording.active());
     assert_eq!(sandbox.preferences.binding, old);
-    assert_eq!(sandbox.message, Some(Text::ShortcutModifiers.into()));
+    assert_eq!(
+        sandbox.recording.feedback(),
+        Some(&Text::ShortcutModifiers.into())
+    );
     let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
     let event = egui::Event::Key {
         key: egui::Key::A,
@@ -129,7 +134,7 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
         *pressed = false;
     }
     let _ = frame(&ctx, &mut sandbox, vec![released, event.clone()]);
-    assert!(!sandbox.recording && sandbox.message.is_none());
+    assert!(!sandbox.recording.active() && sandbox.message.is_none());
     assert!(sandbox.preferences.binding.matches(&event));
     assert!(
         sandbox.capture_gate.active().is_none(),
@@ -138,11 +143,73 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
 }
 
 #[test]
+fn recording_the_current_shortcut_confirms_success_without_capture() {
+    let ctx = egui::Context::default();
+    let mut sandbox = sandbox(&ctx);
+    let _ = frame(&ctx, &mut sandbox, vec![]);
+    let original = sandbox.preferences;
+    sandbox.recording.start();
+    let _ = frame(
+        &ctx,
+        &mut sandbox,
+        vec![egui::Event::Key {
+            key: egui::Key::Num2,
+            physical_key: Some(egui::Key::Num2),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT
+                | if cfg!(target_os = "macos") {
+                    egui::Modifiers::MAC_CMD
+                } else {
+                    egui::Modifiers::CTRL
+                },
+        }],
+    );
+    assert!(!sandbox.recording.active());
+    assert_eq!(sandbox.preferences, original);
+    assert_eq!(
+        sandbox.recording.feedback(),
+        Some(&Text::ShortcutConfirmed.into())
+    );
+    assert!(!sandbox.recording.feedback_is_error());
+    assert!(sandbox.capture_gate.active().is_none());
+}
+
+#[test]
+fn modifier_leading_recording_keeps_the_saved_binding_until_a_complete_combo() {
+    let ctx = egui::Context::default();
+    let mut sandbox = sandbox(&ctx);
+    let _ = frame(&ctx, &mut sandbox, vec![]);
+    let old = sandbox.preferences.binding;
+    sandbox.recording.start();
+    let _ = frame(
+        &ctx,
+        &mut sandbox,
+        vec![egui::Event::Key {
+            key: egui::Key::ControlLeft,
+            physical_key: Some(egui::Key::ControlLeft),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        }],
+    );
+    assert!(
+        sandbox.recording.active(),
+        "holding Ctrl must keep recording"
+    );
+    assert_eq!(sandbox.preferences.binding, old);
+    assert!(
+        sandbox.message.is_none(),
+        "an unfinished chord is not an error"
+    );
+}
+
+#[test]
 fn recording_a_shortcut_cannot_start_capture_on_a_repeated_layout_pass() {
     let ctx = egui::Context::default();
     let mut sandbox = sandbox(&ctx);
     let _ = frame(&ctx, &mut sandbox, vec![]);
-    sandbox.recording = true;
+    sandbox.recording.start();
     let mut event = key(egui::Key::Q);
     if let egui::Event::Key { modifiers, .. } = &mut event {
         *modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
@@ -163,7 +230,7 @@ fn recording_a_shortcut_cannot_start_capture_on_a_repeated_layout_pass() {
     );
     output.textures_delta.clear();
     assert_eq!(output.platform_output.num_completed_passes, 2);
-    assert!(!sandbox.recording);
+    assert!(!sandbox.recording.active());
     assert!(
         sandbox.capture_gate.active().is_none(),
         "recording is not a capture gesture"
@@ -177,29 +244,99 @@ fn cancelled_capture_cannot_accept_a_late_canvas_image_even_in_the_same_frame() 
     let _ = frame(&ctx, &mut sandbox, vec![]);
     sandbox.capture(&ctx);
     let old = sandbox.capture_gate.active().expect("pending request");
+    let old_callback = screenshot_callback(frame(&ctx, &mut sandbox, vec![]));
     sandbox.capture(&ctx);
     assert!(sandbox.capture_gate.active().is_none());
     sandbox.capture(&ctx);
     let current = sandbox.capture_gate.active().expect("new request");
+    let current_callback = screenshot_callback(frame(&ctx, &mut sandbox, vec![]));
     assert_ne!(old, current);
-    let screenshot = |request| egui::Event::Screenshot {
-        viewport_id: egui::ViewportId::ROOT,
-        user_data: egui::UserData::new(request),
-        image: Arc::new(ColorImage::filled([100, 80], egui::Color32::WHITE)),
-    };
-    let _ = frame(&ctx, &mut sandbox, vec![screenshot(old)]);
+    let image = || Arc::new(ColorImage::filled([100, 80], egui::Color32::WHITE));
+    let abandoned = image();
+    let weak = Arc::downgrade(&abandoned);
+    old_callback.complete(abandoned);
+    assert!(
+        weak.upgrade().is_none(),
+        "cancelled callbacks release their pixels"
+    );
+    let _ = frame(&ctx, &mut sandbox, vec![]);
     assert!(sandbox.selection.is_none());
     assert_eq!(sandbox.capture_gate.active(), Some(current));
-    let _ = frame(&ctx, &mut sandbox, vec![screenshot(current)]);
+    current_callback.clone().complete(image());
+    let _ = frame(&ctx, &mut sandbox, vec![]);
     assert!(sandbox.selection.is_some());
     assert!(sandbox.capture_gate.active().is_none());
     let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::Escape)]);
-    let _ = frame(&ctx, &mut sandbox, vec![screenshot(current)]);
+    current_callback.complete(image());
+    let _ = frame(&ctx, &mut sandbox, vec![]);
     assert!(
         sandbox.selection.is_none(),
         "duplicate results cannot reopen capture"
     );
     assert_eq!(sandbox.pins.len(), 2);
+}
+
+fn screenshot_callback(mut output: egui::FullOutput) -> egui::ScreenshotCallback {
+    output.textures_delta.clear();
+    let mut callbacks = output
+        .viewport_output
+        .into_values()
+        .flat_map(|viewport| viewport.commands)
+        .filter_map(|command| {
+            if let ViewportCommand::Screenshot(callback) = command {
+                Some(callback)
+            } else {
+                None
+            }
+        });
+    let callback = callbacks.next().expect("canvas screenshot callback");
+    assert!(
+        callbacks.next().is_none(),
+        "one callback per capture request"
+    );
+    callback
+}
+
+#[test]
+fn canvas_callback_survives_repeated_layout_and_escape_discards_ready_pixels() {
+    for cancel in [false, true] {
+        let ctx = egui::Context::default();
+        let mut sandbox = sandbox(&ctx);
+        let _ = frame(&ctx, &mut sandbox, vec![]);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| {
+                if ui.ctx().current_pass_index() == 0 {
+                    sandbox.capture(ui.ctx());
+                    ui.ctx().request_discard("repeat the capture-start layout");
+                }
+                sandbox.show(ui);
+            },
+        );
+        assert_eq!(output.platform_output.num_completed_passes, 2);
+        let callback = screenshot_callback(output);
+        let pixels = Arc::new(ColorImage::filled([100, 80], egui::Color32::WHITE));
+        let weak = Arc::downgrade(&pixels);
+        callback.complete(pixels);
+        let _ = frame(
+            &ctx,
+            &mut sandbox,
+            if cancel {
+                vec![key(egui::Key::Escape)]
+            } else {
+                vec![]
+            },
+        );
+        assert_eq!(sandbox.selection.is_some(), !cancel);
+        assert_eq!(weak.upgrade().is_some(), !cancel);
+        assert!(sandbox.capture_gate.active().is_none());
+        let _ = frame(&ctx, &mut sandbox, vec![]);
+        assert_eq!(sandbox.selection.is_some(), !cancel);
+        assert_eq!(sandbox.pins.len(), 2);
+    }
 }
 
 #[test]
@@ -209,18 +346,11 @@ fn frozen_pixels_are_released_on_cancel_or_pin_creation_and_placement_matches_th
         let mut sandbox = sandbox(&ctx);
         let _ = frame(&ctx, &mut sandbox, vec![]);
         sandbox.capture(&ctx);
-        let request = sandbox.capture_gate.active().expect("capture request");
+        let callback = screenshot_callback(frame(&ctx, &mut sandbox, vec![]));
         let source = Arc::new(ColorImage::filled([200, 160], egui::Color32::WHITE));
         let weak = Arc::downgrade(&source);
-        let _ = frame(
-            &ctx,
-            &mut sandbox,
-            vec![egui::Event::Screenshot {
-                viewport_id: egui::ViewportId::ROOT,
-                user_data: egui::UserData::new(request),
-                image: source,
-            }],
-        );
+        callback.complete(source);
+        let _ = frame(&ctx, &mut sandbox, vec![]);
         assert!(sandbox.selection.is_some() && weak.upgrade().is_some());
         if cancel {
             let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::Escape)]);
