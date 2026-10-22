@@ -4,13 +4,14 @@ use eframe::egui::{
     self, ColorImage, Pos2, Rect, ResizeDirection, TextureHandle, Vec2, ViewportCommand,
 };
 use snip2pin::{
-    capture,
-    geometry::Placement,
+    capture, geometry,
     i18n::{self, Locale, Message, Text},
     pin,
-    settings::{Binding, Preferences},
-    ui::{launcher, overlay, pin as pin_view},
+    session::CaptureGate,
+    settings::Preferences,
+    ui::{launcher, overlay, pin as pin_view, shortcut},
 };
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::desktop;
@@ -22,6 +23,12 @@ struct Pin {
     image: Rect,
     gesture: Option<Gesture>,
     locked: bool,
+}
+
+/// Freeze pixels and their overlay for exactly one selection session.
+struct FrozenCapture {
+    pixels: Arc<ColorImage>,
+    selection: overlay::Selection,
 }
 
 /// Browser-only stand-in for a desktop window manager. Native builds never use
@@ -69,16 +76,14 @@ struct Sandbox {
     startup: bool,
     message: Option<Message>,
     system_locale: Locale,
-    source: Arc<ColorImage>,
-    windows: Vec<snip2pin::geometry::PixelRect>,
-    texture: TextureHandle,
     wallpaper: TextureHandle,
     scene: desktop::Scene,
-    capture_pending: Option<u64>,
+    capture_gate: CaptureGate,
     window_rects: Vec<(egui::LayerId, Rect)>,
     desktop_bounds: Rect,
     icon: TextureHandle,
-    selection: Option<overlay::Selection>,
+    applied_icon: snip2pin::icon::Variant,
+    selection: Option<FrozenCapture>,
     pins: Vec<Pin>,
     menu: Option<(u64, Pos2)>,
     unlock_hint: Option<(u64, f64)>,
@@ -88,7 +93,7 @@ struct Sandbox {
 }
 
 impl Sandbox {
-    fn new(cc: &eframe::CreationContext<'_>, font: Vec<u8>, wallpaper: ColorImage) -> Self {
+    fn new(ctx: &egui::Context, font: Vec<u8>, wallpaper: ColorImage) -> Self {
         if !font.is_empty() {
             let mut fonts = egui::FontDefinitions::default();
             fonts.font_data.insert(
@@ -98,36 +103,34 @@ impl Sandbox {
             if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
                 family.insert(0, "sandbox-cjk".into());
             }
-            cc.egui_ctx.set_fonts(fonts);
+            ctx.set_fonts(fonts);
         }
-        let source = Arc::new(ColorImage::filled([1, 1], egui::Color32::TRANSPARENT));
+        let preferences = Preferences::default();
+        let applied_icon = preferences.icon_variant(ctx.system_theme());
         Self {
-            preferences: Preferences::default(),
+            preferences,
             recording: false,
             startup: false,
             message: None,
             system_locale: Locale::system(),
-            texture: cc.egui_ctx.load_texture(
-                "generated-desktop",
-                source.clone(),
-                Default::default(),
-            ),
-            wallpaper: cc
-                .egui_ctx
-                .load_texture("preview-wallpaper", wallpaper, Default::default()),
+            wallpaper: ctx.load_texture("preview-wallpaper", wallpaper, Default::default()),
             scene: desktop::Scene::default(),
-            capture_pending: None,
+            capture_gate: CaptureGate::default(),
             window_rects: Vec::new(),
             desktop_bounds: Rect::NOTHING,
-            icon: cc.egui_ctx.load_texture(
+            icon: ctx.load_texture(
                 "brand",
-                snip2pin::icon::render(snip2pin::icon::Variant::Line, 64)
-                    .map(|pixels| ColorImage::from_rgba_unmultiplied([64, 64], pixels.as_raw()))
+                snip2pin::icon::render(applied_icon, snip2pin::icon::WINDOW_SIZE)
+                    .map(|pixels| {
+                        ColorImage::from_rgba_unmultiplied(
+                            [pixels.width() as usize, pixels.height() as usize],
+                            pixels.as_raw(),
+                        )
+                    })
                     .unwrap_or_else(|_| ColorImage::filled([1, 1], egui::Color32::TRANSPARENT)),
                 Default::default(),
             ),
-            source,
-            windows: Vec::new(),
+            applied_icon,
             selection: None,
             pins: Vec::new(),
             menu: None,
@@ -138,28 +141,33 @@ impl Sandbox {
     }
 
     fn capture(&mut self, ctx: &egui::Context) {
-        if self.capture_pending.is_some() {
+        if self.capture_gate.active().is_some() {
+            self.capture_gate.cancel();
             return;
         }
+        if self.selection.is_some() || self.recording {
+            return;
+        }
+        let Some(request) = self.capture_gate.begin() else {
+            return;
+        };
         for pin in &self.pins {
             pin_view::forget_input(ctx, pin.id);
         }
         self.message = None;
         self.menu = None;
         self.unlock_hint = None;
-        let request = ctx.cumulative_frame_nr();
-        self.capture_pending = Some(request);
         // Eframe's web backend reads the painted WebGL canvas. Keep the normal
         // desktop visible until that immutable frame returns as a screenshot.
         ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::new(request)));
     }
 
     fn receive_capture(&mut self, ctx: &egui::Context) {
-        let Some(request) = self.capture_pending else {
+        let Some(request) = self.capture_gate.active() else {
             return;
         };
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.capture_pending = None;
+            self.capture_gate.cancel();
             return;
         }
         let screenshot = ctx.input(|input| {
@@ -180,7 +188,9 @@ impl Sandbox {
         let Some(source) = screenshot else {
             return;
         };
-        self.capture_pending = None;
+        if !self.capture_gate.complete(request) {
+            return;
+        }
         let layers = ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>());
         self.window_rects
             .sort_by_key(|(layer, _)| layers.iter().position(|candidate| candidate == layer));
@@ -189,18 +199,18 @@ impl Sandbox {
             .iter()
             .map(|(_, rect)| *rect)
             .collect::<Vec<_>>();
-        self.windows = desktop::pixel_regions(self.desktop_bounds, source.size, &windows);
-        self.source = source;
-        self.texture.set(self.source.clone(), Default::default());
-        self.selection = Some(overlay::Selection {
-            texture: self.texture.clone(),
-            pixels: self.source.size.map(|n| n as u32),
-            pixel_step: [1, 1],
-            windows: self.windows.clone(),
-            press: None,
-            start: None,
-            // A browser simulation must not request native window activation.
-            focus_requested: true,
+        self.selection = Some(FrozenCapture {
+            selection: overlay::Selection {
+                texture: ctx.load_texture("generated-desktop", source.clone(), Default::default()),
+                pixels: source.size.map(|n| n as u32),
+                pixel_step: [1, 1],
+                windows: desktop::pixel_regions(self.desktop_bounds, source.size, &windows),
+                press: None,
+                start: None,
+                // A browser simulation must not request native window activation.
+                focus_requested: true,
+            },
+            pixels: source,
         });
     }
 
@@ -216,35 +226,42 @@ impl Sandbox {
             }
             pin_view::Action::UnlockAll => {
                 for pin in &mut self.pins {
+                    if pin.locked {
+                        pin_view::forget_input(ui.ctx(), pin.id);
+                    }
                     pin.locked = false;
                 }
+                self.unlock_hint = None;
             }
             pin_view::Action::ClosePin(id) => {
-                if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
-                    launcher::forget_pin(ui.ctx(), id);
-                    pin_view::forget_input(ui.ctx(), id);
-                }
-                self.pins.retain(|pin| pin.id != id || pin.locked);
-                if !self.pins.iter().any(|pin| Some(pin.id) == self.focused_pin) {
-                    self.focused_pin = None;
-                }
-                self.menu = None;
+                self.close_pin(id, ui.ctx());
             }
             pin_view::Action::ToggleLock(id) => {
                 if let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) {
+                    pin_view::forget_input(ui.ctx(), id);
                     pin.locked = !pin.locked;
                     pin.gesture = None;
                 }
                 self.menu = None;
             }
-            pin_view::Action::CopyPin(_) => {
-                self.message = Some(Text::DemoCopied.into());
+            pin_view::Action::CopyPin(id) => {
+                if self.pins.iter().any(|pin| pin.id == id) {
+                    self.message = Some(Text::DemoCopied.into());
+                }
                 self.menu = None;
             }
             pin_view::Action::MenuPin(id) => {
-                let position = ui.ctx().pointer_latest_pos().unwrap_or(bounds.min).clamp(
-                    bounds.min,
-                    (bounds.max - pin_view::MENU_SIZE).max(bounds.min),
+                let Some(pin) = self.pins.iter_mut().find(|pin| pin.id == id) else {
+                    return;
+                };
+                pin.gesture = None;
+                pin_view::forget_input(ui.ctx(), id);
+                let position = pin::menu_position(
+                    ui.ctx().pointer_latest_pos().unwrap_or(bounds.min),
+                    pin_view::MENU_SIZE,
+                    &[],
+                    bounds,
+                    1.0,
                 );
                 self.menu = Some((id, position));
             }
@@ -279,17 +296,64 @@ impl Sandbox {
             }
         }
     }
+
+    fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
+        let Some(index) = self.pins.iter().position(|pin| pin.id == id && !pin.locked) else {
+            return;
+        };
+        pin_view::forget(ctx, id);
+        self.pins.remove(index);
+        if self.focused_pin == Some(id) {
+            self.focused_pin = None;
+        }
+        if self.menu.is_some_and(|(pin, _)| pin == id) {
+            self.menu = None;
+        }
+    }
+
+    fn record_key(&mut self, ctx: &egui::Context) {
+        match ctx.input(|input| shortcut::record(&input.events)) {
+            Some(shortcut::Recording::Cancel) => self.recording = false,
+            Some(shortcut::Recording::Binding(binding)) => {
+                self.preferences.binding = binding;
+                self.recording = false;
+                self.message = None;
+            }
+            Some(shortcut::Recording::Invalid(error)) => self.message = Some(error),
+            None => {}
+        }
+    }
+
+    fn update_icon(&mut self, ctx: &egui::Context) {
+        let variant = self.preferences.icon_variant(ctx.system_theme());
+        if self.applied_icon != variant
+            && let Ok(pixels) = snip2pin::icon::render(variant, snip2pin::icon::WINDOW_SIZE)
+        {
+            self.icon.set(
+                ColorImage::from_rgba_unmultiplied(
+                    [pixels.width() as usize, pixels.height() as usize],
+                    pixels.as_raw(),
+                ),
+                Default::default(),
+            );
+            self.applied_icon = variant;
+        }
+    }
 }
 
-impl eframe::App for Sandbox {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl Sandbox {
+    fn show(&mut self, ui: &mut egui::Ui) {
+        // A virtual window shares the root event stream. Preserve modal ownership
+        // through this frame even when Escape just finished recording or a menu.
+        let input_was_blocked = self.recording || self.menu.is_some();
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
+        self.update_icon(ui.ctx());
         let bounds = ui.max_rect();
         // A frozen desktop belongs to one canvas layout. Resizing cancels the
         // selection rather than stretching stale window coordinates over a new scene.
         if bounds != self.desktop_bounds {
-            self.capture_pending = None;
+            self.capture_gate.cancel();
             self.selection = None;
         }
         self.receive_capture(ui.ctx());
@@ -312,65 +376,27 @@ impl eframe::App for Sandbox {
             });
         }
         if self.recording {
-            for event in ui.input(|input| input.events.clone()) {
-                if let egui::Event::Key {
-                    key,
-                    modifiers,
-                    pressed: true,
-                    repeat: false,
-                    ..
-                } = event
-                {
-                    if key == egui::Key::Escape {
-                        self.recording = false;
-                        break;
-                    }
-                    match Binding::from_key(key, modifiers)
-                        .and_then(|binding| binding.validate_capture().map(|()| binding))
-                    {
-                        Ok(binding) => {
-                            self.preferences.binding = binding;
-                            self.recording = false;
-                            self.message = None;
-                        }
-                        Err(error) => self.message = Some(error),
-                    }
-                    break;
-                }
-            }
+            self.record_key(ui.ctx());
         } else if self.selection.is_none()
-            && self.capture_pending.is_none()
+            && self.capture_gate.active().is_none()
             && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input(|input| {
-                input.events.iter().any(|event| {
-                    self.preferences.binding.matches(event) && !Binding::unlock_all().matches(event)
-                })
-            })
+            && ui.input(|input| self.preferences.binding.capture_requested(&input.events))
         {
             self.capture(ui.ctx());
         }
-        if let Some(selection) = &mut self.selection {
-            match overlay::show(ui, selection, true) {
+        if let Some(capture) = &mut self.selection {
+            match overlay::show(ui, &mut capture.selection, true) {
                 Some(overlay::Action::Cancel) => self.selection = None,
                 Some(overlay::Action::Select(rect)) => {
-                    if let Some(pixels) = capture::crop(&self.source, rect) {
+                    if let Some(pixels) = capture::crop(&capture.pixels, rect) {
                         self.next_id += 1;
-                        let image = Rect::from_min_size(
-                            bounds.min
-                                + egui::vec2(
-                                    rect.x as f32 / self.source.size[0] as f32 * bounds.width(),
-                                    rect.y as f32 / self.source.size[1] as f32 * bounds.height(),
-                                ),
-                            egui::vec2(
-                                rect.width as f32 / self.source.size[0] as f32 * bounds.width(),
-                                rect.height as f32 / self.source.size[1] as f32 * bounds.height(),
-                            ),
-                        );
                         let layout = pin::frame_geometry(
-                            Placement {
-                                position: image.min.into(),
-                                size: image.size().into(),
-                            },
+                            geometry::pin_placement(
+                                rect,
+                                capture.pixels.size.map(|n| n as u32),
+                                bounds.min.into(),
+                                bounds.size().into(),
+                            ),
                             bounds,
                             1.0,
                         );
@@ -431,8 +457,8 @@ impl eframe::App for Sandbox {
                         preferences: self.preferences,
                         icon_texture: Some(&self.icon),
                         recording: self.recording,
-                        idle: true,
-                        capturing: false,
+                        idle: self.capture_gate.active().is_none(),
+                        capturing: self.capture_gate.active().is_some(),
                         demo: true,
                         startup: Some(self.startup),
                         permission_required: false,
@@ -450,13 +476,13 @@ impl eframe::App for Sandbox {
                 }
             }
             Some(launcher::Action::Capture) => self.capture(ui.ctx()),
-            Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
-                if !pin.locked {
-                    launcher::forget_pin(ui.ctx(), pin.id);
-                    pin_view::forget_input(ui.ctx(), pin.id);
+            Some(launcher::Action::ClosePins) => {
+                self.menu = None;
+                let ids = self.pins.iter().map(|pin| pin.id).collect::<Vec<_>>();
+                for id in ids {
+                    self.close_pin(id, ui.ctx());
                 }
-                pin.locked
-            }),
+            }
             Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
             Some(launcher::Action::SelectPin(id)) => {
                 if self.pins.iter().any(|pin| pin.id == id) {
@@ -467,20 +493,15 @@ impl eframe::App for Sandbox {
                     ));
                 }
             }
-            Some(launcher::Action::RecordShortcut) => self.recording = !self.recording,
+            Some(launcher::Action::RecordShortcut) => {
+                self.recording = !self.recording;
+                self.message = None;
+            }
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.preferences.theme = theme;
                 self.preferences.icon = icon;
                 ui.ctx().set_theme(theme.preference());
-                if let Ok(pixels) = snip2pin::icon::render(
-                    self.preferences.icon_variant(ui.ctx().system_theme()),
-                    64,
-                ) {
-                    self.icon.set(
-                        ColorImage::from_rgba_unmultiplied([64, 64], pixels.as_raw()),
-                        Default::default(),
-                    );
-                }
+                self.update_icon(ui.ctx());
             }
             Some(launcher::Action::Startup(enabled)) => self.startup = enabled,
             Some(launcher::Action::Language(language)) => self.preferences.language = language,
@@ -495,6 +516,7 @@ impl eframe::App for Sandbox {
             self.menu = None;
         }
         let events = RefCell::new(Vec::new());
+        let pins_interactive = !input_was_blocked && !self.recording && self.menu.is_none();
         for pin in &mut self.pins {
             let pointer = ui.ctx().pointer_latest_pos();
             if let Some(gesture) = &pin.gesture
@@ -516,6 +538,9 @@ impl eframe::App for Sandbox {
                 .constrain(false)
                 .fixed_pos(pin.image.min)
                 .show(ui.ctx(), |ui| {
+                    if !pins_interactive {
+                        ui.disable();
+                    }
                     ui.set_min_size(pin.image.size());
                     ui.set_max_size(pin.image.size());
                     let controls = pin::toolbar_geometry(ui.max_rect(), &[bounds], bounds, 1.0);
@@ -613,6 +638,13 @@ impl eframe::App for Sandbox {
     }
 }
 
+impl eframe::App for Sandbox {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.show(ui);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start(
     font: Vec<u8>,
@@ -641,7 +673,10 @@ pub async fn start(
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(move |cc| Ok(Box::new(Sandbox::new(cc, font, wallpaper)))),
+            Box::new(move |cc| Ok(Box::new(Sandbox::new(&cc.egui_ctx, font, wallpaper)))),
         )
         .await
 }
+
+#[cfg(test)]
+mod tests;

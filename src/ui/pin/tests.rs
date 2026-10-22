@@ -22,11 +22,65 @@ fn image(
         Interaction {
             native_edges,
             toolbar: excluded.map(|bounds| Toolbar { bounds, count: 0 }),
+            // Mouse-only fixtures omit viewport focus; explicit focus tests take priority.
+            keyboard_focus: Some(ui.input(|input| input.viewport().focused.unwrap_or(true))),
             ..Default::default()
         },
         events,
         |command| ctx.send_viewport_cmd(command),
     );
+}
+
+#[test]
+fn escape_and_disabled_input_respect_virtual_and_native_window_focus() {
+    for virtual_focus in [false, true] {
+        for enabled in [false, true] {
+            for focused in [false, true] {
+                let ctx = egui::Context::default();
+                let texture = texture(&ctx);
+                let mut input = egui::RawInput {
+                    events: vec![Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .get_mut(&egui::ViewportId::ROOT)
+                    .expect("root")
+                    .focused = Some(focused);
+                let actions = RefCell::new(Vec::new());
+                let mut output = ctx.run_ui(input, |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        show(
+                            ui,
+                            7,
+                            &texture,
+                            Interaction {
+                                keyboard_focus: virtual_focus.then_some(focused),
+                                ..Default::default()
+                            },
+                            &|action| actions.borrow_mut().push(action),
+                            |_| panic!("Escape never changes geometry"),
+                        );
+                    });
+                });
+                output.textures_delta.clear();
+                assert_eq!(
+                    actions.into_inner(),
+                    if enabled && focused {
+                        vec![Action::ClosePin(7)]
+                    } else {
+                        vec![]
+                    }
+                );
+            }
+        }
+    }
 }
 
 fn controls(ui: &mut egui::Ui, id: u64, events: &dyn Fn(Action)) {
