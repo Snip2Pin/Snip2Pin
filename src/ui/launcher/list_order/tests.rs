@@ -3,7 +3,13 @@ use super::*;
 #[test]
 fn window_focus_loss_cancels_the_active_list_drag() {
     let ctx = egui::Context::default();
-    egui::DragAndDrop::set_payload(&ctx, DraggedPin(1));
+    egui::DragAndDrop::set_payload(
+        &ctx,
+        DraggedPin {
+            id: 1,
+            grab_offset: egui::Vec2::ZERO,
+        },
+    );
     let mut output = ctx.run_ui(
         egui::RawInput {
             focused: false,
@@ -45,7 +51,13 @@ fn closing_a_pin_releases_its_order_and_active_drag() {
     ctx.data_mut(|data| {
         data.insert_temp(state_id(), Order(vec![3, 2, 1]));
     });
-    egui::DragAndDrop::set_payload(&ctx, DraggedPin(2));
+    egui::DragAndDrop::set_payload(
+        &ctx,
+        DraggedPin {
+            id: 2,
+            grab_offset: egui::Vec2::ZERO,
+        },
+    );
     forget(&ctx, 1);
     assert!(egui::DragAndDrop::has_payload_of_type::<DraggedPin>(&ctx));
     forget(&ctx, 2);
@@ -102,7 +114,8 @@ fn dragging_to_the_list_edge_reaches_and_reorders_the_last_of_sixty_rows() {
             .iter()
             .filter_map(|shape| match &shape.shape {
                 egui::Shape::Rect(rect)
-                    if rect.rect.size() == egui::Vec2::from(LAUNCHER.pin_thumbnail) =>
+                    if shape.clip_rect.is_finite()
+                        && rect.rect.size() == egui::Vec2::from(LAUNCHER.pin_thumbnail) =>
                 {
                     Some((rect.rect, shape.clip_rect))
                 }

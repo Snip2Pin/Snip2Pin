@@ -342,12 +342,20 @@ fn pin_list_rows(
             for name in &names {
                 *counts.entry(name.as_str()).or_insert(0_usize) += 1;
             }
-            for index in list_order::indices(ui.ctx(), pins) {
+            let indices = list_order::indices(ui.ctx(), pins);
+            let drag = list_order::active(ui.ctx());
+            for index in indices {
                 let (pin, name) = (&pins[index], &names[index]);
                 let duplicate = counts.get(name.as_str()).is_some_and(|&count| count > 1);
                 if let Some(selected) = ui
                     .push_id(("pin-row", pin.id), |ui| {
-                        pin_row(ui, pin, locale, name, duplicate)
+                        list_order::row(
+                            ui,
+                            pin.id,
+                            pin_row_height(ui),
+                            drag.as_deref(),
+                            |ui, lifted| pin_row(ui, pin, locale, name, duplicate, lifted),
+                        )
                     })
                     .inner
                 {
@@ -387,6 +395,7 @@ fn pin_row(
     locale: Locale,
     name: &str,
     duplicate: bool,
+    lifted: bool,
 ) -> Option<Action> {
     let mut action = None;
     let text_height = pin_text_height(ui);
@@ -404,7 +413,15 @@ fn pin_row(
             Text::LocatePin.with(pin.id).render(locale),
         )
     });
-    if pin.selected || response.contains_pointer() {
+    if lifted {
+        ui.painter().add(
+            ui.visuals()
+                .window_shadow
+                .as_shape(row, LAUNCHER.button_radius),
+        );
+        ui.painter()
+            .rect_filled(row, LAUNCHER.button_radius, ui.visuals().window_fill);
+    } else if pin.selected || response.contains_pointer() {
         ui.painter().rect_filled(
             row,
             LAUNCHER.button_radius,
@@ -530,7 +547,7 @@ fn pin_row(
         ui.set_clip_rect(ui.clip_rect().intersect(text_clip));
         let name_rect =
             egui::Rect::from_min_size(text_rect.min, egui::vec2(text_rect.width(), text_height));
-        if ui.memory(|memory| memory.has_focus(editor)) {
+        if !lifted && ui.memory(|memory| memory.has_focus(editor)) {
             let mut name = pin.name.to_owned();
             let field = ui.put(
                 name_rect,
@@ -621,7 +638,7 @@ fn pin_row(
         ),
     );
     list_order::drop_target(ui, &response, pin.id);
-    action
+    if lifted { None } else { action }
 }
 
 fn footer(ui: &mut egui::Ui, locale: Locale) {

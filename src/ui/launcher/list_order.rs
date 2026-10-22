@@ -1,9 +1,12 @@
 //! List presentation order is independent of window stacking and pin storage.
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use eframe::egui::{self, Pos2, Rect};
 
-use super::{LAUNCHER, Locale, PinEntry, Text};
+use super::{Action, LAUNCHER, Locale, PinEntry, Text};
 
 #[derive(Clone, Default)]
 struct Order(Vec<u64>);
@@ -39,7 +42,48 @@ impl Order {
 }
 
 #[derive(Clone, Copy)]
-struct DraggedPin(u64);
+pub(super) struct DraggedPin {
+    id: u64,
+    /// Pointer offset from the row origin, in UI points.
+    grab_offset: egui::Vec2,
+}
+
+fn handle_id(id: u64) -> egui::Id {
+    egui::Id::new(("pin-list-drag", id))
+}
+
+pub(super) fn active(ctx: &egui::Context) -> Option<Arc<DraggedPin>> {
+    egui::DragAndDrop::payload(ctx)
+}
+
+/// Keep the list slot, but let egui paint its source on the drag layer.
+pub(super) fn row(
+    ui: &mut egui::Ui,
+    id: u64,
+    height: f32,
+    drag: Option<&DraggedPin>,
+    paint: impl FnOnce(&mut egui::Ui, bool) -> Option<Action>,
+) -> Option<Action> {
+    let Some(drag) = drag.filter(|drag| drag.id == id) else {
+        return paint(ui, false);
+    };
+    let size = egui::vec2(ui.available_width(), height);
+    let (slot, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.input(|input| input.pointer.primary_down()) && ui.ctx().is_being_dragged(handle_id(id)) {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
+            ui.dnd_drag_source(handle_id(id), *drag, |ui| {
+                // The floating row can leave the scroll area; the viewport still clips it.
+                ui.set_clip_rect(Rect::EVERYTHING);
+                // egui centers its drag source. Preserve the original grab point instead.
+                ui.with_visual_transform(
+                    egui::emath::TSTransform::from_translation(size * 0.5 - drag.grab_offset),
+                    |ui| paint(ui, true),
+                );
+            });
+        });
+    }
+    None
+}
 
 fn state_id() -> egui::Id {
     egui::Id::new("launcher-pin-list-order")
@@ -65,7 +109,7 @@ pub(super) fn handle(ui: &mut egui::Ui, row: Rect, id: u64, locale: Locale) -> R
         egui::vec2(LAUNCHER.pin_row_padding[0], row.height()),
     );
     let response = ui
-        .interact(rect, ui.id().with("reorder"), egui::Sense::drag())
+        .interact(rect, handle_id(id), egui::Sense::drag())
         .on_hover_text(locale.text(Text::DragToReorder));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
@@ -74,7 +118,18 @@ pub(super) fn handle(ui: &mut egui::Ui, row: Rect, id: u64, locale: Locale) -> R
             locale.text(Text::DragToReorder),
         )
     });
-    response.dnd_set_drag_payload(DraggedPin(id));
+    let grab = ui
+        .input(|input| input.pointer.press_origin())
+        .unwrap_or(row.min)
+        - row.min;
+    response.dnd_set_drag_payload(DraggedPin {
+        id,
+        grab_offset: grab,
+    });
+    if response.drag_started() && ui.ctx().current_pass_index() == 0 {
+        ui.ctx()
+            .request_discard("paint the lifted list row on the drag-start frame");
+    }
     let color = if response.hovered() || response.dragged() {
         ui.visuals().text_color()
     } else {
@@ -99,7 +154,7 @@ pub(super) fn drop_target(ui: &egui::Ui, response: &egui::Response, id: u64) {
     }
     let Some(source) = response
         .dnd_hover_payload::<DraggedPin>()
-        .filter(|source| source.0 != id)
+        .filter(|source| source.id != id)
     else {
         return;
     };
@@ -125,7 +180,7 @@ pub(super) fn drop_target(ui: &egui::Ui, response: &egui::Response, id: u64) {
     if response.dnd_release_payload::<DraggedPin>().is_some() {
         ui.ctx().data_mut(|data| {
             data.get_temp_mut_or_default::<Order>(state_id())
-                .move_to(source.0, id, after)
+                .move_to(source.id, id, after)
         });
         ui.ctx().request_repaint();
     }
@@ -155,7 +210,7 @@ pub(super) fn forget(ctx: &egui::Context, id: u64) {
             data.remove::<Order>(state_id());
         }
     });
-    if egui::DragAndDrop::payload::<DraggedPin>(ctx).is_some_and(|source| source.0 == id) {
+    if egui::DragAndDrop::payload::<DraggedPin>(ctx).is_some_and(|source| source.id == id) {
         egui::DragAndDrop::clear_payload(ctx);
     }
 }
