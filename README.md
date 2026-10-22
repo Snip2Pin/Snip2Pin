@@ -47,7 +47,7 @@ A small Rust app that keeps screenshots above other windows.
 
 ### 安装
 
-项目仍在开发，尚未发布安装包。首次发版后，可从 [GitHub Releases](https://github.com/Snip2Pin/Snip2Pin/releases) 下载。
+从 [GitHub Releases](https://github.com/Snip2Pin/Snip2Pin/releases) 下载对应系统的安装包。
 
 | 系统 | 安装方式 |
 | --- | --- |
@@ -107,7 +107,7 @@ macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即�
 
 ### Install
 
-The project is still in development. Installers will be available on [GitHub Releases](https://github.com/Snip2Pin/Snip2Pin/releases) after the first release.
+Download the package for your system from [GitHub Releases](https://github.com/Snip2Pin/Snip2Pin/releases).
 
 | System | Installation |
 | --- | --- |
