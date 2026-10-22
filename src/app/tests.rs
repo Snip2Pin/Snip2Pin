@@ -2732,6 +2732,56 @@ fn home_frame(
 }
 
 #[test]
+fn recording_the_current_shortcut_succeeds_without_writing_settings() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let original = app.preferences;
+    let directory = tempfile::tempdir().expect("settings write tripwire");
+    app.config_path = Some(directory.path().to_owned());
+    app.recording.start();
+    let previous_suppression = app.suppress_shortcut_until;
+    let modifiers = egui::Modifiers::SHIFT
+        | if cfg!(target_os = "macos") {
+            egui::Modifiers::MAC_CMD
+        } else {
+            egui::Modifiers::CTRL
+        };
+    let _ = home_frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::Key {
+            key: egui::Key::Num2,
+            physical_key: Some(egui::Key::Num2),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }],
+    );
+    assert!(!app.recording.active());
+    assert_eq!(app.preferences, original);
+    assert_eq!(
+        app.recording.feedback(),
+        Some(&Text::ShortcutConfirmed.into())
+    );
+    assert!(
+        !app.recording.feedback_is_error(),
+        "unchanged input is a success"
+    );
+    assert!(
+        directory
+            .path()
+            .read_dir()
+            .expect("settings untouched")
+            .next()
+            .is_none()
+    );
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.suppress_shortcut_until > previous_suppression);
+}
+
+#[test]
 fn shortcut_recording_shows_held_modifiers_and_keeps_failures_next_to_the_control() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);

@@ -143,6 +143,39 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
 }
 
 #[test]
+fn recording_the_current_shortcut_confirms_success_without_capture() {
+    let ctx = egui::Context::default();
+    let mut sandbox = sandbox(&ctx);
+    let _ = frame(&ctx, &mut sandbox, vec![]);
+    let original = sandbox.preferences;
+    sandbox.recording.start();
+    let _ = frame(
+        &ctx,
+        &mut sandbox,
+        vec![egui::Event::Key {
+            key: egui::Key::Num2,
+            physical_key: Some(egui::Key::Num2),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT
+                | if cfg!(target_os = "macos") {
+                    egui::Modifiers::MAC_CMD
+                } else {
+                    egui::Modifiers::CTRL
+                },
+        }],
+    );
+    assert!(!sandbox.recording.active());
+    assert_eq!(sandbox.preferences, original);
+    assert_eq!(
+        sandbox.recording.feedback(),
+        Some(&Text::ShortcutConfirmed.into())
+    );
+    assert!(!sandbox.recording.feedback_is_error());
+    assert!(sandbox.capture_gate.active().is_none());
+}
+
+#[test]
 fn modifier_leading_recording_keeps_the_saved_binding_until_a_complete_combo() {
     let ctx = egui::Context::default();
     let mut sandbox = sandbox(&ctx);

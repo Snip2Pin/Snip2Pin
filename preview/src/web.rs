@@ -321,6 +321,7 @@ impl Sandbox {
     fn record_key(&mut self, ctx: &egui::Context) {
         if let Some(binding) = self.recording.update(ctx) {
             self.preferences.binding = binding;
+            self.recording.saved(Text::ShortcutConfirmed.into());
         }
     }
 

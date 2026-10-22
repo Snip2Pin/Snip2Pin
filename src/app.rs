@@ -1436,6 +1436,10 @@ impl Snip2Pin {
             return;
         }
         self.suppress_shortcut_until = Instant::now() + SHORTCUT_SUPPRESSION;
+        if binding == self.preferences.binding {
+            self.recording.saved(Text::ShortcutConfirmed.into());
+            return;
+        }
         let mut registration_warning = None;
         if self.shortcut.is_none() && !self.demo && platform::global_shortcuts_supported() {
             match register_shortcut(binding, &self.sender, ctx) {

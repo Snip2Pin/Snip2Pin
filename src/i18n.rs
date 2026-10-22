@@ -152,6 +152,7 @@ catalogue! {
     DockQuitUnavailable => ("Could not connect the system Quit action. Locked pin quit confirmation is unavailable.", "无法连接系统退出操作，锁定贴图的退出确认不可用。"),
     SelectionHelp => ("Click to capture or drag a region · Esc cancels", "单击截图或拖动框选 · Esc 取消"),
     ShortcutSaved => ("Shortcut saved.", "快捷键已保存。"),
+    ShortcutConfirmed => ("Shortcut confirmed.", "快捷键已确认。"),
     ShortcutSavedLocal => ("Shortcut saved. This desktop supports in-app shortcuts only.", "快捷键已保存；当前桌面仅支持窗口内快捷键。"),
     AppearanceSaved => ("Appearance saved.", "外观设置已保存。"),
     DemoAppearance => ("Demo appearance updated for this session.", "演示外观已更新，本次有效。"),
