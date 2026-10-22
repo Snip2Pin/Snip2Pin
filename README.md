@@ -73,7 +73,7 @@ macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即�
 | 缩放 | 拖动边缘，或用滚轮、触摸板捏合围绕指针缩放 |
 | 再次复制 | 悬停后点击复制按钮，始终复制原图 |
 | 锁定 | 悬停后点击锁定按钮，锁定后无法移动、缩放或关闭 |
-| 定位与命名 | 在主页列表中定位贴图，双击名称编辑 |
+| 定位、命名与排序 | 在主页列表中定位贴图，双击名称编辑，拖动左侧手柄排序 |
 | 关闭 | 点击 ×，或聚焦贴图后按 Esc |
 
 右键菜单也可复制、锁定或关闭贴图。有锁定贴图时，退出应用会先询问。
@@ -133,7 +133,7 @@ The result is copied to the clipboard and pinned in place.
 | Resize | Drag an edge, or zoom around the pointer with the wheel or a trackpad pinch |
 | Copy again | Hover and click the copy icon; copying always uses the original image |
 | Lock | Hover and click the lock icon to prevent moving, resizing and closing |
-| Locate and rename | Locate a pin in the Home list; double-click its name to edit |
+| Locate, rename and reorder | Locate a pin in the Home list; double-click its name to edit; drag the left handle to reorder |
 | Close | Click × or press Esc while the pin has focus |
 
 The context menu also offers Copy, Lock and Close. Quitting asks for confirmation when there are locked pins.

@@ -3,6 +3,7 @@ use snip2pin::i18n::{Language, Locale, Text};
 use snip2pin::settings::{Icon, Preferences, Theme};
 
 use super::style::LAUNCHER;
+mod list_order;
 
 pub enum Action {
     Capture,
@@ -341,7 +342,8 @@ fn pin_list_rows(
             for name in &names {
                 *counts.entry(name.as_str()).or_insert(0_usize) += 1;
             }
-            for (pin, name) in pins.iter().zip(&names) {
+            for index in list_order::indices(ui.ctx(), pins) {
+                let (pin, name) = (&pins[index], &names[index]);
                 let duplicate = counts.get(name.as_str()).is_some_and(|&count| count > 1);
                 if let Some(selected) = ui
                     .push_id(("pin-row", pin.id), |ui| {
@@ -352,6 +354,7 @@ fn pin_list_rows(
                     action = Some(selected);
                 }
             }
+            list_order::scroll(ui, pin_row_height(ui));
         });
     action
 }
@@ -370,8 +373,9 @@ fn pin_row_height(ui: &egui::Ui) -> f32 {
         .max(LAUNCHER.pin_thumbnail[1].max(text_height) + LAUNCHER.pin_row_padding[1] * 2.0)
 }
 
-/// Release the closed pin's editor, including its in-memory undo history.
-pub fn forget_pin_name(ctx: &egui::Context, id: u64) {
+/// Release a closed pin's list order, active row drag, and editor undo history.
+pub fn forget_pin(ctx: &egui::Context, id: u64) {
+    list_order::forget(ctx, id);
     let editor = pin_name_id(id);
     ctx.data_mut(|data| data.remove::<egui::text_edit::TextEditState>(editor));
     ctx.memory_mut(|memory| memory.surrender_focus(editor));
@@ -412,6 +416,7 @@ fn pin_row(
         );
     }
     let content = row.shrink2(egui::Vec2::from(LAUNCHER.pin_row_padding));
+    let grip = list_order::handle(ui, row, pin.id, locale);
     let close_text = egui::WidgetText::from("×").into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -599,9 +604,9 @@ fn pin_row(
     });
     if action.is_none()
         && response.clicked()
-        && response
-            .interact_pointer_pos()
-            .is_some_and(|point| !lock.rect.contains(point) && !close.rect.contains(point))
+        && response.interact_pointer_pos().is_some_and(|point| {
+            !lock.rect.contains(point) && !close.rect.contains(point) && !grip.contains(point)
+        })
     {
         action = Some(Action::SelectPin(pin.id));
     }
@@ -615,6 +620,7 @@ fn pin_row(
             ui.visuals().widgets.noninteractive.bg_stroke.color,
         ),
     );
+    list_order::drop_target(ui, &response, pin.id);
     action
 }
 
