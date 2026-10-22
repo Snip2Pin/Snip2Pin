@@ -201,6 +201,9 @@ Formal publication requires a complete set of four native targets, matching
 version/source SHA, checksums, native checks for the explicitly selected
 distribution mode, recorded
 installation/upgrade acceptance and approval of the `release` Environment.
+Read paginated CI workflow history and match the full SHA, main branch, trusted
+workflow path, push/manual event and success locally. Bound the scan to its initial
+record count; missing/invalid records or API errors must block publication.
 Do not run candidate, signing, stage or publish commands without an explicit
 release request. Implementing/testing these workflows is not such a request.
 Production signing credentials may be provisioned once through the protected
