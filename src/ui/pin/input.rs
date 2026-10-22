@@ -102,7 +102,8 @@ pub(super) fn adjust(
         emit(Action::UnlockAll);
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
-    if interaction.locked
+    if !ui.is_enabled()
+        || interaction.locked
         || ui.ctx().text_edit_focused()
         || egui::Popup::is_any_open(ui.ctx())
         || ui.ctx().current_pass_index() != 0

@@ -95,6 +95,11 @@ impl Binding {
             if Self::from_key(physical_key.unwrap_or(*key), *modifiers).ok() == Some(self))
     }
 
+    /// The recovery shortcut must never start a capture, even in old settings.
+    pub fn capture_requested(self, events: &[egui::Event]) -> bool {
+        self.validate_capture().is_ok() && events.iter().any(|event| self.matches(event))
+    }
+
     pub fn label(self) -> String {
         self.0
             .to_string()

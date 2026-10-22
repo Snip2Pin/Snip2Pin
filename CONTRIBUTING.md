@@ -79,6 +79,9 @@ developer tool. Commit binary resources through Git LFS.
 
 `cargo run --locked -- --demo` uses generated images without reading the desktop.
 For isolated browser validation, use the [shared UI sandbox](docs/workflow.md#本地-gui-沙箱).
+Native and web hosts share interaction rules as well as widgets. The workspace
+tests exercise the web host with generated input; keep host-level regressions
+alongside shared rule tests when changing cross-platform behavior.
 
 ## Checks and contributions
 

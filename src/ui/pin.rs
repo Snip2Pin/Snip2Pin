@@ -12,6 +12,12 @@ mod input;
 mod keyboard;
 mod session;
 
+/// Release every shared UI state owned by a closed pin, in any host.
+pub fn forget(ctx: &egui::Context, id: u64) {
+    super::launcher::forget_pin(ctx, id);
+    forget_input(ctx, id);
+}
+
 pub fn forget_input(ctx: &egui::Context, id: u64) {
     keyboard::forget(ctx, id);
     ctx.data_mut(|data| {
@@ -157,7 +163,8 @@ fn image_with_host(
         METRICS.inset
     };
     let response = ui.interact(bounds, ui.id().with(("pin-image", id)), Sense::drag());
-    if ui.ctx().current_pass_index() == 0
+    if ui.is_enabled()
+        && ui.ctx().current_pass_index() == 0
         && ui.input(|input| input.pointer.secondary_clicked())
         && ui
             .input(|input| input.pointer.interact_pos())
@@ -176,6 +183,7 @@ fn image_with_host(
         .filter(|point| !excluded.is_some_and(|rect| rect.contains(*point)))
         .and_then(|point| resize_direction(bounds, point, resize_inset));
     if response.hovered()
+        && ui.is_enabled()
         && !native_edges
         && !locked
         && !ui
@@ -197,12 +205,13 @@ fn image_with_host(
             .then(|| input.pointer.press_origin())
             .flatten()
     });
-    let pressed_on_image = pressed.is_some_and(|point| {
-        bounds.contains(point)
-            && ui.clip_rect().contains(point)
-            && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-            && !excluded.is_some_and(|rect| rect.contains(point))
-    });
+    let pressed_on_image = ui.is_enabled()
+        && pressed.is_some_and(|point| {
+            bounds.contains(point)
+                && ui.clip_rect().contains(point)
+                && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
+                && !excluded.is_some_and(|rect| rect.contains(point))
+        });
     if !locked && pressed_on_image {
         let pressed_edge = (!native_edges)
             .then_some(pressed)
@@ -223,7 +232,7 @@ fn image_with_host(
         events(Action::UnlockHint(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
-    if ui.ctx().current_pass_index() == 0 && !locked && close_requested(ui) {
+    if ui.ctx().current_pass_index() == 0 && !locked && close_requested(ui, focused) {
         events(Action::ClosePin(id));
         ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
@@ -310,8 +319,13 @@ pub fn menu(ui: &mut egui::Ui, id: u64, locked: bool, events: &dyn Fn(Action)) {
     }
 }
 
-fn close_requested(ui: &egui::Ui) -> bool {
-    ui.input(|input| input.viewport().close_requested() || input.key_pressed(egui::Key::Escape))
+fn close_requested(ui: &egui::Ui, focused: bool) -> bool {
+    ui.is_enabled()
+        && (ui.input(|input| input.viewport().close_requested())
+            || (focused
+                && !ui.ctx().text_edit_focused()
+                && !egui::Popup::is_any_open(ui.ctx())
+                && ui.input(|input| input.key_pressed(egui::Key::Escape))))
 }
 
 fn resize_direction(bounds: Rect, point: Pos2, inset: f32) -> Option<ResizeDirection> {

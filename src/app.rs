@@ -215,8 +215,7 @@ struct Pin {
 
 impl Pin {
     fn release(self, id: u64, ctx: &egui::Context) {
-        launcher::forget_pin(ctx, id);
-        ui::pin::forget_input(ctx, id);
+        ui::pin::forget(ctx, id);
         ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
         if self.first_frame_drawn.load(Ordering::Acquire) {
             ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Close);
@@ -1573,32 +1572,14 @@ impl Snip2Pin {
     }
 
     fn record_key(&mut self, ui: &egui::Ui) {
-        let events = ui.input(|input| input.events.clone());
-        for event in events {
-            if let egui::Event::Key {
-                key,
-                physical_key,
-                modifiers,
-                pressed: true,
-                repeat: false,
-                ..
-            } = event
-            {
-                if key == egui::Key::Escape {
-                    self.recording = false;
-                    return;
-                }
-                match Binding::from_key(physical_key.unwrap_or(key), modifiers) {
-                    Ok(binding) => {
-                        self.recording = false;
-                        self.change_binding(binding, ui.ctx());
-                    }
-                    Err(error) => {
-                        self.message = Some(error);
-                    }
-                }
-                return;
+        match ui.input(|input| ui::shortcut::record(&input.events)) {
+            Some(ui::shortcut::Recording::Cancel) => self.recording = false,
+            Some(ui::shortcut::Recording::Binding(binding)) => {
+                self.recording = false;
+                self.change_binding(binding, ui.ctx());
             }
+            Some(ui::shortcut::Recording::Invalid(error)) => self.message = Some(error),
+            None => {}
         }
     }
 
@@ -2068,11 +2049,7 @@ impl eframe::App for Snip2Pin {
         } else if idle
             && self.quit_confirmation.is_none()
             && !ctx.egui_wants_keyboard_input()
-            && ui.input(|input| {
-                input.events.iter().any(|event| {
-                    self.preferences.binding.matches(event) && !Binding::unlock_all().matches(event)
-                })
-            })
+            && ui.input(|input| self.preferences.binding.capture_requested(&input.events))
         {
             self.capture_command(&ctx);
         }

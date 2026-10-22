@@ -6,6 +6,10 @@ pub struct CaptureGate {
 }
 
 impl CaptureGate {
+    pub fn active(&self) -> Option<u64> {
+        self.active
+    }
+
     pub fn cancel(&mut self) {
         self.active = None;
     }
