@@ -33,6 +33,8 @@ jobs:
           git merge-base --is-ancestor "$REVISION" origin/main
           git checkout --detach "$REVISION"
       - uses: ./.github/actions/setup
+        with:
+          desktop: 'false'
       - name: Fresh dependency audit for the selected source
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
