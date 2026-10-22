@@ -70,6 +70,24 @@ mod tests {
     }
 
     #[test]
+    fn recording_meta_shortcuts_preserves_aliases_and_exact_modifiers() {
+        let modifiers = Modifiers::MAC_CMD | Modifiers::SHIFT;
+        let expected = Binding::parse("super+shift+KeyQ").expect("old saved binding");
+        let event = press(Key::A, Some(Key::Q), modifiers);
+        assert_eq!(
+            record(std::slice::from_ref(&event)),
+            Some(Recording::Binding(expected))
+        );
+        assert!(expected.capture_requested(&[event]));
+        assert!(!expected.capture_requested(&[press(
+            Key::Q,
+            None,
+            Modifiers::CTRL | Modifiers::SHIFT
+        )]));
+        assert!(!expected.capture_requested(&[press(Key::Q, None, modifiers | Modifiers::ALT)]));
+    }
+
+    #[test]
     fn recording_cancels_or_rejects_reserved_and_unmodified_keys() {
         assert_eq!(
             record(&[press(Key::Escape, None, Modifiers::CTRL)]),

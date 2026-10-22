@@ -18,7 +18,7 @@ impl Default for Binding {
     fn default() -> Self {
         Self(HotKey::new(
             Some(if cfg!(target_os = "macos") {
-                Modifiers::SUPER | Modifiers::SHIFT
+                Modifiers::META | Modifiers::SHIFT
             } else {
                 Modifiers::CONTROL | Modifiers::SHIFT
             }),
@@ -34,7 +34,7 @@ impl Binding {
                 Modifiers::ALT
                     | Modifiers::SHIFT
                     | if cfg!(target_os = "macos") {
-                        Modifiers::SUPER
+                        Modifiers::META
                     } else {
                         Modifiers::CONTROL
                     },
@@ -58,7 +58,7 @@ impl Binding {
             .map_err(|error| Text::InvalidShortcut.with(error))?;
         if !key
             .mods
-            .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER)
+            .intersects(Modifiers::CONTROL | Modifiers::ALT | Modifiers::META)
         {
             return Err(Text::ShortcutModifiers.into());
         }
@@ -78,7 +78,7 @@ impl Binding {
         }
         if modifiers.mac_cmd || (!cfg!(target_os = "macos") && modifiers.command && !modifiers.ctrl)
         {
-            parts.push("Super");
+            parts.push("Meta");
         }
         parts.push(match key {
             egui::Key::Equals => "Equal",
@@ -103,21 +103,18 @@ impl Binding {
     pub fn label(self) -> String {
         self.0
             .to_string()
-            .replace(
-                "super",
-                if cfg!(target_os = "macos") {
-                    "Command"
-                } else {
-                    "Windows"
-                },
-            )
-            .replace("control", "Ctrl")
-            .replace("ctrl", "Ctrl")
-            .replace("shift", "Shift")
-            .replace("alt", "Alt")
-            .replace("Key", "")
-            .replace("Digit", "")
-            .replace('+', " + ")
+            .split('+')
+            .map(|token| match token {
+                "meta" if cfg!(target_os = "macos") => "Command",
+                "meta" => "Windows",
+                "control" => "Ctrl",
+                "shift" => "Shift",
+                "alt" => "Alt",
+                key if key.starts_with("Key") && key.len() == 4 => &key[3..],
+                key => key.strip_prefix("Digit").unwrap_or(key),
+            })
+            .collect::<Vec<_>>()
+            .join(" + ")
     }
 }
 
