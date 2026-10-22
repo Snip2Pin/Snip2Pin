@@ -22,11 +22,8 @@ pub enum Action {
 }
 
 fn image_rect(bounds: Rect, pixels: [u32; 2], rect: PixelRect) -> Rect {
-    let units = bounds.size() / egui::vec2(pixels[0] as f32, pixels[1] as f32);
-    Rect::from_min_size(
-        bounds.min + egui::vec2(rect.x as f32, rect.y as f32) * units,
-        egui::vec2(rect.width as f32, rect.height as f32) * units,
-    )
+    let placement = geometry::pin_placement(rect, pixels, bounds.min.into(), bounds.size().into());
+    Rect::from_min_size(placement.position.into(), placement.size.into())
 }
 
 impl Selection {

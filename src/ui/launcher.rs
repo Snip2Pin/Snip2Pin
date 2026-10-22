@@ -382,7 +382,7 @@ fn pin_row_height(ui: &egui::Ui) -> f32 {
 }
 
 /// Release a closed pin's list order, active row drag, and editor undo history.
-pub fn forget_pin(ctx: &egui::Context, id: u64) {
+pub(super) fn forget_pin(ctx: &egui::Context, id: u64) {
     list_order::forget(ctx, id);
     let editor = pin_name_id(id);
     ctx.data_mut(|data| data.remove::<egui::text_edit::TextEditState>(editor));

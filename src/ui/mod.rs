@@ -3,6 +3,7 @@ pub mod launcher;
 pub mod overlay;
 pub mod pin;
 pub mod screen_hint;
+pub mod shortcut;
 pub mod style;
 
 fn tooltip(ui: &mut eframe::egui::Ui, text: &str) {
