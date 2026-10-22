@@ -70,6 +70,8 @@ jobs:
           arguments: --locked
       - uses: ./.github/actions/setup
         if: inputs.operation == 'prepare'
+        with:
+          desktop: 'false'
       - name: Verify committed notes, source, CI and original candidates before approval
         if: inputs.operation == 'prepare'
         env:
@@ -168,6 +170,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          desktop: 'false'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: final-*
@@ -240,6 +244,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          desktop: 'false'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: verified-*

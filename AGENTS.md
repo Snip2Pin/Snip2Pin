@@ -186,7 +186,10 @@ checksums; unknown attribution gaps block packaging. Never invent copyright
 holders or present a standard-license reference as an upstream copyright notice.
 
 CI uses pinned Action commit SHAs, least-privilege tokens, finite timeouts and
-platform-specific caches. PRs cannot access signing credentials. Daily checks
+platform-specific caches. Release validation, draft creation and publication run
+only xtask and use the shared setup action with `desktop: 'false'`; native builds,
+package preparation and native verification retain their platform dependencies.
+PRs cannot access signing credentials. Daily checks
 may build unsigned debug packages and verify final unverified package layout
 without GUI activation, uploading distribution files, using signing credentials,
 tagging or creating Releases. Installation checks use only disposable hosted
