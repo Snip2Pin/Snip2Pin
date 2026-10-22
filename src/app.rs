@@ -125,8 +125,10 @@ pub struct ObservedPosition {
 pub enum Event {
     UnlockHint(u64),
     HintError(Message),
-    Capture,
-    UnlockShortcut,
+    Shortcut {
+        id: u32,
+        recording: bool,
+    },
     Ready {
         request_id: u64,
         result: Result<Vec<Snapshot>, Message>,
@@ -598,14 +600,24 @@ impl Snip2Pin {
                 };
                 self.show_unlock_hint(id, point, ctx);
             }
-            Event::Capture => {
-                if Instant::now() >= self.suppress_shortcut_until {
-                    self.capture_command(ctx);
-                }
-            }
-            Event::UnlockShortcut => {
-                if !self.recording.blocks_input(ctx) {
-                    self.unlock_pins(ctx);
+            Event::Shortcut { id, recording } => {
+                let binding = if id == Binding::unlock_all().0.id() {
+                    Binding::unlock_all()
+                } else if id == self.preferences.binding.0.id() {
+                    self.preferences.binding
+                } else {
+                    return;
+                };
+                if recording {
+                    if let Some(binding) = self.recording.registered(binding, ctx) {
+                        self.change_binding(binding, ctx);
+                    }
+                } else if !self.recording.blocks_input(ctx) {
+                    if binding == Binding::unlock_all() {
+                        self.unlock_pins(ctx);
+                    } else if Instant::now() >= self.suppress_shortcut_until {
+                        self.capture_command(ctx);
+                    }
                 }
             }
             Event::Ready {
@@ -2120,15 +2132,17 @@ fn register_shortcut(
     let unlock_ctx = ctx.clone();
     Shortcut::register(
         binding,
-        move || {
-            let _ = capture_events.send(Event::Capture);
-            capture_ctx.request_repaint_of(ViewportId::ROOT);
-        },
-        move || {
-            let _ = unlock_events.send(Event::UnlockShortcut);
-            unlock_ctx.request_repaint_of(ViewportId::ROOT);
-        },
+        move |id| queue_shortcut(id, &capture_events, &capture_ctx),
+        move || queue_shortcut(Binding::unlock_all().0.id(), &unlock_events, &unlock_ctx),
     )
+}
+
+fn queue_shortcut(id: u32, events: &Sender<Event>, ctx: &egui::Context) {
+    // Preserve input ownership at arrival, even if UI cancellation or completion
+    // happens before root logic drains this channel.
+    let recording = ui::shortcut::Recorder::input_blocked(ctx);
+    let _ = events.send(Event::Shortcut { id, recording });
+    ctx.request_repaint_of(ViewportId::ROOT);
 }
 
 /// Read one work-area snapshot per operation; demo hosts never query the desktop.

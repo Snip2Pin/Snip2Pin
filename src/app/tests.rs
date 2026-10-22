@@ -2732,6 +2732,189 @@ fn home_frame(
 }
 
 #[test]
+fn queued_recording_shortcuts_cannot_act_after_escape_cancels_recording() {
+    for recovery in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        app.toggle_pin_lock(1, &ctx);
+        app.recording.toggle(&ctx);
+        // Arrives after root logic drained the channel, before UI cancellation.
+        queue_shortcut(
+            if recovery {
+                Binding::unlock_all().0.id()
+            } else {
+                app.preferences.binding.0.id()
+            },
+            &app.sender,
+            &ctx,
+        );
+        let _ = home_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!app.recording.active());
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        });
+        assert!(
+            matches!(app.phase, Phase::Idle),
+            "cancelled recording must not capture"
+        );
+        assert!(app.pins[&1].locked, "cancelled recording must not unlock");
+        app.reset_capture(&ctx);
+    }
+}
+
+#[test]
+fn registered_shortcut_callback_completes_recording_without_a_key_event() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let _ = home_frame(&mut app, &ctx, vec![]);
+    let previous = app.preferences;
+    let directory = tempfile::tempdir().expect("settings write tripwire");
+    app.config_path = Some(directory.path().to_owned());
+    app.recording.toggle(&ctx);
+    queue_shortcut(previous.binding.0.id(), &app.sender, &ctx);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+        eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+    });
+    output.textures_delta.clear();
+    assert!(
+        !app.recording.active(),
+        "the registered shortcut must finish recording"
+    );
+    assert_eq!(
+        app.recording.feedback(),
+        Some(&Text::ShortcutConfirmed.into())
+    );
+    assert_eq!(app.preferences, previous);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.gate.active().is_none());
+    assert!(!app.recording.feedback_is_error());
+    assert!(output.shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Locale::Chinese.text(Text::ShortcutConfirmed))
+    }), "confirmation must be painted, not only stored");
+}
+
+#[test]
+fn duplicate_global_and_ordinary_shortcut_input_confirms_without_capturing() {
+    for global_first in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        let _ = home_frame(&mut app, &ctx, vec![]);
+        app.recording.toggle(&ctx);
+        let id = app.preferences.binding.0.id();
+        queue_shortcut(id, &app.sender, &ctx);
+        queue_shortcut(id, &app.sender, &ctx);
+        let modifiers = egui::Modifiers::SHIFT
+            | if cfg!(target_os = "macos") {
+                egui::Modifiers::MAC_CMD
+            } else {
+                egui::Modifiers::CTRL
+            };
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Num2,
+                physical_key: Some(egui::Key::Num2),
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            if global_first {
+                eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+            }
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        });
+        output.textures_delta.clear();
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            // An expired suppression period must not change ownership of queued input.
+            app.suppress_shortcut_until = Instant::now();
+            eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+        });
+        assert!(!app.recording.active());
+        assert_eq!(
+            app.recording.feedback(),
+            Some(&Text::ShortcutConfirmed.into())
+        );
+        assert!(matches!(app.phase, Phase::Idle));
+        assert!(app.gate.active().is_none());
+    }
+}
+
+#[test]
+fn global_shortcuts_outside_recording_capture_and_unlock_but_ignore_obsolete_ids() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let id = app.preferences.binding.0.id();
+    queue_shortcut(id.wrapping_add(1), &app.sender, &ctx);
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.pins[&1].locked);
+    queue_shortcut(Binding::unlock_all().0.id(), &app.sender, &ctx);
+    queue_shortcut(id, &app.sender, &ctx);
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(!app.pins[&1].locked);
+    assert!(!matches!(app.phase, Phase::Idle));
+    assert!(app.gate.active().is_some());
+    app.reset_capture(&ctx);
+}
+
+#[test]
+fn registered_recovery_shortcut_reports_reserved_input_even_without_its_key_event() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.recording.toggle(&ctx);
+    queue_shortcut(Binding::unlock_all().0.id(), &app.sender, &ctx);
+    let modifiers = egui::Modifiers::SHIFT
+        | egui::Modifiers::ALT
+        | if cfg!(target_os = "macos") {
+            egui::Modifiers::MAC_CMD
+        } else {
+            egui::Modifiers::CTRL
+        };
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            events: vec![egui::Event::ModifiersChanged(modifiers)],
+            ..Default::default()
+        },
+        |ui| {
+            eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+            eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
+        },
+    );
+    output.textures_delta.clear();
+    assert!(app.recording.active());
+    assert_eq!(
+        app.recording.feedback(),
+        Some(&Text::ReservedUnlockShortcut.into())
+    );
+    assert!(app.pins[&1].locked);
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
 fn recording_the_current_shortcut_succeeds_without_writing_settings() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -2927,7 +3110,8 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
             ..Default::default()
         },
         |ui| {
-            app.handle_event(Event::UnlockShortcut, ui.ctx());
+            app.recording.sync_input(ui.ctx());
+            queue_shortcut(Binding::unlock_all().0.id(), &app.sender, ui.ctx());
             eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
             eframe::App::ui(&mut app, ui, &mut eframe::Frame::_new_kittest());
         },
@@ -3421,7 +3605,7 @@ fn confirmed_quit_ignores_a_later_capture_event_in_the_same_batch() {
             outcome: Ok(true),
         })
         .expect("confirm");
-    app.sender.send(Event::Capture).expect("late shortcut");
+    queue_shortcut(app.preferences.binding.0.id(), &app.sender, &ctx);
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });

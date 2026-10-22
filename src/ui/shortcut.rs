@@ -89,31 +89,57 @@ impl Recorder {
         if !self.active {
             return None;
         }
-        self.consumed_frame = Some(ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT));
-        let binding = ctx.input(|input| {
-            if input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    Event::Key {
-                        pressed: true,
-                        repeat: false,
-                        ..
-                    }
-                ) || matches!(event, Event::ModifiersChanged(modifiers) if !modifiers.is_none())
-            }) {
-                self.feedback = None;
-            }
-            match record(&input.events) {
-                Some(Recording::Cancel) => self.cancel(),
-                Some(Recording::Binding(binding)) => {
-                    self.active = false;
-                    return Some(binding);
+        let fresh_input =
+            self.consumed_frame != Some(ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT));
+        let recording =
+            ctx.input(|input| {
+                if fresh_input && input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::Key {
+                            pressed: true,
+                            repeat: false,
+                            ..
+                        }
+                    ) || matches!(event, Event::ModifiersChanged(modifiers) if !modifiers.is_none())
+                }) {
+                    self.feedback = None;
                 }
-                Some(Recording::Invalid(error)) => self.set_feedback(error),
-                None => {}
+                record(&input.events)
+            });
+        self.apply(recording, ctx)
+    }
+
+    /// Registered global shortcuts can consume the ordinary key event.
+    pub fn registered(&mut self, binding: Binding, ctx: &egui::Context) -> Option<Binding> {
+        if !self.active {
+            return None;
+        }
+        let recording = match binding.validate_capture() {
+            Ok(()) => Recording::Binding(binding),
+            Err(error) => Recording::Invalid(error),
+        };
+        self.apply(Some(recording), ctx)
+    }
+
+    fn apply(&mut self, recording: Option<Recording>, ctx: &egui::Context) -> Option<Binding> {
+        self.consumed_frame = Some(ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT));
+        let binding = match recording {
+            Some(Recording::Cancel) => {
+                self.cancel();
+                None
             }
-            None
-        });
+            Some(Recording::Binding(binding)) => {
+                self.active = false;
+                self.feedback = None;
+                Some(binding)
+            }
+            Some(Recording::Invalid(error)) => {
+                self.set_feedback(error);
+                None
+            }
+            None => None,
+        };
         self.sync_input(ctx);
         if !self.active {
             ctx.request_repaint_of(egui::ViewportId::ROOT);
