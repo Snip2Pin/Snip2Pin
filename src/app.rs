@@ -1346,15 +1346,20 @@ impl Snip2Pin {
         }
         if self.tray.is_some() {
             self.cancel_quit(ctx);
-            self.home_visible = false;
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
+            self.hide_home(ctx);
         } else {
             if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked) {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             }
             self.tray_action(crate::tray::Action::Quit, ctx);
         }
+    }
+
+    fn hide_home(&mut self, ctx: &egui::Context) {
+        self.recording.dismiss(ctx);
+        self.home_visible = false;
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
     }
 
     fn quit_decision(&mut self, id: u64, result: Result<bool, Message>, ctx: &egui::Context) {

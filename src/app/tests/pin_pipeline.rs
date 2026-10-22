@@ -268,6 +268,46 @@ fn old_pin_callbacks_observe_recording_start_completion_and_cancel() {
 }
 
 #[test]
+fn hiding_home_dismisses_recording_and_releases_existing_pin_callbacks() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let previous = app.preferences.binding;
+    app.recording.start();
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+    setup.textures_delta.clear();
+    let callback = setup.viewport_output[&pin_id(1)]
+        .viewport_ui_cb
+        .as_ref()
+        .expect("callback made while recording")
+        .clone();
+    assert!(ui::shortcut::Recorder::input_blocked(&ctx));
+    let hidden = ctx.run_logic(&egui::RawInput::default(), |ctx| app.hide_home(ctx));
+    assert!(!app.home_visible && !app.exiting);
+    assert!(!app.recording.active());
+    assert!(!ui::shortcut::Recorder::input_blocked(&ctx));
+    assert_eq!(app.preferences.binding, previous);
+    assert!(app.menu_state().capture_enabled);
+    assert!(hidden.viewport_commands[&ViewportId::ROOT].contains(&ViewportCommand::Visible(false)));
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(240.0, 160.0));
+    let mut output = ctx.run_ui(
+        input(1, rect, 2.0, key_tap(egui::Key::ArrowRight).into()),
+        |ui| callback(ui),
+    );
+    output.textures_delta.clear();
+    let output = consume(&mut app, &ctx, input(1, rect, 2.0, vec![]));
+    assert!(
+        !geometry(&output, 1).is_empty(),
+        "pins work without reopening hidden home"
+    );
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.capture_command(ctx));
+    assert!(
+        matches!(app.phase, Phase::Capturing),
+        "generated demo capture works after hiding home"
+    );
+}
+
+#[test]
 fn queued_callback_keys_cannot_move_or_resize_a_pin_locked_before_consumption() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);

@@ -26,6 +26,14 @@ impl Recorder {
         self.feedback = None;
     }
 
+    /// Hiding the recording host ends modal ownership immediately; unlike an
+    /// Escape key, there is no recording input frame left for pins to consume.
+    pub fn dismiss(&mut self, ctx: &egui::Context) {
+        self.cancel();
+        self.consumed_frame = None;
+        self.sync_input(ctx);
+    }
+
     pub fn toggle(&mut self, ctx: &egui::Context) {
         if self.active {
             self.cancel();
