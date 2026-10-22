@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 const REPOSITORY: &str = "Snip2Pin/Snip2Pin";
+const CI_RUNS_PER_PAGE: usize = 100;
 
 const UNVERIFIED_NOTICE: &str = "## 未验证发布者 / Unverified publisher\n\n这些安装包没有受系统信任的发布者签名；macOS 包仅有 ad-hoc 完整性签名，未经 Apple 公证，Windows 包未签名。首次打开可能需要用户通过系统提供的选项手动允许；系统或组织策略可能禁止运行。macOS 更新可能需要重新授予截屏权限。\n\nThese packages have no trusted publisher signature. macOS bundles use an ad-hoc integrity seal and are not notarized by Apple; Windows executables are unsigned. Opening may require explicit approval using OS-provided controls and may be blocked by device policy. macOS updates may require screen capture permission again.";
 
@@ -66,18 +67,41 @@ pub fn preflight(version: &str, expected_revision: &str) -> Result {
     if !Path::new("LICENSE").is_file() {
         return Err("missing LICENSE".into());
     }
-    let runs = api(&format!(
-        "actions/workflows/ci.yml/runs?head_sha={expected_revision}&per_page=100"
-    ))?;
-    if !runs["workflow_runs"]
-        .as_array()
-        .ok_or("missing CI runs")?
-        .iter()
-        .any(|r| valid_main_ci(r, expected_revision))
-    {
+    if !successful_main_ci(expected_revision, api)? {
         return Err("no successful main CI run for this exact commit".into());
     }
     Ok(())
+}
+
+fn successful_main_ci(
+    revision: &str,
+    mut fetch: impl FnMut(&str) -> Result<Value>,
+) -> Result<bool> {
+    // Filter exact source locally: the SHA search index can omit a completed run.
+    let path =
+        |page| format!("actions/workflows/ci.yml/runs?per_page={CI_RUNS_PER_PAGE}&page={page}");
+    let mut response = fetch(&path(1))?;
+    // Bound the scan to the initial history snapshot, even if new runs arrive.
+    let pages = response["total_count"]
+        .as_u64()
+        .ok_or("missing CI run count")?
+        .div_ceil(CI_RUNS_PER_PAGE as u64)
+        .max(1);
+    for page in 1..=pages {
+        if page > 1 {
+            response = fetch(&path(page))?;
+        }
+        let runs = response["workflow_runs"]
+            .as_array()
+            .ok_or("missing CI runs")?;
+        if runs.iter().any(|run| valid_main_ci(run, revision)) {
+            return Ok(true);
+        }
+        if runs.len() < CI_RUNS_PER_PAGE {
+            break;
+        }
+    }
+    Ok(false)
 }
 
 fn valid_main_ci(run: &Value, revision: &str) -> bool {
@@ -455,6 +479,121 @@ fn validate_candidate_run(run: &Value) -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ci_run(sha: &str) -> Value {
+        serde_json::json!({"head_branch":"main", "head_sha":sha,
+            "path":".github/workflows/ci.yml", "event":"push", "conclusion":"success"})
+    }
+
+    fn ci_page(runs: Vec<Value>, total: u64) -> Value {
+        serde_json::json!({"workflow_runs": runs, "total_count": total})
+    }
+
+    #[test]
+    fn main_ci_search_uses_history_when_the_sha_search_index_omits_a_completed_run() {
+        let sha = "a".repeat(40);
+        let found = successful_main_ci(&sha, |path| {
+            // Reproduce the API discrepancy: the ordinary history includes the
+            // successful run while a head_sha search returns an empty result.
+            Ok(if path.contains("head_sha=") {
+                ci_page(vec![], 0)
+            } else {
+                ci_page(vec![ci_run(&sha)], 1)
+            })
+        })
+        .expect("CI API response");
+        assert!(
+            found,
+            "an indexed SHA search must not hide the successful CI history"
+        );
+    }
+
+    fn ci_page_number(path: &str) -> u64 {
+        path.split(['?', '&'])
+            .find_map(|field| field.strip_prefix("page="))
+            .expect("page parameter")
+            .parse()
+            .expect("numeric page")
+    }
+
+    #[test]
+    fn main_ci_search_finds_an_exact_manual_run_after_a_full_page_of_other_commits() {
+        let sha = "a".repeat(40);
+        let mut calls = Vec::new();
+        let found = successful_main_ci(&sha, |path| {
+            let page = ci_page_number(path);
+            calls.push(page);
+            Ok(match page {
+                1 => ci_page(vec![ci_run(&"b".repeat(40)); CI_RUNS_PER_PAGE], 101),
+                2 => {
+                    let mut run = ci_run(&sha);
+                    run["event"] = "workflow_dispatch".into();
+                    ci_page(vec![run], 101)
+                }
+                _ => panic!("unexpected history page"),
+            })
+        })
+        .expect("history");
+        assert!(found);
+        assert_eq!(calls, [1, 2]);
+    }
+
+    #[test]
+    fn main_ci_search_stops_at_the_first_match_or_the_initial_history_boundary() {
+        let sha = "a".repeat(40);
+        for has_match in [false, true] {
+            let mut calls = 0;
+            let found = successful_main_ci(&sha, |_| {
+                calls += 1;
+                assert!(
+                    calls <= 2,
+                    "history growth must not make the scan unbounded"
+                );
+                let mut runs = vec![ci_run(&"b".repeat(40)); CI_RUNS_PER_PAGE];
+                if has_match {
+                    runs[0] = ci_run(&sha);
+                }
+                // Later responses report growth; keep the initial two-page bound.
+                Ok(ci_page(runs, if calls == 1 { 200 } else { 10_000 }))
+            })
+            .expect("history");
+            assert_eq!(found, has_match);
+            assert_eq!(calls, if has_match { 1 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn main_ci_search_rejects_other_sources_workflows_events_and_unsuccessful_runs() {
+        let sha = "a".repeat(40);
+        for (key, value) in [
+            ("head_sha", "b".repeat(40)),
+            ("head_branch", "feature".into()),
+            ("path", ".github/workflows/other.yml".into()),
+            ("event", "pull_request".into()),
+            ("conclusion", "failure".into()),
+            ("conclusion", "in_progress".into()),
+        ] {
+            let mut run = ci_run(&sha);
+            run[key] = value.into();
+            assert!(
+                !successful_main_ci(&sha, |_| Ok(ci_page(vec![run.clone()], 1)))
+                    .expect("nonmatching history")
+            );
+        }
+        assert!(!successful_main_ci(&sha, |_| Ok(ci_page(vec![], 0))).expect("empty history"));
+    }
+
+    #[test]
+    fn main_ci_search_fails_closed_on_malformed_responses_and_api_errors() {
+        let sha = "a".repeat(40);
+        for response in [
+            serde_json::json!({"total_count": 1}),
+            serde_json::json!({"workflow_runs": [ci_run(&sha)]}),
+        ] {
+            assert!(successful_main_ci(&sha, |_| Ok(response.clone())).is_err());
+        }
+        assert!(successful_main_ci(&sha, |_| Err("API unavailable".into())).is_err());
+    }
 
     #[test]
     fn aur_requires_the_exact_public_stable_asset() {
