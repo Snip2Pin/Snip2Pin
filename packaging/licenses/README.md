@@ -17,6 +17,14 @@ reviewed entry binds the appropriate statement's SHA-256; no copyright holder is
 inferred from package authors. `dispatch` and `drm-fourcc` provide a manifest
 license declaration but no separate full license file at their published commits.
 
+Six egui 0.37 crates reference published source commit
+`7c0b40402271e8d40cda69f87cf3c2617c2e4382`, which is not retrievable from the
+upstream repository. Their reviewed entries retain the verbatim MIT license
+from the [official 0.37.0 release source](https://github.com/emilk/egui/blob/841a328ba2dd8f6996beb7189ebb7fc00e668a2a/LICENSE-MIT).
+The published Rust and shader files match that release. Entries bind each
+published manifest, version and original VCS metadata, so a later dependency
+version cannot silently reuse this fallback.
+
 The embedded fonts are collected separately from their registry package. All
 four actual font notice files are retained, including the Hack/Bitstream text,
 and checksummed so a license change requires review.
