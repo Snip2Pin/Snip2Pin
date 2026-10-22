@@ -2020,6 +2020,92 @@ fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
 }
 
 #[test]
+fn dragged_row_leaves_its_slot_and_follows_the_original_grab_point() {
+    for theme in [egui::ThemePreference::Light, egui::ThemePreference::Dark] {
+        let ctx = egui::Context::default();
+        ctx.set_theme(theme);
+        let size = egui::vec2(LAUNCHER.window[0], 1000.0);
+        let texture = ctx.load_texture(
+            "generated floating row",
+            egui::ColorImage::filled([8, 8], egui::Color32::WHITE),
+            Default::default(),
+        );
+        let pins = [(3, "Charlie"), (2, "Bravo"), (1, "Alpha")].map(|(id, name)| PinEntry {
+            id,
+            name,
+            texture: &texture,
+            size: [8, 8],
+            display_size: None,
+            locked: id == 3,
+            selected: false,
+        });
+        let frame = |events| frame_with_pins(&ctx, size, events, false, Locale::English, &pins);
+        let _ = frame(vec![]);
+        let initial = frame(vec![]).0;
+        let name = visible_text(&initial, "Charlie");
+        let neighbor = visible_text(&initial, "Bravo");
+        let well = initial
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("thumbnail");
+        let from = egui::pos2(
+            well.left() - LAUNCHER.pin_row_padding[0] / 2.0,
+            well.center().y,
+        );
+        let delta = egui::vec2(45.0, 90.0);
+        let pointer = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let _ = frame(vec![Event::PointerMoved(from)]);
+        let _ = frame(vec![pointer(from, true)]);
+        let (floating, action) = frame(vec![Event::PointerMoved(from + delta)]);
+        assert!(action.is_none());
+        assert!(
+            (visible_text(&floating, "Charlie").min - name.min - delta).length() < 0.01,
+            "the row must keep the pointer's original grip offset"
+        );
+        assert_eq!(
+            visible_text(&floating, "Bravo"),
+            neighbor,
+            "the source slot must not collapse"
+        );
+        assert_eq!(floating.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Charlie")).count(), 1, "paint only one card, not a duplicate in the list");
+        assert!(
+            !floating
+                .shapes
+                .iter()
+                .any(|shape| shape.clip_rect.is_finite()
+                    && matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect == well)),
+            "the dragged thumbnail must disappear from its list slot"
+        );
+        let (cancelled, action) = frame(vec![Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        assert!(action.is_none());
+        assert_eq!(visible_text(&cancelled, "Charlie"), name);
+        let _ = frame(vec![pointer(from + delta, false)]);
+        let restored = frame(vec![]).0;
+        assert_eq!(visible_text(&restored, "Charlie"), name);
+        assert_eq!(pins.map(|pin| pin.id), [3, 2, 1]);
+    }
+}
+
+#[test]
 fn pin_list_grip_reorders_rows_without_selecting_or_changing_model_order() {
     for locale in [Locale::English, Locale::Chinese] {
         let ctx = egui::Context::default();
