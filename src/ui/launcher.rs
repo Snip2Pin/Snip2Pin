@@ -37,7 +37,7 @@ pub struct Model<'a> {
     pub global_shortcut: bool,
     pub preferences: Preferences,
     pub icon_texture: Option<&'a egui::TextureHandle>,
-    pub recording: bool,
+    pub recording: &'a super::shortcut::Recorder,
     pub idle: bool,
     pub capturing: bool,
     pub demo: bool,
@@ -98,9 +98,10 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 .stroke(egui::Stroke::NONE)
                 .corner_radius(LAUNCHER.button_radius);
                 if ui
-                    .add_enabled_ui((model.idle || model.capturing) && !model.recording, |ui| {
-                        ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture)
-                    })
+                    .add_enabled_ui(
+                        (model.idle || model.capturing) && !model.recording.active(),
+                        |ui| ui.add_sized([ui.available_width(), LAUNCHER.capture_height], capture),
+                    )
                     .inner
                     .on_hover_ui(|ui| super::tooltip(ui, text(Text::CaptureHelp)))
                     .clicked()
@@ -108,28 +109,51 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                     action = Some(Action::Capture);
                 }
                 ui.add_space(LAUNCHER.action_gap);
-                let binding = model.preferences.binding.label();
-                let shortcut = if model.global_shortcut {
-                    binding
-                } else {
-                    Text::LocalShortcut.with(binding).render(locale)
-                };
-                if action_row(
-                    ui,
-                    &shortcut,
-                    if model.recording {
-                        text(Text::CancelEdit)
+                let shortcut = ui.scope(|ui| {
+                    let binding = model.preferences.binding.label();
+                    let label = if model.recording.active() {
+                        let current = model.recording.live_label(ui.ctx());
+                        if current.is_empty() {
+                            text(Text::ShortcutWaiting).to_owned()
+                        } else {
+                            current
+                        }
+                    } else if model.global_shortcut {
+                        binding
                     } else {
-                        text(Text::ChangeShortcut)
-                    },
-                    model.idle,
-                )
-                .clicked()
-                {
-                    action = Some(Action::RecordShortcut);
-                }
-                if model.recording {
-                    ui.weak(text(Text::RecordShortcut));
+                        Text::LocalShortcut.with(binding).render(locale)
+                    };
+                    if action_row(
+                        ui,
+                        &label,
+                        if model.recording.active() {
+                            text(Text::CancelEdit)
+                        } else {
+                            text(Text::ChangeShortcut)
+                        },
+                        model.idle,
+                    )
+                    .clicked()
+                    {
+                        action = Some(Action::RecordShortcut);
+                    }
+                    if model.recording.active() {
+                        ui.weak(text(Text::RecordShortcut));
+                    }
+                    if let Some(message) = model.recording.feedback() {
+                        let color = if model.recording.feedback_is_error() {
+                            ui.visuals().error_fg_color
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        ui.add(
+                            egui::Label::new(RichText::new(message.render(locale)).color(color))
+                                .wrap(),
+                        );
+                    }
+                });
+                if model.recording.blocks_input(ui.ctx()) {
+                    shortcut.response.scroll_to_me(None);
                 }
                 if !model.pins.is_empty() {
                     ui.add_space(LAUNCHER.action_gap);
@@ -151,7 +175,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                                         .min(model.pins.len() as f32 * row_height + handle);
                                     let width = ui.available_width();
                                     egui::Resize::default()
-                                        .id(egui::Id::new("pin-list-resize"))
+                                        .id(egui::Id::unique("pin-list-resize"))
                                         .resizable([false, true])
                                         .with_stroke(false)
                                         .default_size(egui::vec2(width, default_height + handle))
@@ -217,7 +241,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                 let mut theme = model.preferences.theme;
                 let mut icon = model.preferences.icon;
                 let mut language = model.preferences.language;
-                ui.add_enabled_ui(model.idle && !model.recording, |ui| {
+                ui.add_enabled_ui(model.idle && !model.recording.active(), |ui| {
                     setting_row(
                         ui,
                         text(Text::Theme),
@@ -313,7 +337,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
 }
 
 fn pin_name_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-name", id))
+    egui::Id::unique(("pin-name", id))
 }
 
 fn pin_list_rows(
@@ -408,7 +432,7 @@ fn pin_row(
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             Text::LocatePin.with(pin.id).render(locale),
         )
@@ -467,7 +491,7 @@ fn pin_row(
         .on_hover_text(locale.text(Text::Close));
     close.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled() && !pin.locked,
             locale.text(Text::Close),
         )
@@ -485,7 +509,7 @@ fn pin_row(
         .on_hover_text(locale.text(if pin.locked { Text::Unlock } else { Text::Lock }));
     lock.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             locale.text(if pin.locked { Text::Unlock } else { Text::Lock }),
         )

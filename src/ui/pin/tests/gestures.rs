@@ -66,6 +66,7 @@ impl Fixture {
 
 fn wheel(unit: egui::MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event {
     Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit,
         delta,
         modifiers,
@@ -140,6 +141,7 @@ fn wheel_zoom_keeps_its_initial_anchor_until_the_native_end() {
         vec![
             Event::PointerMoved(egui::pos2(80.0, 80.0)),
             Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
@@ -164,6 +166,7 @@ fn wheel_zoom_keeps_its_initial_anchor_until_the_native_end() {
             if anchor.fraction == [1.0 / 3.0, 0.5])));
     fixture.paint(
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::ZERO,
             modifiers: Modifiers::NONE,
@@ -231,6 +234,7 @@ fn wheel_zoom_started_outside_cannot_pick_up_a_pin_mid_gesture() {
         vec![
             Event::PointerMoved(egui::pos2(-40.0, 80.0)),
             Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
@@ -265,6 +269,7 @@ fn native_end_and_cancel_release_the_target_even_with_reserved_modifiers() {
             vec![
                 Event::PointerMoved(egui::pos2(80.0, 80.0)),
                 Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: Vec2::ZERO,
                     modifiers: Modifiers::CTRL,
@@ -275,6 +280,7 @@ fn native_end_and_cancel_release_the_target_even_with_reserved_modifiers() {
         );
         fixture.paint(
             vec![Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::ALT,
@@ -342,6 +348,7 @@ fn zoom_continuation_delivered_to_another_app_viewport_keeps_the_original_pin() 
         vec![
             Event::PointerMoved(egui::pos2(80.0, 80.0)),
             Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Line,
                 delta: Vec2::ZERO,
                 modifiers: Modifiers::NONE,
@@ -366,6 +373,7 @@ fn zoom_continuation_delivered_to_another_app_viewport_keeps_the_original_pin() 
         second,
         8,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::ZERO,
             modifiers: Modifiers::ALT,
@@ -376,6 +384,7 @@ fn zoom_continuation_delivered_to_another_app_viewport_keeps_the_original_pin() 
         second,
         8,
         vec![Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             modifiers: Modifiers::NONE,

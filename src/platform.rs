@@ -373,7 +373,7 @@ impl Shortcut {
     }
     pub fn register(
         binding: Binding,
-        action: impl Fn() + Send + Sync + 'static,
+        action: impl Fn(u32) + Send + Sync + 'static,
         unlock: impl Fn() + Send + Sync + 'static,
     ) -> Result<(Self, Option<Message>), Message> {
         if !global_shortcuts_supported() {
@@ -396,7 +396,7 @@ impl Shortcut {
             if recovery.is_some_and(|key| event.id == key.id()) {
                 unlock();
             } else if u64::from(event.id) == handler_id.load(Ordering::Acquire) {
-                action();
+                action(event.id);
             }
         }));
         Ok((

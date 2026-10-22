@@ -37,7 +37,7 @@ fn pin_id(id: u64) -> ViewportId {
 }
 
 fn pin_hint_state_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-small-hint", id))
+    egui::Id::unique(("pin-small-hint", id))
 }
 
 fn pin_menu_id() -> ViewportId {
@@ -125,7 +125,10 @@ pub struct ObservedPosition {
 pub enum Event {
     UnlockHint(u64),
     HintError(Message),
-    Capture,
+    Shortcut {
+        id: u32,
+        recording: bool,
+    },
     Ready {
         request_id: u64,
         result: Result<Vec<Snapshot>, Message>,
@@ -265,7 +268,7 @@ pub struct Snip2Pin {
     icon_data: Option<Arc<egui::IconData>>,
     icon_texture: Option<TextureHandle>,
     config_path: Option<PathBuf>,
-    recording: bool,
+    recording: ui::shortcut::Recorder,
     suppress_shortcut_until: Instant,
     demo: bool,
     tray: Option<crate::tray::Tray>,
@@ -295,9 +298,10 @@ impl Snip2Pin {
             .unwrap_or(Ok(Preferences::default()));
         let mut message = loaded.as_ref().err().cloned();
         let mut preferences = loaded.unwrap_or_default();
+        let mut recording = ui::shortcut::Recorder::default();
         if let Err(error) = preferences.binding.validate_capture() {
             preferences.binding = Binding::default();
-            message = Some(error);
+            recording.set_feedback(error);
         }
         let system_locale = Locale::system();
         let locale = preferences.language.resolve(system_locale);
@@ -314,13 +318,13 @@ impl Snip2Pin {
         } else {
             match register_shortcut(preferences.binding, &sender, &cc.egui_ctx) {
                 Ok((shortcut, warning)) => {
-                    if warning.is_some() {
-                        message = warning;
+                    if let Some(warning) = warning {
+                        recording.set_feedback(warning);
                     }
                     Some(shortcut)
                 }
                 Err(error) => {
-                    message = Some(Text::GlobalShortcutError.context(error));
+                    recording.set_feedback(Text::GlobalShortcutError.context(error));
                     None
                 }
             }
@@ -442,7 +446,7 @@ impl Snip2Pin {
             icon_data: None,
             icon_texture: None,
             config_path,
-            recording: false,
+            recording,
             suppress_shortcut_until: Instant::now(),
             demo,
             tray,
@@ -473,7 +477,7 @@ impl Snip2Pin {
         for id in self.pins.keys() {
             ui::pin::forget_input(ctx, *id);
         }
-        if !matches!(self.phase, Phase::Idle) || self.recording {
+        if !matches!(self.phase, Phase::Idle) || self.recording.blocks_input(ctx) {
             return;
         }
         self.clear_unlock_hint(ctx);
@@ -572,6 +576,20 @@ impl Snip2Pin {
     }
 
     fn handle_event(&mut self, event: Event, ctx: &egui::Context) {
+        if self.recording.blocks_input(ctx)
+            && matches!(
+                &event,
+                Event::UnlockHint(_)
+                    | Event::CopyPin(_)
+                    | Event::ClosePin(_)
+                    | Event::ToggleLock(_)
+                    | Event::ZoomPin { .. }
+                    | Event::MovePin { .. }
+                    | Event::MenuPin { .. }
+            )
+        {
+            return;
+        }
         match event {
             Event::HintError(error) => self.message = Some(Text::ScreenHintError.context(error)),
             Event::UnlockHint(id) => {
@@ -582,9 +600,24 @@ impl Snip2Pin {
                 };
                 self.show_unlock_hint(id, point, ctx);
             }
-            Event::Capture => {
-                if Instant::now() >= self.suppress_shortcut_until {
-                    self.capture_command(ctx);
+            Event::Shortcut { id, recording } => {
+                let binding = if id == Binding::unlock_all().0.id() {
+                    Binding::unlock_all()
+                } else if id == self.preferences.binding.0.id() {
+                    self.preferences.binding
+                } else {
+                    return;
+                };
+                if recording {
+                    if let Some(binding) = self.recording.registered(binding, ctx) {
+                        self.change_binding(binding, ctx);
+                    }
+                } else if !self.recording.blocks_input(ctx) {
+                    if binding == Binding::unlock_all() {
+                        self.unlock_pins(ctx);
+                    } else if Instant::now() >= self.suppress_shortcut_until {
+                        self.capture_command(ctx);
+                    }
                 }
             }
             Event::Ready {
@@ -608,7 +641,9 @@ impl Snip2Pin {
             }
             #[cfg(target_os = "macos")]
             Event::BeginPinDrag { pin_id: id, press } => {
-                if self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+                if !self.recording.blocks_input(ctx)
+                    && self.pins.get(&id).is_some_and(|pin| !pin.locked)
+                {
                     self.pin_drag.begin(id, press);
                 }
             }
@@ -703,7 +738,7 @@ impl Snip2Pin {
                 if self.quit_confirmation.is_some() {
                     return;
                 }
-                self.recording = false;
+                self.recording.cancel();
                 self.reset_capture(ctx);
                 if self.pins.values().any(|pin| pin.locked) {
                     self.next_quit_request = self.next_quit_request.wrapping_add(1);
@@ -1303,7 +1338,7 @@ impl Snip2Pin {
         crate::tray::MenuState {
             locale: self.preferences.language.resolve(self.system_locale),
             capture_enabled: matches!(self.phase, Phase::Idle | Phase::Capturing)
-                && !self.recording
+                && !self.recording.active()
                 && self.quit_confirmation.is_none(),
             has_unlocked_pins: self.pins.values().any(|pin| !pin.locked),
             has_locked_pins: self.pins.values().any(|pin| pin.locked),
@@ -1323,15 +1358,20 @@ impl Snip2Pin {
         }
         if self.tray.is_some() {
             self.cancel_quit(ctx);
-            self.home_visible = false;
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
+            self.hide_home(ctx);
         } else {
             if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked) {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             }
             self.tray_action(crate::tray::Action::Quit, ctx);
         }
+    }
+
+    fn hide_home(&mut self, ctx: &egui::Context) {
+        self.recording.dismiss(ctx);
+        self.home_visible = false;
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
     }
 
     fn quit_decision(&mut self, id: u64, result: Result<bool, Message>, ctx: &egui::Context) {
@@ -1404,10 +1444,14 @@ impl Snip2Pin {
 
     fn change_binding(&mut self, binding: Binding, ctx: &egui::Context) {
         if let Err(error) = binding.validate_capture() {
-            self.message = Some(error);
+            self.recording.set_feedback(error);
             return;
         }
         self.suppress_shortcut_until = Instant::now() + SHORTCUT_SUPPRESSION;
+        if binding == self.preferences.binding {
+            self.recording.saved(Text::ShortcutConfirmed.into());
+            return;
+        }
         let mut registration_warning = None;
         if self.shortcut.is_none() && !self.demo && platform::global_shortcuts_supported() {
             match register_shortcut(binding, &self.sender, ctx) {
@@ -1416,7 +1460,8 @@ impl Snip2Pin {
                     registration_warning = warning;
                 }
                 Err(error) => {
-                    self.message = Some(Text::ShortcutError.context(error));
+                    self.recording
+                        .set_feedback(Text::ShortcutError.context(error));
                     return;
                 }
             }
@@ -1424,7 +1469,7 @@ impl Snip2Pin {
         if let Some(shortcut) = &mut self.shortcut
             && let Err(error) = shortcut.replace(binding)
         {
-            self.message = Some(error);
+            self.recording.set_feedback(error);
             return;
         }
         let preferences = Preferences {
@@ -1438,16 +1483,21 @@ impl Snip2Pin {
                 .shortcut
                 .as_mut()
                 .map(|shortcut| shortcut.replace(self.preferences.binding));
-            if matches!(rollback, Some(Err(_))) {
+            if let Some(Err(rollback_error)) = rollback {
                 // Show the actual registered binding if rollback fails.
                 self.preferences.binding = binding;
+                self.recording
+                    .set_feedback(Message::Combined(vec![error, rollback_error]));
+                return;
             }
-            self.message = Some(error);
+            self.recording.set_feedback(error);
             return;
         }
         self.preferences = preferences;
-        self.message = registration_warning.or_else(|| {
-            Some(
+        if let Some(warning) = registration_warning {
+            self.recording.set_feedback(warning);
+        } else {
+            self.recording.saved(
                 if self
                     .shortcut
                     .as_ref()
@@ -1458,8 +1508,8 @@ impl Snip2Pin {
                     Text::ShortcutSavedLocal
                 }
                 .into(),
-            )
-        });
+            );
+        }
     }
 
     fn change_appearance(
@@ -1572,14 +1622,8 @@ impl Snip2Pin {
     }
 
     fn record_key(&mut self, ui: &egui::Ui) {
-        match ui.input(|input| ui::shortcut::record(&input.events)) {
-            Some(ui::shortcut::Recording::Cancel) => self.recording = false,
-            Some(ui::shortcut::Recording::Binding(binding)) => {
-                self.recording = false;
-                self.change_binding(binding, ui.ctx());
-            }
-            Some(ui::shortcut::Recording::Invalid(error)) => self.message = Some(error),
-            None => {}
+        if let Some(binding) = self.recording.update(ui.ctx()) {
+            self.change_binding(binding, ui.ctx());
         }
     }
 
@@ -1692,6 +1736,7 @@ impl Snip2Pin {
 
     fn show_pins(&self, ctx: &egui::Context) {
         let fallback_menu = self.demo || cfg!(target_os = "linux");
+        self.recording.sync_input(ctx);
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
             let events = self.sender.clone();
@@ -1735,6 +1780,7 @@ impl Snip2Pin {
                 builder.with_visible(false)
             };
             ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
+                let recording = ui::shortcut::Recorder::input_blocked(ui.ctx());
                 let ratio = pin::coordinate_ratio(
                     display_scale,
                     ui.ctx().zoom_factor(),
@@ -1774,7 +1820,14 @@ impl Snip2Pin {
                         })
                     })
                     .flatten();
-                let dispatch = |action| dispatch_pin(action, &events, &ctx, menu_position);
+                let dispatch = |action| {
+                    if !recording {
+                        dispatch_pin(action, &events, &ctx, menu_position);
+                    }
+                };
+                if recording {
+                    ui::pin::forget_input(&ctx, id);
+                }
                 ui::pin::route_gesture(ui, &dispatch);
                 #[cfg(target_os = "macos")]
                 let press_origin = ui.input(|input| input.pointer.press_origin());
@@ -1786,11 +1839,14 @@ impl Snip2Pin {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
                         toolbar: controls,
-                        keyboard_focus: None,
+                        keyboard_focus: recording.then_some(false),
                         space: platform::pin_input_space(ui),
                     },
                     &dispatch,
                     |command| {
+                        if recording {
+                            return;
+                        }
                         #[cfg(target_os = "macos")]
                         if command == ViewportCommand::StartDrag
                             && let Some(requests) = &native_drag
@@ -1897,6 +1953,7 @@ impl eframe::App for Snip2Pin {
             }
         }
         if ctx.current_pass_index() == 0
+            && !self.recording.blocks_input(ctx)
             && ctx.input(|input| {
                 input
                     .events
@@ -1940,11 +1997,16 @@ impl eframe::App for Snip2Pin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        ui::pin::route_gesture(ui, &|action| dispatch_pin(action, &self.sender, &ctx, None));
+        if !self.recording.blocks_input(&ctx) {
+            ui::pin::route_gesture(ui, &|action| dispatch_pin(action, &self.sender, &ctx, None));
+        }
         if !self.prepare_home(&ctx) {
             return;
         }
         self.update_icon(&ctx);
+        if self.recording.active() && self.quit_confirmation.is_none() {
+            self.record_key(ui);
+        }
         let idle = matches!(self.phase, Phase::Idle);
         let locale = self.preferences.language.resolve(self.system_locale);
         let message = self.message.as_ref().map(|message| message.render(locale));
@@ -1984,7 +2046,7 @@ impl eframe::App for Snip2Pin {
                             .is_some_and(Shortcut::capture_registered),
                         preferences: self.preferences,
                         icon_texture: self.icon_texture.as_ref(),
-                        recording: self.recording,
+                        recording: &self.recording,
                         idle,
                         capturing: matches!(self.phase, Phase::Capturing),
                         demo: self.demo,
@@ -1998,8 +2060,7 @@ impl eframe::App for Snip2Pin {
             Some(launcher::Action::Capture) => self.capture_command(&ctx),
             Some(launcher::Action::ClosePins) => self.close_pins(&ctx),
             Some(launcher::Action::RecordShortcut) => {
-                self.recording = !self.recording;
-                self.message = None;
+                self.recording.toggle(&ctx);
             }
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.change_appearance(theme, icon, &ctx)
@@ -2024,29 +2085,29 @@ impl eframe::App for Snip2Pin {
         if self.quit_confirmation.as_ref().is_some_and(|confirmation| {
             matches!(confirmation.presentation, QuitPresentation::Fallback)
         }) {
-            let response = egui::Modal::new(egui::Id::new("quit-locked-pins")).show(&ctx, |ui| {
-                ui.heading(locale.text(Text::QuitLockedTitle));
-                ui.label(locale.text(Text::QuitLockedHelp));
-                let mut confirm = false;
-                ui.horizontal(|ui| {
-                    if ui.button(locale.text(Text::Cancel)).clicked() {
-                        self.cancel_quit(&ctx);
-                    }
-                    if ui.button(locale.text(Text::QuitConfirm)).clicked() {
-                        confirm = true;
-                    }
+            let response =
+                egui::Modal::new(egui::Id::unique("quit-locked-pins")).show(&ctx, |ui| {
+                    ui.heading(locale.text(Text::QuitLockedTitle));
+                    ui.label(locale.text(Text::QuitLockedHelp));
+                    let mut confirm = false;
+                    ui.horizontal(|ui| {
+                        if ui.button(locale.text(Text::Cancel)).clicked() {
+                            self.cancel_quit(&ctx);
+                        }
+                        if ui.button(locale.text(Text::QuitConfirm)).clicked() {
+                            confirm = true;
+                        }
+                    });
+                    confirm
                 });
-                confirm
-            });
             if response.inner {
                 self.quit(&ctx);
             } else if response.should_close() {
                 self.cancel_quit(&ctx);
             }
         }
-        if self.recording && self.quit_confirmation.is_none() {
-            self.record_key(ui);
-        } else if idle
+        if !self.recording.blocks_input(&ctx)
+            && idle
             && self.quit_confirmation.is_none()
             && !ctx.egui_wants_keyboard_input()
             && ui.input(|input| self.preferences.binding.capture_requested(&input.events))
@@ -2071,15 +2132,17 @@ fn register_shortcut(
     let unlock_ctx = ctx.clone();
     Shortcut::register(
         binding,
-        move || {
-            let _ = capture_events.send(Event::Capture);
-            capture_ctx.request_repaint_of(ViewportId::ROOT);
-        },
-        move || {
-            let _ = unlock_events.send(Event::Tray(crate::tray::Action::UnlockPins));
-            unlock_ctx.request_repaint_of(ViewportId::ROOT);
-        },
+        move |id| queue_shortcut(id, &capture_events, &capture_ctx),
+        move || queue_shortcut(Binding::unlock_all().0.id(), &unlock_events, &unlock_ctx),
     )
+}
+
+fn queue_shortcut(id: u32, events: &Sender<Event>, ctx: &egui::Context) {
+    // Preserve input ownership at arrival, even if UI cancellation or completion
+    // happens before root logic drains this channel.
+    let recording = ui::shortcut::Recorder::input_blocked(ctx);
+    let _ = events.send(Event::Shortcut { id, recording });
+    ctx.request_repaint_of(ViewportId::ROOT);
 }
 
 /// Read one work-area snapshot per operation; demo hosts never query the desktop.

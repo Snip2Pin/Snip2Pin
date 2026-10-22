@@ -65,11 +65,11 @@ impl Locale {
 }
 
 pub fn set_locale(ctx: &egui::Context, locale: Locale) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("snip2pin-locale"), locale));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("snip2pin-locale"), locale));
 }
 
 pub fn locale(ctx: &egui::Context) -> Locale {
-    ctx.data(|data| data.get_temp(egui::Id::new("snip2pin-locale")))
+    ctx.data(|data| data.get_temp(egui::Id::unique("snip2pin-locale")))
         .unwrap_or_default()
 }
 
@@ -102,7 +102,7 @@ catalogue! {
     Heading => ("Select. Copy. Pin.", "框选，复制，置顶。"),
     Subtitle => ("Auto-copy. Pin right where you selected.", "自动复制，留在框选原位。"),
     Capture => ("Capture & pin", "截图并置顶"),
-    Capturing => ("Capturing · Click to cancel", "正在截图 · 点击取消"),
+    Capturing => ("Capturing · Esc to cancel", "正在截图 · Esc 取消"),
     CancelCapture => ("Cancel capture", "取消截图"),
     ContinueCapture => ("Allow access & continue", "授权后继续截图"),
     CaptureHelp => ("Drag to select; Esc cancels. Drag pins to move, resize at the edges. Hover to copy, lock or close.", "拖动框选，Esc 取消。拖动贴图移动，边缘缩放。悬停贴图可复制、锁定或关闭。"),
@@ -110,6 +110,7 @@ catalogue! {
     CancelEdit => ("Cancel", "取消修改"),
     ChangeShortcut => ("Change shortcut", "修改快捷键"),
     RecordShortcut => ("Press a new shortcut. Esc cancels.", "按下新的组合键，Esc 取消。"),
+    ShortcutWaiting => ("Press keys…", "请按组合键…"),
     PermissionTitle => ("Screen recording access needed", "需要屏幕录制权限"),
     PermissionHelp => ("Allow Snip2Pin in system settings, then return here to continue.", "打开系统设置，允许 Snip2Pin 后返回这里继续。"),
     OpenSettings => ("Open permission settings", "打开授权设置"),
@@ -151,6 +152,7 @@ catalogue! {
     DockQuitUnavailable => ("Could not connect the system Quit action. Locked pin quit confirmation is unavailable.", "无法连接系统退出操作，锁定贴图的退出确认不可用。"),
     SelectionHelp => ("Click to capture or drag a region · Esc cancels", "单击截图或拖动框选 · Esc 取消"),
     ShortcutSaved => ("Shortcut saved.", "快捷键已保存。"),
+    ShortcutConfirmed => ("Shortcut confirmed.", "快捷键已确认。"),
     ShortcutSavedLocal => ("Shortcut saved. This desktop supports in-app shortcuts only.", "快捷键已保存；当前桌面仅支持窗口内快捷键。"),
     AppearanceSaved => ("Appearance saved.", "外观设置已保存。"),
     DemoAppearance => ("Demo appearance updated for this session.", "演示外观已更新，本次有效。"),
