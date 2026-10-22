@@ -241,6 +241,7 @@ fn callback_wheel_continuation_on_another_pin_resizes_only_the_original_target()
     let first = egui::Rect::from_min_size(egui::pos2(50.0, 60.0), egui::vec2(240.0, 160.0));
     let second = egui::Rect::from_min_size(egui::pos2(500.0, 60.0), egui::vec2(360.0, 200.0));
     let wheel = |phase, delta| egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, delta),
         modifiers: egui::Modifiers::NONE,

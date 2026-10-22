@@ -65,11 +65,11 @@ impl Locale {
 }
 
 pub fn set_locale(ctx: &egui::Context, locale: Locale) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("snip2pin-locale"), locale));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("snip2pin-locale"), locale));
 }
 
 pub fn locale(ctx: &egui::Context) -> Locale {
-    ctx.data(|data| data.get_temp(egui::Id::new("snip2pin-locale")))
+    ctx.data(|data| data.get_temp(egui::Id::unique("snip2pin-locale")))
         .unwrap_or_default()
 }
 

@@ -37,7 +37,7 @@ fn pin_id(id: u64) -> ViewportId {
 }
 
 fn pin_hint_state_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-small-hint", id))
+    egui::Id::unique(("pin-small-hint", id))
 }
 
 fn pin_menu_id() -> ViewportId {
@@ -2024,20 +2024,21 @@ impl eframe::App for Snip2Pin {
         if self.quit_confirmation.as_ref().is_some_and(|confirmation| {
             matches!(confirmation.presentation, QuitPresentation::Fallback)
         }) {
-            let response = egui::Modal::new(egui::Id::new("quit-locked-pins")).show(&ctx, |ui| {
-                ui.heading(locale.text(Text::QuitLockedTitle));
-                ui.label(locale.text(Text::QuitLockedHelp));
-                let mut confirm = false;
-                ui.horizontal(|ui| {
-                    if ui.button(locale.text(Text::Cancel)).clicked() {
-                        self.cancel_quit(&ctx);
-                    }
-                    if ui.button(locale.text(Text::QuitConfirm)).clicked() {
-                        confirm = true;
-                    }
+            let response =
+                egui::Modal::new(egui::Id::unique("quit-locked-pins")).show(&ctx, |ui| {
+                    ui.heading(locale.text(Text::QuitLockedTitle));
+                    ui.label(locale.text(Text::QuitLockedHelp));
+                    let mut confirm = false;
+                    ui.horizontal(|ui| {
+                        if ui.button(locale.text(Text::Cancel)).clicked() {
+                            self.cancel_quit(&ctx);
+                        }
+                        if ui.button(locale.text(Text::QuitConfirm)).clicked() {
+                            confirm = true;
+                        }
+                    });
+                    confirm
                 });
-                confirm
-            });
             if response.inner {
                 self.quit(&ctx);
             } else if response.should_close() {

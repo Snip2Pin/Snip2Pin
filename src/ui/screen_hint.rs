@@ -17,7 +17,7 @@ pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) {
         .ctx()
         .layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
-            ui.id().with("screen-hint"),
+            ui.scope_id().with("screen-hint"),
         ))
         .with_clip_rect(bounds);
     let padding = egui::Vec2::from(OVERLAY.hint_padding);

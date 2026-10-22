@@ -2,6 +2,19 @@ use super::*;
 use egui::{Event, FullOutput, Modifiers, PointerButton, Pos2, Rect, Vec2};
 
 #[test]
+fn bundled_fonts_keep_emoji_names_drawable_without_system_fonts() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let name = "Reference 😀💡";
+        assert!(
+            ui.fonts_mut(|fonts| { fonts.has_glyphs(&egui::FontId::proportional(15.0), name) })
+        );
+        ui.label(name);
+    });
+    output.textures_delta.clear();
+}
+
+#[test]
 fn responsive_setting_controls_fit_and_select_in_both_languages() {
     for locale in [Locale::English, Locale::Chinese] {
         for width in [210.0, LAUNCHER.window[0]] {
@@ -620,6 +633,7 @@ fn populated_small_home_scrolls_to_all_settings_and_keeps_the_footer_visible() {
             let output = frame(vec![
                 Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
                 Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -60.0),
                     phase: egui::TouchPhase::Move,
@@ -687,7 +701,7 @@ fn pin_list_defaults_to_three_and_a_half_font_rows_and_resizes_with_real_pointer
         let _ = frame(size, vec![], &pins[..1]);
         let few = frame(size, vec![], &pins[..1]).0;
         let few_theme = visible_text(&few, "Theme");
-        let handle_id = egui::Id::new("pin-list-resize").with("__resize_corner");
+        let handle_id = egui::Id::unique("pin-list-resize").with("__resize_corner");
         assert!(
             ctx.read_response(handle_id).is_none(),
             "one pin needs no empty resize region"
@@ -928,7 +942,12 @@ fn pin_zoom_hint_wraps_and_remains_reachable_in_narrow_homes_with_large_fonts() 
                             && Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect)
                         {
                             assert!(!text.galley.elided);
-                            if width == 210.0 && large {
+                            let unwrapped = ctx.fonts_mut(|fonts| {
+                                let mut job = (*text.galley.job).clone();
+                                job.wrap.max_width = f32::INFINITY;
+                                fonts.layout_job(job)
+                            });
+                            if unwrapped.size().x > clip.width() {
                                 assert!(text.galley.rows.len() > 1);
                             }
                             reachable = true;
@@ -938,6 +957,7 @@ fn pin_zoom_hint_wraps_and_remains_reachable_in_narrow_homes_with_large_fonts() 
                     let (next, action) = frame(vec![
                         Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
                         Event::MouseWheel {
+                            source: egui::MouseWheelSource::Unknown,
                             unit: egui::MouseWheelUnit::Point,
                             delta: egui::vec2(0.0, -24.0),
                             phase: egui::TouchPhase::Move,
@@ -969,7 +989,9 @@ fn lightweight_rows_keep_extreme_previews_padded_and_names_clear_of_controls() {
                     );
                     let size = egui::vec2(width, LAUNCHER.window[1]);
                     let name = match locale {
-                        Locale::Chinese => "接口参考🧭：这是一条很长的名称，不能侵占操作按钮",
+                        Locale::Chinese => {
+                            "接口参考🧭：这是一条很长的名称，不能侵占操作按钮；名称应在空间不足时截断，完整内容仍可查看，复制和关闭操作始终可达"
+                        }
                         Locale::English => {
                             "Reference 🧭 — a very long name that must leave both actions reachable"
                         }
@@ -1038,6 +1060,15 @@ fn lightweight_rows_keep_extreme_previews_padded_and_names_clear_of_controls() {
                             _ => None,
                         })
                         .expect("truncated full name");
+                    let untruncated = ctx.fonts_mut(|fonts| {
+                        let mut job = (*title.galley.job).clone();
+                        job.wrap.max_width = f32::INFINITY;
+                        fonts.layout_job(job)
+                    });
+                    assert!(
+                        untruncated.size().x > title_clip.width(),
+                        "fixture must overflow the name slot"
+                    );
                     assert!(title.galley.elided);
                     let close = visible_text(&output, "×");
                     let lock_left = close.center().x
@@ -1371,6 +1402,7 @@ fn lightweight_inner_list_reaches_the_sixtieth_pin_and_outer_settings() {
                 output = frame(vec![
                     Event::PointerMoved(point),
                     Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
                         unit: egui::MouseWheelUnit::Point,
                         delta: egui::vec2(0.0, -240.0),
                         phase: egui::TouchPhase::Move,
@@ -1452,6 +1484,7 @@ fn lightweight_inner_list_reaches_the_sixtieth_pin_and_outer_settings() {
                 let output = frame(vec![
                     Event::PointerMoved(egui::pos2(size.x - 1.0, size.y / 2.0)),
                     Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
                         unit: egui::MouseWheelUnit::Point,
                         delta: egui::vec2(0.0, -60.0),
                         phase: egui::TouchPhase::Move,

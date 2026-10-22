@@ -162,7 +162,7 @@ fn image_with_host(
     } else {
         METRICS.inset
     };
-    let response = ui.interact(bounds, ui.id().with(("pin-image", id)), Sense::drag());
+    let response = ui.interact(bounds, ui.scope_id().with(("pin-image", id)), Sense::drag());
     if ui.is_enabled()
         && ui.ctx().current_pass_index() == 0
         && ui.input(|input| input.pointer.secondary_clicked())
@@ -280,7 +280,7 @@ fn controls(ui: &mut egui::Ui, id: u64, locked: bool, toolbar: Toolbar, events: 
             .inner;
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
+                egui::Role::Button,
                 ui.is_enabled() && enabled,
                 locale.text(command.text(locked)),
             )

@@ -49,7 +49,7 @@ pub(super) struct DraggedPin {
 }
 
 fn handle_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-list-drag", id))
+    egui::Id::unique(("pin-list-drag", id))
 }
 
 pub(super) fn active(ctx: &egui::Context) -> Option<Arc<DraggedPin>> {
@@ -86,7 +86,7 @@ pub(super) fn row(
 }
 
 fn state_id() -> egui::Id {
-    egui::Id::new("launcher-pin-list-order")
+    egui::Id::unique("launcher-pin-list-order")
 }
 
 pub(super) fn indices(ctx: &egui::Context, pins: &[PinEntry<'_>]) -> Vec<usize> {
@@ -113,7 +113,7 @@ pub(super) fn handle(ui: &mut egui::Ui, row: Rect, id: u64, locale: Locale) -> R
         .on_hover_text(locale.text(Text::DragToReorder));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             locale.text(Text::DragToReorder),
         )

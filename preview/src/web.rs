@@ -1,4 +1,7 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{
+    cell::RefCell,
+    sync::{Arc, mpsc},
+};
 
 use eframe::egui::{
     self, ColorImage, Pos2, Rect, ResizeDirection, TextureHandle, Vec2, ViewportCommand,
@@ -79,6 +82,7 @@ struct Sandbox {
     wallpaper: TextureHandle,
     scene: desktop::Scene,
     capture_gate: CaptureGate,
+    capture_result: Option<mpsc::Receiver<Arc<ColorImage>>>,
     window_rects: Vec<(egui::LayerId, Rect)>,
     desktop_bounds: Rect,
     icon: TextureHandle,
@@ -116,6 +120,7 @@ impl Sandbox {
             wallpaper: ctx.load_texture("preview-wallpaper", wallpaper, Default::default()),
             scene: desktop::Scene::default(),
             capture_gate: CaptureGate::default(),
+            capture_result: None,
             window_rects: Vec::new(),
             desktop_bounds: Rect::NOTHING,
             icon: ctx.load_texture(
@@ -143,12 +148,13 @@ impl Sandbox {
     fn capture(&mut self, ctx: &egui::Context) {
         if self.capture_gate.active().is_some() {
             self.capture_gate.cancel();
+            self.capture_result = None;
             return;
         }
         if self.selection.is_some() || self.recording {
             return;
         }
-        let Some(request) = self.capture_gate.begin() else {
+        let Some(_) = self.capture_gate.begin() else {
             return;
         };
         for pin in &self.pins {
@@ -159,35 +165,36 @@ impl Sandbox {
         self.unlock_hint = None;
         // Eframe's web backend reads the painted WebGL canvas. Keep the normal
         // desktop visible until that immutable frame returns as a screenshot.
-        ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::new(request)));
+        // Each request owns its receiver. Cancelling drops it, so an old callback
+        // cannot supply pixels to a newer selection session.
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.capture_result = Some(receiver);
+        let repaint = ctx.clone();
+        ctx.request_screenshot(move |image| {
+            if sender.try_send(image).is_ok() {
+                repaint.request_repaint();
+            }
+        });
     }
 
     fn receive_capture(&mut self, ctx: &egui::Context) {
         let Some(request) = self.capture_gate.active() else {
+            self.capture_result = None;
             return;
         };
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.capture_gate.cancel();
+            self.capture_result = None;
             return;
         }
-        let screenshot = ctx.input(|input| {
-            input.events.iter().find_map(|event| match event {
-                egui::Event::Screenshot {
-                    image, user_data, ..
-                } if user_data
-                    .data
-                    .as_deref()
-                    .and_then(|data| data.downcast_ref::<u64>())
-                    == Some(&request) =>
-                {
-                    Some(image.clone())
-                }
-                _ => None,
-            })
-        });
+        let screenshot = self
+            .capture_result
+            .as_ref()
+            .and_then(|result| result.try_recv().ok());
         let Some(source) = screenshot else {
             return;
         };
+        self.capture_result = None;
         if !self.capture_gate.complete(request) {
             return;
         }
@@ -369,7 +376,7 @@ impl Sandbox {
                             && ui.ctx().layer_id_at(point)
                                 == Some(egui::LayerId::new(
                                     egui::Order::Foreground,
-                                    egui::Id::new(("pin", pin.id)),
+                                    egui::Id::unique(("pin", pin.id)),
                                 ))
                     })
                     .map(|pin| pin.id)
@@ -439,7 +446,7 @@ impl Sandbox {
             })
             .collect::<Vec<_>>();
         let home = egui::Window::new("Snip2Pin")
-            .id(egui::Id::new("home"))
+            .id(egui::Id::unique("home"))
             .title_bar(false)
             .default_pos(bounds.min + egui::vec2(36.0_f32.min(bounds.width() * 0.04), 66.0))
             .default_size(snip2pin::ui::style::LAUNCHER.window)
@@ -489,7 +496,7 @@ impl Sandbox {
                     self.focused_pin = Some(id);
                     ui.ctx().move_to_top(egui::LayerId::new(
                         egui::Order::Foreground,
-                        egui::Id::new(("pin", id)),
+                        egui::Id::unique(("pin", id)),
                     ));
                 }
             }
@@ -528,11 +535,11 @@ impl Sandbox {
                 pin.gesture = None;
             }
             self.window_rects.push((
-                egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("pin", pin.id))),
+                egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(("pin", pin.id))),
                 pin.image,
             ));
             let mut requested = None;
-            egui::Area::new(egui::Id::new(("pin", pin.id)))
+            egui::Area::new(egui::Id::unique(("pin", pin.id)))
                 .order(egui::Order::Foreground)
                 .movable(false)
                 .constrain(false)
@@ -616,7 +623,7 @@ impl Sandbox {
                 self.menu = None;
             } else {
                 let action = RefCell::new(None);
-                egui::Area::new(egui::Id::new("pin-menu"))
+                egui::Area::new(egui::Id::unique("pin-menu"))
                     .order(egui::Order::Foreground)
                     .movable(false)
                     .constrain(false)

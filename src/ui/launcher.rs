@@ -151,7 +151,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
                                         .min(model.pins.len() as f32 * row_height + handle);
                                     let width = ui.available_width();
                                     egui::Resize::default()
-                                        .id(egui::Id::new("pin-list-resize"))
+                                        .id(egui::Id::unique("pin-list-resize"))
                                         .resizable([false, true])
                                         .with_stroke(false)
                                         .default_size(egui::vec2(width, default_height + handle))
@@ -313,7 +313,7 @@ pub fn show(ui: &mut egui::Ui, model: Model<'_>) -> Option<Action> {
 }
 
 fn pin_name_id(id: u64) -> egui::Id {
-    egui::Id::new(("pin-name", id))
+    egui::Id::unique(("pin-name", id))
 }
 
 fn pin_list_rows(
@@ -408,7 +408,7 @@ fn pin_row(
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             Text::LocatePin.with(pin.id).render(locale),
         )
@@ -467,7 +467,7 @@ fn pin_row(
         .on_hover_text(locale.text(Text::Close));
     close.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled() && !pin.locked,
             locale.text(Text::Close),
         )
@@ -485,7 +485,7 @@ fn pin_row(
         .on_hover_text(locale.text(if pin.locked { Text::Unlock } else { Text::Lock }));
     lock.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             ui.is_enabled(),
             locale.text(if pin.locked { Text::Unlock } else { Text::Lock }),
         )
