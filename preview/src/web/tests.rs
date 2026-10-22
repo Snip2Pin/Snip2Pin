@@ -76,7 +76,9 @@ fn menu_and_recording_own_input_until_the_end_of_the_frame() {
         let mut sandbox = sandbox(&ctx);
         let _ = frame(&ctx, &mut sandbox, vec![]);
         sandbox.focused_pin = Some(1);
-        sandbox.recording = recording;
+        if recording {
+            sandbox.recording.start();
+        }
         if !recording {
             sandbox.menu = Some((1, egui::pos2(600.0, 400.0)));
         }
@@ -96,7 +98,7 @@ fn menu_and_recording_own_input_until_the_end_of_the_frame() {
             2,
             "Escape dismisses the active interaction"
         );
-        assert!(!sandbox.recording && sandbox.menu.is_none());
+        assert!(!sandbox.recording.active() && sandbox.menu.is_none());
         let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::Escape)]);
         assert_eq!(
             sandbox.pins.iter().map(|pin| pin.id).collect::<Vec<_>>(),
@@ -111,11 +113,14 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
     let mut sandbox = sandbox(&ctx);
     let _ = frame(&ctx, &mut sandbox, vec![]);
     let old = sandbox.preferences.binding;
-    sandbox.recording = true;
+    sandbox.recording.start();
     let _ = frame(&ctx, &mut sandbox, vec![key(egui::Key::A)]);
-    assert!(sandbox.recording);
+    assert!(sandbox.recording.active());
     assert_eq!(sandbox.preferences.binding, old);
-    assert_eq!(sandbox.message, Some(Text::ShortcutModifiers.into()));
+    assert_eq!(
+        sandbox.recording.feedback(),
+        Some(&Text::ShortcutModifiers.into())
+    );
     let modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
     let event = egui::Event::Key {
         key: egui::Key::A,
@@ -129,7 +134,7 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
         *pressed = false;
     }
     let _ = frame(&ctx, &mut sandbox, vec![released, event.clone()]);
-    assert!(!sandbox.recording && sandbox.message.is_none());
+    assert!(!sandbox.recording.active() && sandbox.message.is_none());
     assert!(sandbox.preferences.binding.matches(&event));
     assert!(
         sandbox.capture_gate.active().is_none(),
@@ -138,11 +143,40 @@ fn shortcut_recording_uses_physical_keys_and_preserves_the_old_binding_on_errors
 }
 
 #[test]
+fn modifier_leading_recording_keeps_the_saved_binding_until_a_complete_combo() {
+    let ctx = egui::Context::default();
+    let mut sandbox = sandbox(&ctx);
+    let _ = frame(&ctx, &mut sandbox, vec![]);
+    let old = sandbox.preferences.binding;
+    sandbox.recording.start();
+    let _ = frame(
+        &ctx,
+        &mut sandbox,
+        vec![egui::Event::Key {
+            key: egui::Key::ControlLeft,
+            physical_key: Some(egui::Key::ControlLeft),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        }],
+    );
+    assert!(
+        sandbox.recording.active(),
+        "holding Ctrl must keep recording"
+    );
+    assert_eq!(sandbox.preferences.binding, old);
+    assert!(
+        sandbox.message.is_none(),
+        "an unfinished chord is not an error"
+    );
+}
+
+#[test]
 fn recording_a_shortcut_cannot_start_capture_on_a_repeated_layout_pass() {
     let ctx = egui::Context::default();
     let mut sandbox = sandbox(&ctx);
     let _ = frame(&ctx, &mut sandbox, vec![]);
-    sandbox.recording = true;
+    sandbox.recording.start();
     let mut event = key(egui::Key::Q);
     if let egui::Event::Key { modifiers, .. } = &mut event {
         *modifiers = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
@@ -163,7 +197,7 @@ fn recording_a_shortcut_cannot_start_capture_on_a_repeated_layout_pass() {
     );
     output.textures_delta.clear();
     assert_eq!(output.platform_output.num_completed_passes, 2);
-    assert!(!sandbox.recording);
+    assert!(!sandbox.recording.active());
     assert!(
         sandbox.capture_gate.active().is_none(),
         "recording is not a capture gesture"

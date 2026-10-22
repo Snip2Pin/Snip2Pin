@@ -135,6 +135,139 @@ fn callback_keys_keep_child_observations_when_root_geometry_is_stale() {
 }
 
 #[test]
+fn recording_prevents_pin_callback_keys_from_dispatching_window_commands() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.recording.start();
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(240.0, 160.0));
+    let child = paint_pin(
+        &app,
+        &ctx,
+        input(
+            1,
+            rect,
+            2.0,
+            key_tap(egui::Key::ArrowRight)
+                .into_iter()
+                .chain(key_tap(egui::Key::Equals))
+                .chain(key_tap(egui::Key::Escape))
+                .collect(),
+        ),
+    );
+    assert!(geometry(&child, 1).is_empty());
+    let root = consume(&mut app, &ctx, input(1, rect, 2.0, vec![]));
+    assert!(geometry(&root, 1).is_empty());
+    assert!(
+        app.pins.contains_key(&1),
+        "recording Escape cannot close a pin"
+    );
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
+fn old_pin_callbacks_observe_recording_start_completion_and_cancel() {
+    for cancel in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        app.system_locale = Locale::English;
+        let previous = app.preferences.binding;
+        let _ = home_frame(&mut app, &ctx, vec![]);
+        let setup = home_frame(&mut app, &ctx, vec![]);
+        let callback = setup.viewport_output[&pin_id(1)]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("callback created before recording")
+            .clone();
+        let change = setup
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == Locale::English.text(Text::ChangeShortcut) =>
+                {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("change shortcut control");
+        let _ = home_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(change)]);
+        for pressed in [true, false] {
+            let _ = home_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerButton {
+                    pos: change,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert!(
+            app.recording.active(),
+            "the real home action starts recording"
+        );
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(240.0, 160.0));
+        let paint_old = |keys: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(input(1, rect, 2.0, keys), |ui| callback(ui));
+            output.textures_delta.clear();
+            output
+        };
+        let keys = || {
+            key_tap(egui::Key::ArrowRight)
+                .into_iter()
+                .chain(key_tap(egui::Key::Equals))
+                .chain(key_tap(egui::Key::Escape))
+                .collect()
+        };
+        let output = paint_old(keys());
+        assert!(geometry(&output, 1).is_empty());
+        let output = consume(&mut app, &ctx, input(1, rect, 2.0, vec![]));
+        assert!(geometry(&output, 1).is_empty());
+        assert!(app.pins.contains_key(&1));
+        let finish = if cancel {
+            key_tap(egui::Key::Escape).into()
+        } else {
+            [true, false]
+                .map(|pressed| egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: Some(egui::Key::Q),
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                })
+                .into()
+        };
+        let _ = home_frame(&mut app, &ctx, finish);
+        assert!(!app.recording.active());
+        assert_eq!(app.preferences.binding == previous, cancel);
+        let output = paint_old(keys());
+        assert!(
+            geometry(&output, 1).is_empty(),
+            "completion/cancel still owns this root frame"
+        );
+        assert!(
+            app.events.try_recv().is_err(),
+            "old callbacks cannot enqueue pin commands"
+        );
+        let _ = home_frame(&mut app, &ctx, vec![]);
+        let _ = paint_old(
+            key_tap(egui::Key::ArrowRight)
+                .into_iter()
+                .chain(key_tap(egui::Key::Equals))
+                .collect(),
+        );
+        let output = consume(&mut app, &ctx, input(1, rect, 2.0, vec![]));
+        assert!(
+            !geometry(&output, 1).is_empty(),
+            "pin keyboard input resumes on the next root frame"
+        );
+    }
+}
+
+#[test]
 fn queued_callback_keys_cannot_move_or_resize_a_pin_locked_before_consumption() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);

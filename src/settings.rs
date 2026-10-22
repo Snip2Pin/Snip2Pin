@@ -127,7 +127,14 @@ impl TryFrom<String> for Binding {
 
 impl From<Binding> for String {
     fn from(binding: Binding) -> Self {
-        binding.0.to_string()
+        // Keep files readable by versions whose parser predates the Meta alias.
+        binding
+            .0
+            .to_string()
+            .split('+')
+            .map(|token| if token == "meta" { "super" } else { token })
+            .collect::<Vec<_>>()
+            .join("+")
     }
 }
 

@@ -97,6 +97,7 @@ fn meta_shortcuts_keep_legacy_aliases_labels_and_saved_preferences() {
         HotkeyModifiers::META | HotkeyModifiers::SHIFT
     );
     assert_eq!(expected.0.key, Code::KeyK);
+    assert_eq!(String::from(expected), "shift+super+KeyK");
     assert_eq!(
         expected.label(),
         if cfg!(target_os = "macos") {
@@ -119,11 +120,13 @@ fn meta_shortcuts_keep_legacy_aliases_labels_and_saved_preferences() {
         let preferences = Preferences::load(&path).expect("saved alias loads");
         assert_eq!(preferences.binding, expected);
         assert_eq!(preferences.theme, Theme::Dark);
-        preferences.save(&path).expect("save canonical meta format");
+        preferences
+            .save(&path)
+            .expect("save compatible shortcut format");
         assert!(
             std::fs::read_to_string(&path)
                 .expect("canonical preferences")
-                .contains("shift+meta+KeyK")
+                .contains("shift+super+KeyK")
         );
         assert_eq!(Preferences::load(&path).expect("restart"), preferences);
         std::fs::remove_file(&path).expect("test next legacy alias");

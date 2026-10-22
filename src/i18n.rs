@@ -110,6 +110,7 @@ catalogue! {
     CancelEdit => ("Cancel", "取消修改"),
     ChangeShortcut => ("Change shortcut", "修改快捷键"),
     RecordShortcut => ("Press a new shortcut. Esc cancels.", "按下新的组合键，Esc 取消。"),
+    ShortcutWaiting => ("Press keys…", "请按组合键…"),
     PermissionTitle => ("Screen recording access needed", "需要屏幕录制权限"),
     PermissionHelp => ("Allow Snip2Pin in system settings, then return here to continue.", "打开系统设置，允许 Snip2Pin 后返回这里继续。"),
     OpenSettings => ("Open permission settings", "打开授权设置"),

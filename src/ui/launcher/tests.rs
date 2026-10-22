@@ -15,6 +15,82 @@ fn bundled_fonts_keep_emoji_names_drawable_without_system_fonts() {
 }
 
 #[test]
+fn shortcut_feedback_stays_visible_above_long_lists_in_small_windows() {
+    for locale in [Locale::English, Locale::Chinese] {
+        for error in [
+            Text::ShortcutModifiers.into(),
+            Text::ShortcutError.with("generated registration conflict"),
+            Text::SaveSettings.with("generated save failure"),
+        ] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "generated shortcut rows",
+                egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
+                Default::default(),
+            );
+            let pins = (1..=60)
+                .map(|id| PinEntry {
+                    id,
+                    name: "",
+                    texture: &texture,
+                    size: [2, 2],
+                    display_size: None,
+                    locked: false,
+                    selected: false,
+                })
+                .collect::<Vec<_>>();
+            let mut recording = super::super::shortcut::Recorder::default();
+            recording.start();
+            recording.set_feedback(error.clone());
+            let size = egui::vec2(280.0, 300.0);
+            let paint = || {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        events: vec![Event::ModifiersChanged(Modifiers::CTRL | Modifiers::SHIFT)],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(
+                            ui,
+                            Model {
+                                locale,
+                                pins: &pins,
+                                message: None,
+                                global_shortcut: true,
+                                preferences: Preferences::default(),
+                                icon_texture: None,
+                                recording: &recording,
+                                idle: true,
+                                capturing: false,
+                                demo: false,
+                                startup: Some(false),
+                                permission_required: false,
+                            },
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            for _ in 0..20 {
+                let _ = paint();
+            }
+            let output = paint();
+            let combination = visible_text(&output, "Ctrl + Shift");
+            let cancel = visible_text(&output, locale.text(Text::CancelEdit));
+            let feedback = visible_text(&output, &error.render(locale));
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(feedback));
+            assert!(feedback.min.y >= combination.min.y);
+            assert!(
+                feedback.min.y - cancel.max.y < 100.0,
+                "feedback belongs to the shortcut control"
+            );
+        }
+    }
+}
+
+#[test]
 fn responsive_setting_controls_fit_and_select_in_both_languages() {
     for locale in [Locale::English, Locale::Chinese] {
         for width in [210.0, LAUNCHER.window[0]] {
@@ -190,7 +266,7 @@ fn frame_with_pins(
                     global_shortcut: true,
                     preferences: Preferences::default(),
                     icon_texture: None,
-                    recording: busy,
+                    recording: &super::super::shortcut::Recorder::default(),
                     idle: !busy,
                     capturing: false,
                     demo: false,

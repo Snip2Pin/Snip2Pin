@@ -75,7 +75,7 @@ impl Gesture {
 
 struct Sandbox {
     preferences: Preferences,
-    recording: bool,
+    recording: shortcut::Recorder,
     startup: bool,
     message: Option<Message>,
     system_locale: Locale,
@@ -113,7 +113,7 @@ impl Sandbox {
         let applied_icon = preferences.icon_variant(ctx.system_theme());
         Self {
             preferences,
-            recording: false,
+            recording: shortcut::Recorder::default(),
             startup: false,
             message: None,
             system_locale: Locale::system(),
@@ -151,7 +151,7 @@ impl Sandbox {
             self.capture_result = None;
             return;
         }
-        if self.selection.is_some() || self.recording {
+        if self.selection.is_some() || self.recording.blocks_input(ctx) {
             return;
         }
         let Some(_) = self.capture_gate.begin() else {
@@ -319,15 +319,8 @@ impl Sandbox {
     }
 
     fn record_key(&mut self, ctx: &egui::Context) {
-        match ctx.input(|input| shortcut::record(&input.events)) {
-            Some(shortcut::Recording::Cancel) => self.recording = false,
-            Some(shortcut::Recording::Binding(binding)) => {
-                self.preferences.binding = binding;
-                self.recording = false;
-                self.message = None;
-            }
-            Some(shortcut::Recording::Invalid(error)) => self.message = Some(error),
-            None => {}
+        if let Some(binding) = self.recording.update(ctx) {
+            self.preferences.binding = binding;
         }
     }
 
@@ -352,7 +345,7 @@ impl Sandbox {
     fn show(&mut self, ui: &mut egui::Ui) {
         // A virtual window shares the root event stream. Preserve modal ownership
         // through this frame even when Escape just finished recording or a menu.
-        let input_was_blocked = self.recording || self.menu.is_some();
+        let input_was_blocked = self.recording.blocks_input(ui.ctx()) || self.menu.is_some();
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         self.update_icon(ui.ctx());
@@ -382,9 +375,10 @@ impl Sandbox {
                     .map(|pin| pin.id)
             });
         }
-        if self.recording {
+        if self.recording.active() {
             self.record_key(ui.ctx());
-        } else if self.selection.is_none()
+        } else if !self.recording.blocks_input(ui.ctx())
+            && self.selection.is_none()
             && self.capture_gate.active().is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|input| self.preferences.binding.capture_requested(&input.events))
@@ -463,7 +457,7 @@ impl Sandbox {
                         global_shortcut: false,
                         preferences: self.preferences,
                         icon_texture: Some(&self.icon),
-                        recording: self.recording,
+                        recording: &self.recording,
                         idle: self.capture_gate.active().is_none(),
                         capturing: self.capture_gate.active().is_some(),
                         demo: true,
@@ -501,8 +495,7 @@ impl Sandbox {
                 }
             }
             Some(launcher::Action::RecordShortcut) => {
-                self.recording = !self.recording;
-                self.message = None;
+                self.recording.toggle(ui.ctx());
             }
             Some(launcher::Action::Appearance(theme, icon)) => {
                 self.preferences.theme = theme;
@@ -523,7 +516,8 @@ impl Sandbox {
             self.menu = None;
         }
         let events = RefCell::new(Vec::new());
-        let pins_interactive = !input_was_blocked && !self.recording && self.menu.is_none();
+        let pins_interactive =
+            !input_was_blocked && !self.recording.blocks_input(ui.ctx()) && self.menu.is_none();
         for pin in &mut self.pins {
             let pointer = ui.ctx().pointer_latest_pos();
             if let Some(gesture) = &pin.gesture
