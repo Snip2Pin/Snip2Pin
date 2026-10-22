@@ -807,7 +807,7 @@ fn pin_list_defaults_to_three_and_a_half_font_rows_and_resizes_with_real_pointer
         assert!(frame(narrow, vec![pointer(close, true)], &pins).1.is_none());
         assert!(matches!(
             frame(narrow, vec![pointer(close, false)], &pins).1,
-            Some(Action::Pin(super::super::pin::Action::ClosePin(1)))
+            Some(Action::Pin(super::super::pin::Action::ClosePin(2)))
         ));
     }
 }
@@ -2017,4 +2017,127 @@ fn removing_a_row_during_a_press_cannot_close_the_pin_that_takes_its_place() {
         frame(vec![pointer(false)], &pins[1..]).1.is_none(),
         "releasing an old row's press must not close a different pin"
     );
+}
+
+#[test]
+fn pin_list_grip_reorders_rows_without_selecting_or_changing_model_order() {
+    for locale in [Locale::English, Locale::Chinese] {
+        let ctx = egui::Context::default();
+        let size = egui::vec2(LAUNCHER.window[0], 1000.0);
+        let texture = ctx.load_texture(
+            "generated-order",
+            egui::ColorImage::filled([8, 8], egui::Color32::WHITE),
+            Default::default(),
+        );
+        let pins = [(30, "Charlie"), (20, "Bravo"), (10, "Alpha")].map(|(id, name)| PinEntry {
+            id,
+            name,
+            texture: &texture,
+            size: [8, 8],
+            display_size: None,
+            locked: id == 30,
+            selected: false,
+        });
+        let frame = |events| frame_with_pins(&ctx, size, events, false, locale, &pins);
+        let _ = frame(vec![]);
+        let initial = frame(vec![]).0;
+        let well = initial
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.size() == Vec2::from(LAUNCHER.pin_thumbnail) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("thumbnail");
+        let start = egui::pos2(
+            well.left() - LAUNCHER.pin_row_padding[0] / 2.0,
+            well.center().y,
+        );
+        // Dropping over another row's close button must sort, never close it.
+        let end = egui::pos2(
+            visible_text(&initial, "×").center().x,
+            visible_text(&initial, "Alpha").bottom() + 10.0,
+        );
+        let pointer = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        // A handle click, Escape, and release outside the list must not reorder.
+        for cancel in 0..3 {
+            for events in [vec![Event::PointerMoved(start)], vec![pointer(start, true)]] {
+                assert!(frame(events).1.is_none());
+            }
+            if cancel != 0 {
+                assert!(frame(vec![Event::PointerMoved(end)]).1.is_none());
+            }
+            if cancel == 1 {
+                assert!(
+                    frame(vec![Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    }])
+                    .1
+                    .is_none()
+                );
+            }
+            let release = if cancel == 2 {
+                egui::pos2(size.x + 20.0, end.y)
+            } else if cancel == 1 {
+                end
+            } else {
+                start
+            };
+            assert!(
+                frame(vec![Event::PointerMoved(release), pointer(release, false)])
+                    .1
+                    .is_none()
+            );
+            let output = frame(vec![]).0;
+            assert!(
+                visible_text(&output, "Charlie").center().y
+                    < visible_text(&output, "Bravo").center().y
+            );
+            assert!(
+                visible_text(&output, "Bravo").center().y
+                    < visible_text(&output, "Alpha").center().y
+            );
+            assert!(!egui::DragAndDrop::has_any_payload(&ctx));
+        }
+        for events in [
+            vec![Event::PointerMoved(start)],
+            vec![pointer(start, true)],
+            vec![Event::PointerMoved(start + egui::vec2(0.0, 12.0))],
+            vec![Event::PointerMoved(end)],
+            vec![pointer(end, false)],
+        ] {
+            assert!(
+                frame(events).1.is_none(),
+                "reorder must not select, lock, close or rename"
+            );
+        }
+        let reordered = frame(vec![]).0;
+        assert!(
+            visible_text(&reordered, "Bravo").center().y
+                < visible_text(&reordered, "Alpha").center().y
+        );
+        assert!(
+            visible_text(&reordered, "Alpha").center().y
+                < visible_text(&reordered, "Charlie").center().y,
+            "the locked first row must move after the last row"
+        );
+        assert_eq!(
+            pins.map(|pin| pin.id),
+            [30, 20, 10],
+            "list order must not mutate the host's pin storage"
+        );
+    }
 }

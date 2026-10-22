@@ -221,7 +221,7 @@ impl Sandbox {
             }
             pin_view::Action::ClosePin(id) => {
                 if self.pins.iter().any(|pin| pin.id == id && !pin.locked) {
-                    launcher::forget_pin_name(ui.ctx(), id);
+                    launcher::forget_pin(ui.ctx(), id);
                     pin_view::forget_input(ui.ctx(), id);
                 }
                 self.pins.retain(|pin| pin.id != id || pin.locked);
@@ -452,16 +452,14 @@ impl eframe::App for Sandbox {
             Some(launcher::Action::Capture) => self.capture(ui.ctx()),
             Some(launcher::Action::ClosePins) => self.pins.retain(|pin| {
                 if !pin.locked {
-                    launcher::forget_pin_name(ui.ctx(), pin.id);
+                    launcher::forget_pin(ui.ctx(), pin.id);
                     pin_view::forget_input(ui.ctx(), pin.id);
                 }
                 pin.locked
             }),
             Some(launcher::Action::Pin(action)) => self.pin_action(action, ui, bounds),
             Some(launcher::Action::SelectPin(id)) => {
-                if let Some(index) = self.pins.iter().position(|pin| pin.id == id) {
-                    let pin = self.pins.remove(index);
-                    self.pins.push(pin);
+                if self.pins.iter().any(|pin| pin.id == id) {
                     self.focused_pin = Some(id);
                     ui.ctx().move_to_top(egui::LayerId::new(
                         egui::Order::Foreground,

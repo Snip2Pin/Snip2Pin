@@ -215,7 +215,7 @@ struct Pin {
 
 impl Pin {
     fn release(self, id: u64, ctx: &egui::Context) {
-        launcher::forget_pin_name(ctx, id);
+        launcher::forget_pin(ctx, id);
         ui::pin::forget_input(ctx, id);
         ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
         if self.first_frame_drawn.load(Ordering::Acquire) {
