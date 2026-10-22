@@ -20,6 +20,8 @@ license declaration but no separate full license file at their published commits
 The embedded fonts are collected separately from their registry package. All
 four actual font notice files are retained, including the Hack/Bitstream text,
 and checksummed so a license change requires review.
+The `egui-icons.ttf` subset in egui 0.37 uses the same retained MIT notice as
+`emoji-icon-font.ttf`, as documented in the upstream font package's `egui-icons.txt`.
 
 `NSIS-3.13-COPYING.txt` is the official distribution's copyright and license
 information, included under a Windows-installer-only heading. Its provenance is:
