@@ -84,6 +84,7 @@ jobs:
           if ($imports -match '(?i)^\s*Name:\s*(vcruntime|msvcp|msvcr|concrt|vcomp)[^\r\n]*\.dll\s*$') {
             throw 'Windows packages must not require a separately installed Visual C++ runtime'
           }
+          ./packaging/windows/check-resources.ps1 -Executable "target/$env:CARGO_BUILD_TARGET/release/snip2pin.exe"
       - name: Package structure and CLI smoke check (no credentials/upload)
         run: cargo xtask package ${{ matrix.target }} debug
       - name: macOS packaging storage

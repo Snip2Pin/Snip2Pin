@@ -1,7 +1,8 @@
-//! Generate runtime PNGs without linking SVG rendering into the application.
+//! Generate native icon assets without linking SVG rendering into the application.
 use crate::Result;
 
 const ICONS: [(&str, u32); 3] = [("line", 1024), ("metal", 1024), ("status", 32)];
+const WINDOWS_ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 
 pub fn generate() -> Result {
     for (name, size) in ICONS {
@@ -11,7 +12,29 @@ pub fn generate() -> Result {
         )?
         .save(format!("assets/icons/{name}.png"))?;
     }
+    let svg = std::fs::read_to_string("assets/icons/line.svg")?;
+    std::fs::write("assets/icons/line.ico", windows_icon(&svg)?)?;
     Ok(())
+}
+
+fn windows_icon(svg: &str) -> Result<Vec<u8>> {
+    use image::codecs::ico::{IcoEncoder, IcoFrame};
+
+    let frames = WINDOWS_ICON_SIZES
+        .into_iter()
+        .map(|size| {
+            let pixels = render(svg, size)?;
+            Ok(IcoFrame::as_png(
+                &pixels,
+                size,
+                size,
+                image::ExtendedColorType::Rgba8,
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut bytes = Vec::new();
+    IcoEncoder::new(&mut bytes).encode_images(&frames)?;
+    Ok(bytes)
 }
 
 fn render(svg: &str, size: u32) -> Result<image::RgbaImage> {
@@ -55,5 +78,16 @@ mod tests {
                 "{name} PNG differs from its SVG source; run cargo xtask icons"
             );
         }
+    }
+
+    #[test]
+    fn windows_icon_contains_the_generated_vector_sizes() {
+        let root = crate::root().join("assets/icons/line");
+        let svg = std::fs::read_to_string(root.with_extension("svg")).expect("SVG source");
+        assert_eq!(
+            std::fs::read(root.with_extension("ico")).expect("LFS Windows icon"),
+            windows_icon(&svg).expect("multi-size Windows icon"),
+            "Windows ICO differs from its SVG source; run cargo xtask icons"
+        );
     }
 }

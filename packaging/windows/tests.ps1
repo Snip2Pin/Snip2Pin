@@ -48,6 +48,7 @@ try {
     $installPath = Join-Path $temporary 'upgrade with spaces'
     $registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin'
     $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Snip2Pin/Snip2Pin.lnk'
+    $desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Snip2Pin.lnk'
     $uninstaller = Join-Path $installPath 'Uninstall.exe'
     try {
         if ((Invoke-Fixture $installer "/S /D=$installPath") -ne 0) { throw 'Initial fixture installation failed' }
@@ -56,6 +57,7 @@ try {
         $hashes = @{}
         foreach ($file in $installedFiles) { $hashes[$file] = (Get-FileHash -LiteralPath (Join-Path $installPath $file)).Hash }
         $shortcutHash = (Get-FileHash -LiteralPath $shortcut).Hash
+        $desktopShortcutHash = (Get-FileHash -LiteralPath $desktopShortcut).Hash
         $metadata = Get-ItemProperty -LiteralPath $registration | ConvertTo-Json -Compress
 
         Set-Content -LiteralPath $source -Value 'fn main() { std::fs::write(std::env::current_exe().unwrap().with_extension("launched"), b"unexpected upgrade launch").unwrap(); }'
@@ -74,6 +76,7 @@ try {
                     if ((Get-FileHash -LiteralPath (Join-Path $installPath $file)).Hash -ne $hashes[$file]) { throw "Rejected upgrade changed $file" }
                 }
                 if ((Get-FileHash -LiteralPath $shortcut).Hash -ne $shortcutHash -or
+                    (Get-FileHash -LiteralPath $desktopShortcut).Hash -ne $desktopShortcutHash -or
                     (Get-ItemProperty -LiteralPath $registration | ConvertTo-Json -Compress) -ne $metadata) {
                     throw 'Rejected upgrade changed registration or shortcut'
                 }
@@ -89,6 +92,7 @@ try {
             (Test-Path -LiteralPath (Join-Path $installPath 'snip2pin.launched'))) { throw 'Upgrade metadata or launch behavior is incorrect' }
         if ((Invoke-Fixture $uninstaller "/S _?=$installPath") -ne 0) { throw 'Upgraded fixture uninstall failed' }
         if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $shortcut) -or
+            (Test-Path -LiteralPath $desktopShortcut) -or
             (Test-Path -LiteralPath (Join-Path $installPath 'snip2pin.exe')) -or
             -not (Test-Path -LiteralPath (Join-Path $installPath 'unrelated.txt'))) { throw 'Upgrade/uninstall boundaries failed' }
     } finally {

@@ -1,6 +1,9 @@
 Unicode true
 RequestExecutionLevel user
 Name "Snip2Pin"
+!define APP_ICON "${__FILEDIR__}\..\..\assets\icons\line.ico"
+Icon "${APP_ICON}"
+UninstallIcon "${APP_ICON}"
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Snip2Pin"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "InstallLocation"
@@ -18,6 +21,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
 
 LicenseData "${PAYLOAD}\LICENSE"
 Page license
+Page components
 Page directory
 Page instfiles
 UninstPage uninstConfirm
@@ -35,6 +39,7 @@ UninstPage instfiles
 !macroend
 
 Section "Snip2Pin"
+    SectionIn RO
     SetShellVarContext current
     SetRegView 64
     !insertmacro CheckWritable "snip2pin.exe"
@@ -76,6 +81,17 @@ Section "Snip2Pin"
     install_complete:
 SectionEnd
 
+Section "Desktop shortcut"
+    SetShellVarContext current
+    ClearErrors
+    CreateShortcut "$DESKTOP\Snip2Pin.lnk" "$INSTDIR\snip2pin.exe"
+    IfErrors 0 desktop_complete
+        SetErrorLevel 1
+        MessageBox MB_OK "Unable to create the desktop shortcut." /SD IDOK
+        Abort
+    desktop_complete:
+SectionEnd
+
 Section "Uninstall"
     SetShellVarContext current
     SetRegView 64
@@ -91,6 +107,7 @@ Section "Uninstall"
     Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
     Delete "$INSTDIR\Uninstall.exe"
     Delete "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk"
+    Delete "$DESKTOP\Snip2Pin.lnk"
     RMDir "$SMPROGRAMS\Snip2Pin"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin"
     ; Deliberately non-recursive: preserve unrelated files and user settings.

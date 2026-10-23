@@ -55,6 +55,8 @@ A small Rust app that keeps screenshots above other windows.
 | Windows 10/11，x64 | 运行 Setup.exe，或解压便携 ZIP |
 | Linux，x64 | 解压 tar.gz；Ubuntu 24.04 可使用 .deb |
 
+Windows 安装版提供开始菜单入口，可选择创建桌面快捷方式，并可从系统设置卸载。便携 ZIP 解压后运行 `snip2pin.exe`，无需安装。
+
 Arch Linux 的 AUR 配方计划在首次发版后提供，目前尚未提交。
 
 macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即可。文件名带 `-unverified` 的包在 macOS 上未经公证，在 Windows 上未签名，系统可能阻止打开。macOS 用户可按 [Apple 指引](https://support.apple.com/zh-cn/102445)确认；更新此类包后，可能需要重新授权截屏。
@@ -114,6 +116,8 @@ Download the package for your system from [GitHub Releases](https://github.com/S
 | macOS 13+, Apple silicon / Intel | Open the DMG and drag the app to Applications |
 | Windows 10/11, x64 | Run Setup.exe or extract the portable ZIP |
 | Linux, x64 | Extract tar.gz; use .deb on Ubuntu 24.04 |
+
+The Windows installer adds a Start menu entry and offers a desktop shortcut; uninstall it through Windows Settings. For the portable ZIP, extract it and run `snip2pin.exe` without installing.
 
 An AUR recipe is planned after the first release. It has not been submitted yet.
 

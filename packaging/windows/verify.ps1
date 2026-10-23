@@ -37,7 +37,9 @@ if ($Distribution -eq 'signed' -and $appSignature.SignerCertificate.Thumbprint -
 if (-not $InstallSmoke) { return }
 $registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin'
 $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Snip2Pin'
-if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $startMenu)) { throw 'Refusing to modify an existing installation' }
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Snip2Pin.lnk'
+if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $startMenu) -or
+    (Test-Path -LiteralPath $desktopShortcut)) { throw 'Refusing to modify an existing installation' }
 $installed = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
 $uninstaller = Join-Path $installed 'Uninstall.exe'
 try {
@@ -53,11 +55,19 @@ try {
         throw 'Application, installer and uninstaller publishers differ'
     }
     if ((Get-ItemProperty -LiteralPath $registration).InstallLocation -ne $installed -or
-        -not (Test-Path -LiteralPath (Join-Path $startMenu 'Snip2Pin.lnk'))) { throw 'Per-user installation metadata is incomplete' }
+        -not (Test-Path -LiteralPath $desktopShortcut)) { throw 'Per-user installation metadata is incomplete' }
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($link in @((Join-Path $startMenu 'Snip2Pin.lnk'), $desktopShortcut)) {
+        if (-not (Test-Path -LiteralPath $link) -or
+            $shell.CreateShortcut($link).TargetPath -ne (Join-Path $installed 'snip2pin.exe')) {
+            throw 'Application shortcut is missing or has an incorrect target'
+        }
+    }
     # An unrelated file must survive uninstall; settings outside this directory are untouched.
     Set-Content -LiteralPath (Join-Path $installed 'unrelated.txt') -Value 'preserve'
     Invoke-Silent $uninstaller "/S _?=$installed"
     if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath (Join-Path $startMenu 'Snip2Pin.lnk')) -or
+        (Test-Path -LiteralPath $desktopShortcut) -or
         (Test-Path -LiteralPath (Join-Path $installed 'snip2pin.exe')) -or
         -not (Test-Path -LiteralPath (Join-Path $installed 'unrelated.txt'))) { throw 'Per-user uninstall did not preserve the expected boundaries' }
 } finally {
