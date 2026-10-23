@@ -432,6 +432,33 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_screen_layers_are_visible_only_for_capture_or_recovery_notice() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let visible = |app: &Snip2Pin| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        output.viewport_output[&layer_id(0)]
+            .builder
+            .visible
+            .unwrap_or(true)
+    };
+    assert!(!visible(&app), "an idle layer must not occupy the desktop");
+    let request = app.gate.begin().expect("capture request");
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    assert!(visible(&app), "capture must reveal the prepared layer");
+    app.reset_capture(&ctx);
+    assert!(!visible(&app), "cancellation must unmap the layer");
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    assert!(visible(&app), "a recovery notice must remain visible");
+    app.clear_unlock_hint(&ctx);
+    assert!(!visible(&app), "expired notices must release the desktop");
+}
+
 #[test]
 fn selection_layer_does_not_retry_native_position_changes() {
     let ctx = egui::Context::default();

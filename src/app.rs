@@ -1660,6 +1660,9 @@ impl Snip2Pin {
                     .with_always_on_top()
                     .with_active(false)
                     .with_taskbar(false)
+                    // Mutter treats a mapped monitor-sized borderless window
+                    // as fullscreen, even when its content is transparent.
+                    .with_visible(!cfg!(target_os = "linux") || active || hint_area.is_some())
                     .with_mouse_passthrough(!active),
                 move |ui, _| {
                     // Root logic reports any pin-adapter failure.
