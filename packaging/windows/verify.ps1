@@ -58,9 +58,11 @@ try {
         -not (Test-Path -LiteralPath $desktopShortcut)) { throw 'Per-user installation metadata is incomplete' }
     $shell = New-Object -ComObject WScript.Shell
     foreach ($link in @((Join-Path $startMenu 'Snip2Pin.lnk'), $desktopShortcut)) {
-        if (-not (Test-Path -LiteralPath $link) -or
-            $shell.CreateShortcut($link).TargetPath -ne (Join-Path $installed 'snip2pin.exe')) {
-            throw 'Application shortcut is missing or has an incorrect target'
+        if (-not (Test-Path -LiteralPath $link)) { throw 'Application shortcut is missing' }
+        $properties = $shell.CreateShortcut($link)
+        $target = Join-Path $installed 'snip2pin.exe'
+        if ($properties.TargetPath -ne $target -or $properties.IconLocation -ne "$target,0") {
+            throw 'Application shortcut has an incorrect target or icon location'
         }
     }
     # An unrelated file must survive uninstall; settings outside this directory are untouched.
