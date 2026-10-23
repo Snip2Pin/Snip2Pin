@@ -432,8 +432,8 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
     );
     assert_eq!(
         output.viewport_output[&layer_id(0)].builder.window_type,
-        Some(egui::X11WindowType::Utility),
-        "X11 capture layers must avoid normal-window placement and fullscreen heuristics"
+        Some(egui::X11WindowType::Dock),
+        "X11 capture layers must cover panels without work-area constraints or native fullscreen"
     );
 }
 

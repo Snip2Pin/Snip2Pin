@@ -1660,9 +1660,9 @@ impl Snip2Pin {
                     .with_always_on_top()
                     .with_active(false)
                     .with_taskbar(false)
-                    // On X11, utility layers retain their requested monitor bounds
-                    // instead of normal-window placement/fullscreen heuristics.
-                    .with_window_type(egui::X11WindowType::Utility)
+                    // X11 screen overlays cover panels too; normal and utility
+                    // windows remain constrained to the desktop work area.
+                    .with_window_type(egui::X11WindowType::Dock)
                     // Idle layers must not participate in desktop stacking.
                     .with_visible(!cfg!(target_os = "linux") || active || hint_area.is_some())
                     .with_mouse_passthrough(!active),
