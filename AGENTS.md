@@ -143,6 +143,11 @@ Do not bypass protections or push directly to `main`. Single-maintainer PRs do
 not require a second reviewer. Describe user-visible acceptance criteria before
 implementation; separate automatic coverage from actual native interaction.
 Keep repository rules in `.github/rulesets/` consistent with GitHub settings.
+After work is merged or superseded, promptly remove its unused local/remote
+branches and worktrees after checking for uncommitted changes, active work and
+retained build artifacts. Verify squash/cherry-pick replacements before deleting
+old branches; preserve ongoing validation and release inputs. Keep machine-local
+workspace paths out of the repository.
 
 PR titles and every branch commit subject must use `type(scope)!: description`;
 scope and `!` are optional. Types: feat, fix, docs, refactor, perf, test, build,
