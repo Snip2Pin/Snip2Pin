@@ -107,6 +107,7 @@ jobs:
             .build/packages/debug/${{ matrix.target }}/*.tar.gz
             .build/packages/debug/${{ matrix.target }}/*.zip
             .build/packages/debug/${{ matrix.target }}/*.json
+            .build/unverified-final/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 1
       - name: Minimum supported Rust
