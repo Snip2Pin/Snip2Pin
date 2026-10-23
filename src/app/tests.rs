@@ -437,9 +437,9 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 #[test]
-fn linux_screen_layers_are_visible_only_for_capture_or_recovery_notice() {
+fn screen_layers_are_visible_only_for_capture_or_recovery_notice() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);

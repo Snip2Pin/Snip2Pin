@@ -1663,8 +1663,9 @@ impl Snip2Pin {
                     // X11 screen overlays cover panels too; normal and utility
                     // windows remain constrained to the desktop work area.
                     .with_window_type(egui::X11WindowType::Dock)
-                    // Idle layers must not participate in desktop stacking.
-                    .with_visible(!cfg!(target_os = "linux") || active || hint_area.is_some())
+                    // macOS keeps warmed layers for native level/bounds setup.
+                    // Other desktops must not stack screen-sized idle windows.
+                    .with_visible(cfg!(target_os = "macos") || active || hint_area.is_some())
                     .with_mouse_passthrough(!active),
                 move |ui, _| {
                     // Root logic reports any pin-adapter failure.
