@@ -49,6 +49,8 @@ try {
     $registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin'
     $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Snip2Pin/Snip2Pin.lnk'
     $desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Snip2Pin.lnk'
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $otherStartup = '"C:\Portable Snip2Pin\snip2pin.exe" --background'
     $uninstaller = Join-Path $installPath 'Uninstall.exe'
     try {
         if ((Invoke-Fixture $installer "/S /D=$installPath") -ne 0) { throw 'Initial fixture installation failed' }
@@ -90,12 +92,23 @@ try {
         }
         if ((Get-ItemProperty -LiteralPath $registration).DisplayVersion -ne '0.0.1' -or
             (Test-Path -LiteralPath (Join-Path $installPath 'snip2pin.launched'))) { throw 'Upgrade metadata or launch behavior is incorrect' }
+        if ($null -ne (Get-ItemProperty -LiteralPath $runKey -Name 'Snip2Pin' -ErrorAction SilentlyContinue)) {
+            throw 'Refusing to replace an existing login entry'
+        }
+        New-Item -Path $runKey -Force | Out-Null
+        Set-ItemProperty -LiteralPath $runKey -Name 'Snip2Pin' -Value $otherStartup
         if ((Invoke-Fixture $uninstaller "/S _?=$installPath") -ne 0) { throw 'Upgraded fixture uninstall failed' }
+        if ((Get-ItemPropertyValue -LiteralPath $runKey -Name 'Snip2Pin') -ne $otherStartup) {
+            throw 'Uninstall removed a separate portable copy login entry'
+        }
         if ((Test-Path -LiteralPath $registration) -or (Test-Path -LiteralPath $shortcut) -or
             (Test-Path -LiteralPath $desktopShortcut) -or
             (Test-Path -LiteralPath (Join-Path $installPath 'snip2pin.exe')) -or
             -not (Test-Path -LiteralPath (Join-Path $installPath 'unrelated.txt'))) { throw 'Upgrade/uninstall boundaries failed' }
     } finally {
+        if ((Get-ItemProperty -LiteralPath $runKey -Name 'Snip2Pin' -ErrorAction SilentlyContinue).Snip2Pin -eq $otherStartup) {
+            Remove-ItemProperty -LiteralPath $runKey -Name 'Snip2Pin'
+        }
         if ((Test-Path -LiteralPath $registration) -and (Test-Path -LiteralPath $uninstaller)) {
             if ((Invoke-Fixture $uninstaller "/S _?=$installPath") -ne 0) { throw 'Fixture cleanup uninstall failed' }
         }

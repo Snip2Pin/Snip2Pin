@@ -115,6 +115,11 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk"
     Delete "$DESKTOP\Snip2Pin.lnk"
     RMDir "$SMPROGRAMS\Snip2Pin"
+    ; Do not remove a login entry pointing to a separate portable copy.
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Snip2Pin"
+    StrCmp $0 '$\"$INSTDIR\snip2pin.exe$\" --background' 0 startup_preserved
+        DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Snip2Pin"
+    startup_preserved:
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin"
     ; Deliberately non-recursive: preserve unrelated files and user settings.
     RMDir "$INSTDIR"
