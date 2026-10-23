@@ -204,12 +204,12 @@ runners or containers and temporary destinations; never install on a developer's
 machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
 For explicitly requested isolated native interaction tests, manual CI may retain
-unsigned debug archives, their prepared installers and source manifests for one day via
-`validation_artifacts`. The additional `optimized_validation` opt-in may retain
-an optimized Linux test package for the same period to distinguish runtime
-performance from functional failures. Compiler optimization is not publication;
-these test artifacts are not formal release candidates. Keep both opt-ins
-disabled on push/PR events, without
+unsigned archives, their prepared installers and source manifests for one day via
+`validation_artifacts`. The `validation_profile` choice defaults to debug; an
+explicit manual test may select release optimization to distinguish runtime
+performance from functional failures. Ordinary push/PR checks always use debug
+packages. Compiler optimization is not publication; these test artifacts are not
+formal release candidates. Keep retention disabled on push/PR events, without
 signing, tags, Releases or release Environment access; never publish these builds.
 Formal publication requires a complete set of four native targets, matching
 version/source SHA, checksums, native checks for the explicitly selected

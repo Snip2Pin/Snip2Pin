@@ -90,9 +90,10 @@ CI 同时检查 pre-commit 配置并全量运行官方通用钩子，避免本�
 最低 Rust 版本并检查所有目标；开发工具链只在 rust-toolchain.toml 固定。
 
 隔离环境需要原生交互验证包时，可手动运行 `Cross-platform CI`，选择待验收分支并开启
-`validation_artifacts`。仅保留带源提交清单的未签名 debug 包一天；普通 PR 和 push 不上传。
-需要区分运行性能与功能问题时，可同时开启 `optimized_validation`，额外保留同提交的
-Linux 优化测试包一天。复用现有打包和完整性检查，不运行正式候选或发布工作流。
+`validation_artifacts`。仅保留带源提交清单的未签名测试包一天；普通 PR 和 push 不上传。
+`validation_profile` 默认是 `debug`；需要区分运行性能与功能问题时，可选 `release`。
+四个平台复用同一套打包和完整性检查，产物名称包含编译配置和源提交；
+普通 PR 和 push 始终验证 debug 包，不运行正式候选或发布工作流。
 这类构建没有发版权限，不使用签名凭据，不创建标签或 Release，也不能作为正式候选包发布。
 
 CI 对 PR、`main` 推送和手动验证运行，取消同一分支的过期检查。所有 Actions 固定
