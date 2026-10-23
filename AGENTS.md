@@ -203,10 +203,13 @@ tagging or creating Releases. Installation checks use only disposable hosted
 runners or containers and temporary destinations; never install on a developer's
 machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
-Only explicit manual candidate builds upload unsigned release-profile artifacts.
 For explicitly requested isolated native interaction tests, manual CI may retain
 unsigned debug archives, their prepared installers and source manifests for one day via
-`validation_artifacts`. Keep this opt-in disabled on push/PR events, without
+`validation_artifacts`. The additional `optimized_validation` opt-in may retain
+an optimized Linux test package for the same period to distinguish runtime
+performance from functional failures. Compiler optimization is not publication;
+these test artifacts are not formal release candidates. Keep both opt-ins
+disabled on push/PR events, without
 signing, tags, Releases or release Environment access; never publish these builds.
 Formal publication requires a complete set of four native targets, matching
 version/source SHA, checksums, native checks for the explicitly selected

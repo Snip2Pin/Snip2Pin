@@ -9,6 +9,10 @@ on:
         description: Keep unsigned debug packages for isolated native interaction tests (1 day)
         type: boolean
         default: false
+      optimized_validation:
+        description: Also keep an optimized Linux test package (requires validation_artifacts, 1 day)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -108,6 +112,24 @@ jobs:
             .build/packages/debug/${{ matrix.target }}/*.zip
             .build/packages/debug/${{ matrix.target }}/*.json
             .build/unverified-final/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 1
+      - name: Prepare explicitly requested optimized Linux test package
+        if: github.event_name == 'workflow_dispatch' && inputs.validation_artifacts && inputs.optimized_validation && runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo xtask package ${{ matrix.target }} release
+          cargo xtask prepare-unverified .build/packages/release/${{ matrix.target }} .build/optimized-validation/${{ matrix.target }} ${{ matrix.target }}
+          cargo xtask verify-native .build/optimized-validation/${{ matrix.target }} ${{ matrix.target }} unverified
+      - name: Keep explicitly requested optimized Linux test package
+        if: github.event_name == 'workflow_dispatch' && inputs.validation_artifacts && inputs.optimized_validation && runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-validation-optimized-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            .build/packages/release/${{ matrix.target }}/*.tar.gz
+            .build/packages/release/${{ matrix.target }}/*.json
+            .build/optimized-validation/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 1
       - name: Minimum supported Rust
