@@ -1,6 +1,11 @@
 Unicode true
 RequestExecutionLevel user
 Name "Snip2Pin"
+!define APP_ICON "${__FILEDIR__}\..\..\assets\icons\line.ico"
+Icon "${APP_ICON}"
+UninstallIcon "${APP_ICON}"
+!define SHCNE_UPDATEITEM 0x00002000
+!define SHCNF_PATHW 0x0005
 OutFile "${OUTPUT}"
 InstallDir "$LOCALAPPDATA\Programs\Snip2Pin"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "InstallLocation"
@@ -18,6 +23,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
 
 LicenseData "${PAYLOAD}\LICENSE"
 Page license
+Page components
 Page directory
 Page instfiles
 UninstPage uninstConfirm
@@ -35,6 +41,7 @@ UninstPage instfiles
 !macroend
 
 Section "Snip2Pin"
+    SectionIn RO
     SetShellVarContext current
     SetRegView 64
     !insertmacro CheckWritable "snip2pin.exe"
@@ -58,7 +65,10 @@ Section "Snip2Pin"
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     IfErrors install_failed
     CreateDirectory "$SMPROGRAMS\Snip2Pin"
-    CreateShortcut "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk" "$INSTDIR\snip2pin.exe"
+    CreateShortcut "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk" "$INSTDIR\snip2pin.exe" "" "$INSTDIR\snip2pin.exe" 0
+    IfErrors install_failed
+    ; Refresh only this application's link, including upgrades from an EXE without icons.
+    System::Call 'shell32::SHChangeNotify(i ${SHCNE_UPDATEITEM}, i ${SHCNF_PATHW}, w "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk", p 0)'
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "DisplayName" "Snip2Pin"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "DisplayVersion" "${VERSION}"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin" "InstallLocation" "$INSTDIR"
@@ -76,6 +86,18 @@ Section "Snip2Pin"
     install_complete:
 SectionEnd
 
+Section "Desktop shortcut"
+    SetShellVarContext current
+    ClearErrors
+    CreateShortcut "$DESKTOP\Snip2Pin.lnk" "$INSTDIR\snip2pin.exe" "" "$INSTDIR\snip2pin.exe" 0
+    IfErrors 0 desktop_complete
+        SetErrorLevel 1
+        MessageBox MB_OK "Unable to create the desktop shortcut." /SD IDOK
+        Abort
+    desktop_complete:
+    System::Call 'shell32::SHChangeNotify(i ${SHCNE_UPDATEITEM}, i ${SHCNF_PATHW}, w "$DESKTOP\Snip2Pin.lnk", p 0)'
+SectionEnd
+
 Section "Uninstall"
     SetShellVarContext current
     SetRegView 64
@@ -91,7 +113,13 @@ Section "Uninstall"
     Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
     Delete "$INSTDIR\Uninstall.exe"
     Delete "$SMPROGRAMS\Snip2Pin\Snip2Pin.lnk"
+    Delete "$DESKTOP\Snip2Pin.lnk"
     RMDir "$SMPROGRAMS\Snip2Pin"
+    ; Do not remove a login entry pointing to a separate portable copy.
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Snip2Pin"
+    StrCmp $0 '$\"$INSTDIR\snip2pin.exe$\" --background' 0 startup_preserved
+        DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Snip2Pin"
+    startup_preserved:
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Snip2Pin"
     ; Deliberately non-recursive: preserve unrelated files and user settings.
     RMDir "$INSTDIR"

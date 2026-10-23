@@ -333,6 +333,36 @@ pub fn finish_capture(ctx: &egui::Context) {
     ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
 }
 
+/// A GUI-subsystem executable has no visible stderr when opened from Explorer.
+#[cfg(target_os = "windows")]
+pub fn show_startup_error(error: &str) {
+    use snip2pin::{i18n::Text, settings::Preferences};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let language = snip2pin::settings::path()
+        .and_then(|path| Preferences::load(&path).ok())
+        .unwrap_or_default()
+        .language;
+    let locale = language.resolve(snip2pin::i18n::Locale::system());
+    let title: Vec<u16> = locale
+        .text(Text::StartupFailed)
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    let body: Vec<u16> = error.encode_utf16().chain([0]).collect();
+    // SAFETY: This ownerless native dialog can run even when graphics setup
+    // failed. Both null-terminated buffers remain owned until it returns.
+    #[allow(unsafe_code)]
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
 pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {
     #[cfg(target_os = "macos")]
     if std::env::args().any(|arg| arg == "--background") {

@@ -55,6 +55,8 @@ A small Rust app that keeps screenshots above other windows.
 | Windows 10/11，x64 | 运行 Setup.exe，或解压便携 ZIP |
 | Linux，x64 | 解压 tar.gz；Ubuntu 24.04 可使用 .deb |
 
+Windows 安装版提供开始菜单入口，可选择创建桌面快捷方式，并可从系统设置卸载。便携 ZIP 解压后运行 `snip2pin.exe`，无需安装。
+
 Arch Linux 的 AUR 配方计划在首次发版后提供，目前尚未提交。
 
 macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即可。文件名带 `-unverified` 的包在 macOS 上未经公证，在 Windows 上未签名，系统可能阻止打开。macOS 用户可按 [Apple 指引](https://support.apple.com/zh-cn/102445)确认；更新此类包后，可能需要重新授权截屏。
@@ -97,6 +99,7 @@ macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即�
 - **截图范围**：窗口截图与预览一致，只截当前显示器内的可见画面，包括遮挡物。未识别到窗口时默认选中整屏，仍可拖动框选。在窗口内框选极小区域时，先长按再拖动。
 - **小图操作**：小图不会为容纳按钮而放大。窄图会从左侧逐个隐藏按钮，复制、锁定和关闭仍可通过右键菜单完成。
 - **系统交互**：边缘缩放遵循各系统惯例。触摸屏支持单指框选或拖动；触摸板双指滑动不会移动贴图。
+- **图形驱动**：需要支持 OpenGL 2.0 或更高版本的驱动；部分虚拟机或远程桌面的基础显示驱动可能不满足要求。
 - **Linux 桌面**：有 X11（包括 XWayland）时使用 X11 窗口后端，支持置顶和全局快捷键。纯 Wayland 的置顶、全局快捷键和绝对定位由合成器决定，不能保证原位置顶；可使用合成器窗口规则或 X11 会话。截图取决于桌面的截图／Portal 支持，托盘需要兼容 StatusNotifier 的桌面。
 - **Linux 安装与字体**：发行包基于 Ubuntu 24.04 / glibc 2.39，不保证旧版发行版兼容。中文界面需要系统中文字体；.deb 推荐安装文泉驿微米黑，已有 Noto CJK 也可使用。tar.gz／Arch 用户可安装 `wqy-microhei` 对应的发行版字体包。
 - **macOS 图标**：Dock 图标即时更新；Finder／启动台图标在本地更新安装时应用保存的选择。
@@ -114,6 +117,8 @@ Download the package for your system from [GitHub Releases](https://github.com/S
 | macOS 13+, Apple silicon / Intel | Open the DMG and drag the app to Applications |
 | Windows 10/11, x64 | Run Setup.exe or extract the portable ZIP |
 | Linux, x64 | Extract tar.gz; use .deb on Ubuntu 24.04 |
+
+The Windows installer adds a Start menu entry and offers a desktop shortcut; uninstall it through Windows Settings. For the portable ZIP, extract it and run `snip2pin.exe` without installing.
 
 An AUR recipe is planned after the first release. It has not been submitted yet.
 
@@ -157,6 +162,7 @@ Images stay in memory; there is no upload or capture history. The OS manages the
 - **Capture area:** Window capture matches the visible preview, including overlaps, and is clipped to the current monitor. Unrecognized areas select the whole display; dragging still selects a region. Hold before dragging a tiny region inside a window.
 - **Small pins:** Small images are not enlarged to fit controls. Narrow pins hide leftmost buttons, while Copy, Lock and Close remain in the context menu.
 - **Native interaction:** Edge resizing follows each OS's conventions. Touchscreens support one-finger selection and dragging; two-finger precision scrolling on a trackpad does not move pins.
+- **Graphics driver:** OpenGL 2.0 or newer is required. Basic display drivers in some virtual machines or remote desktop sessions may not provide it.
 - **Linux desktops:** With X11/XWayland available, the app uses X11 for floating pins and global shortcuts. Pure Wayland controls pinning, global shortcuts and absolute placement; original-position pinning is not guaranteed. Use compositor rules or X11 when needed. Capture depends on desktop screenshot/Portal support, and the tray needs a StatusNotifier host.
 - **Linux packages and fonts:** Packages target Ubuntu 24.04 / glibc 2.39; older distributions are not guaranteed. Chinese UI needs a system CJK font. The .deb recommends WenQuanYi Micro Hei; existing Noto CJK works too. For tar.gz / Arch, install the distribution's Micro Hei font package if needed.
 - **macOS icons:** Dock icons update immediately. Local update installs apply the saved icon to Finder and Launchpad.

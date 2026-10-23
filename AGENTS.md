@@ -19,6 +19,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 运行时只读取预生成图标；SVG 渲染依赖仅放在开发工具中，用 `cargo xtask icons` 再生资源并校验像素一致性，避免把开发工具的代码带进应用。
 - 应用和安装包体积也是验收指标：分别报告可执行文件、解包内容及各发行格式的实际字节数，不用压缩包大小代替安装体积。按实测平台基线设置发版构建预算，变更预算须说明原因；调试包不套用发行包上限。不使用可执行压缩壳，不为缩小体积牺牲可访问性、画质、必要的平台能力或启动速度。
 - Windows MSVC 构建使用 Rust 内置的静态 C 运行库链接选项，避免要求用户另装 Visual C++ 运行库；CI 核对实际发行优化 EXE 的导入表并计入体积预算，不能只以带开发工具的 runner 上能启动作为依赖验收。
+- Windows EXE 在编译时嵌入版本元数据和从同一 SVG 生成的多尺寸 ICO；ICO 使用 Git LFS，资源工具仅作构建依赖。运行时窗口图标不能代替资源管理器和快捷方式的文件图标，不在签名后修改 EXE。安装版使用当前用户目录，提供开始菜单入口和可选桌面快捷方式；卸载清理应用创建的快捷方式与指向本安装目录的自启入口，保留设置、无关文件及其他便携副本的自启入口。便携 ZIP 解压即用，保留许可证与第三方声明。CI 检查实际 EXE 图标资源、快捷方式目标及安装／升级／卸载边界，原生交互验收单独记录。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
@@ -69,6 +70,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 正式发行凭据可保存在受审批保护的 GitHub `release` Environment Secrets；只允许手动、main 来源的签名任务读取。私钥、钥匙串、密码和令牌不得进入 Git、日志、缓存或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。Secrets 并非不可导出的硬件密钥，授权任务可以读取明文，需审阅工作流和依赖并及时轮换泄露凭据。
 - 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
 - Linux 有 X11 显示服务时优先使用 X11/XWayland 窗口后端，保留置顶能力。
+- X11 截图层使用框架提供的 Dock 窗口类型覆盖整个显示器，包括系统面板；不保留工作区空间，不使用普通或 Utility 窗口后再补偿位置。Windows/Linux 空闲时隐藏已准备的截图层，仅截图或解锁提醒期间显示，避免遮挡桌面或影响任务栏／面板层级；macOS 保留已验证的原生层级预热流程。按实际桌面与双屏合成结果验证。
 - 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
 - 只有用户主动操作时才截图，不在启动或后台自动截图。
 - macOS 截屏授权由主线程在用户截图时检查和申请，截图工作线程只读取权限，不能弹授权框。未授权时保留空闲状态，在主页提供打开授权设置、授权后继续和重新打开应用；不后台轮询权限，不反复弹请求，不要求用户猜应用路径或手动修复数据库。
@@ -141,6 +143,11 @@ Do not bypass protections or push directly to `main`. Single-maintainer PRs do
 not require a second reviewer. Describe user-visible acceptance criteria before
 implementation; separate automatic coverage from actual native interaction.
 Keep repository rules in `.github/rulesets/` consistent with GitHub settings.
+After work is merged or superseded, promptly remove its unused local/remote
+branches and worktrees after checking for uncommitted changes, active work and
+retained build artifacts. Verify squash/cherry-pick replacements before deleting
+old branches; preserve ongoing validation and release inputs. Keep machine-local
+workspace paths out of the repository.
 
 PR titles and every branch commit subject must use `type(scope)!: description`;
 scope and `!` are optional. Types: feat, fix, docs, refactor, perf, test, build,
@@ -196,7 +203,14 @@ tagging or creating Releases. Installation checks use only disposable hosted
 runners or containers and temporary destinations; never install on a developer's
 machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
-Only explicit manual candidate builds upload unsigned release-profile artifacts.
+For explicitly requested isolated native interaction tests, manual CI may retain
+unsigned archives, their prepared installers and source manifests for one day via
+`validation_artifacts`. The `validation_profile` choice defaults to debug; an
+explicit manual test may select release optimization to distinguish runtime
+performance from functional failures. Ordinary push/PR checks always use debug
+packages. Compiler optimization is not publication; these test artifacts are not
+formal release candidates. Keep retention disabled on push/PR events, without
+signing, tags, Releases or release Environment access; never publish these builds.
 Formal publication requires a complete set of four native targets, matching
 version/source SHA, checksums, native checks for the explicitly selected
 distribution mode, recorded
