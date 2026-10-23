@@ -430,6 +430,11 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
         }),
         "capture must never enter/leave native fullscreen or switch monitors"
     );
+    assert_eq!(
+        output.viewport_output[&layer_id(0)].builder.window_type,
+        Some(egui::X11WindowType::Utility),
+        "X11 capture layers must avoid normal-window placement and fullscreen heuristics"
+    );
 }
 
 #[cfg(target_os = "linux")]

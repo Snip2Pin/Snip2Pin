@@ -1660,8 +1660,10 @@ impl Snip2Pin {
                     .with_always_on_top()
                     .with_active(false)
                     .with_taskbar(false)
-                    // Mutter treats a mapped monitor-sized borderless window
-                    // as fullscreen, even when its content is transparent.
+                    // On X11, utility layers retain their requested monitor bounds
+                    // instead of normal-window placement/fullscreen heuristics.
+                    .with_window_type(egui::X11WindowType::Utility)
+                    // Idle layers must not participate in desktop stacking.
                     .with_visible(!cfg!(target_os = "linux") || active || hint_area.is_some())
                     .with_mouse_passthrough(!active),
                 move |ui, _| {
