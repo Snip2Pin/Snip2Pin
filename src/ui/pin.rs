@@ -10,7 +10,9 @@ use super::{
 
 mod input;
 mod keyboard;
+mod menu_input;
 mod session;
+pub use menu_input::MenuInput;
 
 /// Release every shared UI state owned by a closed pin, in any host.
 pub fn forget(ctx: &egui::Context, id: u64) {

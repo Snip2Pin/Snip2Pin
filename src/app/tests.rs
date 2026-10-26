@@ -4253,7 +4253,7 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
         let menu = &opened.viewport_output[&pin_menu_id()].builder;
         assert_eq!(menu.inner_size, Some(ui::pin::MENU_SIZE));
         assert_eq!(menu.resizable, Some(false));
-        assert_eq!(menu.active, Some(true));
+        assert_eq!(menu.active, Some(!cfg!(target_os = "linux")));
         let menu_rect =
             egui::Rect::from_min_size(menu.position.expect("anchored menu"), ui::pin::MENU_SIZE);
         let visible = egui::Rect::from_min_max(area.min / zoom, area.max / zoom);
@@ -4432,7 +4432,7 @@ fn capture_completion_and_cancellation_do_not_request_home_activation() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn fallback_popup_requests_keyboard_focus_once_and_remains_managed() {
+fn fallback_popup_keeps_owner_focus_and_remains_managed() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);
@@ -4441,8 +4441,9 @@ fn fallback_popup_requests_keyboard_focus_once_and_remains_managed() {
     setup.textures_delta.clear();
     let menu = &setup.viewport_output[&pin_menu_id()];
     assert_ne!(menu.builder.override_redirect, Some(true));
+    assert_eq!(menu.builder.active, Some(false));
     let paint = menu.viewport_ui_cb.as_ref().expect("menu callback");
-    for first in [true, false] {
+    for _ in 0..2 {
         let mut input = egui::RawInput {
             viewport_id: pin_menu_id(),
             focused: false,
@@ -4462,7 +4463,7 @@ fn fallback_popup_requests_keyboard_focus_once_and_remains_managed() {
             .iter()
             .filter(|command| **command == ViewportCommand::Focus)
             .count();
-        assert_eq!(requests, usize::from(first));
+        assert_eq!(requests, 0);
     }
     assert!(app.pin_menu.is_some());
 }
@@ -4528,7 +4529,7 @@ fn independent_menu_closes_on_escape_focus_loss_or_native_close_without_closing_
 
 #[test]
 fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
-    for close in [false, true] {
+    for (close, focused) in [(false, true), (false, false), (true, true), (true, false)] {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut app = tiny_pin_app(&ctx);
@@ -4543,6 +4544,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
             .expect("menu callback");
         let mut layout_input = egui::RawInput {
             viewport_id: pin_menu_id(),
+            focused,
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 ui::pin::MENU_SIZE,
@@ -4582,7 +4584,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
         ] {
             let mut input = egui::RawInput {
                 viewport_id: pin_menu_id(),
-                focused: true,
+                focused,
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     ui::pin::MENU_SIZE,
@@ -4593,7 +4595,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
             input.viewports.insert(
                 pin_menu_id(),
                 egui::ViewportInfo {
-                    focused: Some(true),
+                    focused: Some(focused),
                     ..Default::default()
                 },
             );

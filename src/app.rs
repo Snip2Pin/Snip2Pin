@@ -108,6 +108,31 @@ fn dispatch_pin(
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
+fn route_pin_menu_input(ctx: &egui::Context, events: &Sender<Event>) {
+    if ctx.viewport_id() != pin_menu_id()
+        && ui::pin::MenuInput::open(ctx)
+        && ctx.current_pass_index() == 0
+    {
+        let dismiss =
+            ctx.input(|input| input.key_pressed(egui::Key::Escape) || input.pointer.any_pressed());
+        let blur = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+        });
+        if dismiss || blur {
+            ui::pin::MenuInput::consume(ctx);
+            let _ = events.send(if dismiss {
+                Event::ClosePinMenu
+            } else {
+                Event::PinMenuFocusLost
+            });
+            ctx.request_repaint_of(ViewportId::ROOT);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ObservedSize {
     /// Content size in native window points.
@@ -170,6 +195,7 @@ pub enum Event {
         position: Option<egui::Pos2>,
     },
     ClosePinMenu,
+    PinMenuFocusLost,
     Tray(crate::tray::Action),
     QuitDecision {
         request_id: u64,
@@ -236,8 +262,7 @@ struct PinMenu {
     pin_id: u64,
     position: Option<egui::Pos2>,
     focused: Arc<AtomicBool>,
-    #[cfg(target_os = "linux")]
-    focus_requested: Arc<AtomicBool>,
+    native_focus: platform::pin_window::AppFocus,
 }
 
 struct QuitConfirmation {
@@ -702,6 +727,16 @@ impl Snip2Pin {
                 observed,
             } => self.move_pin(id, steps, observed, ctx),
             Event::ClosePinMenu => self.close_pin_menu(ctx),
+            Event::PinMenuFocusLost => {
+                let demo = self.demo;
+                self.check_pin_menu_focus(ctx, |menu| {
+                    if demo {
+                        None
+                    } else {
+                        menu.native_focus.current()
+                    }
+                });
+            }
             Event::Tray(action) => self.tray_action(action, ctx),
             Event::QuitDecision {
                 request_id: id,
@@ -1081,15 +1116,28 @@ impl Snip2Pin {
             pin_id: id,
             position,
             focused: Arc::new(AtomicBool::new(false)),
-            #[cfg(target_os = "linux")]
-            focus_requested: Arc::new(AtomicBool::new(false)),
+            native_focus: platform::pin_window::AppFocus::default(),
         });
+        ui::pin::MenuInput::sync(ctx, true);
         ctx.request_repaint_of(pin_menu_id());
     }
 
     fn close_pin_menu(&mut self, ctx: &egui::Context) {
         if self.pin_menu.take().is_some() {
+            ui::pin::MenuInput::sync(ctx, false);
             ctx.send_viewport_cmd_to(pin_menu_id(), ViewportCommand::Close);
+        }
+    }
+
+    fn check_pin_menu_focus(
+        &mut self,
+        ctx: &egui::Context,
+        current: impl FnOnce(&mut PinMenu) -> Option<bool>,
+    ) {
+        // Per-viewport focus caches can temporarily all be false during a
+        // transfer. Close only when the platform confirms an external owner.
+        if self.pin_menu.as_mut().and_then(current) == Some(false) {
+            self.close_pin_menu(ctx);
         }
     }
 
@@ -1840,6 +1888,7 @@ impl Snip2Pin {
     fn show_pins(&self, ctx: &egui::Context) {
         let fallback_menu = self.demo || cfg!(target_os = "linux");
         self.recording.sync_input(ctx);
+        ui::pin::MenuInput::sync(ctx, self.pin_menu.is_some());
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
             let events = self.sender.clone();
@@ -1884,6 +1933,14 @@ impl Snip2Pin {
             };
             ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
                 let recording = ui::shortcut::Recorder::input_blocked(ui.ctx());
+                route_pin_menu_input(ui.ctx(), &events);
+                let blocked = recording || ui::pin::MenuInput::blocks_input(ui.ctx());
+                if blocked {
+                    ui.disable();
+                    if ui.input(|input| input.viewport().close_requested()) {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::CancelClose);
+                    }
+                }
                 let ratio = pin::coordinate_ratio(
                     display_scale,
                     ui.ctx().zoom_factor(),
@@ -1924,11 +1981,11 @@ impl Snip2Pin {
                     })
                     .flatten();
                 let dispatch = |action| {
-                    if !recording {
+                    if !blocked {
                         dispatch_pin(action, &events, &ctx, menu_position);
                     }
                 };
-                if recording {
+                if blocked {
                     ui::pin::forget_input(&ctx, id);
                 }
                 ui::pin::route_gesture(ui, &dispatch);
@@ -1942,12 +1999,12 @@ impl Snip2Pin {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
                         toolbar: controls,
-                        keyboard_focus: recording.then_some(false),
+                        keyboard_focus: blocked.then_some(false),
                         space: platform::pin_input_space(ui),
                     },
                     &dispatch,
                     |command| {
-                        if recording {
+                        if blocked {
                             return;
                         }
                         #[cfg(target_os = "macos")]
@@ -2003,8 +2060,6 @@ impl Snip2Pin {
         let id = menu.pin_id;
         let locked = self.pins.get(&id).is_some_and(|pin| pin.locked);
         let focused = menu.focused.clone();
-        #[cfg(target_os = "linux")]
-        let focus_requested = menu.focus_requested.clone();
         let events = self.sender.clone();
         let mut builder = self
             .window_icon(egui::ViewportBuilder::default())
@@ -2019,17 +2074,13 @@ impl Snip2Pin {
             // Keep WM management for focus and dismissal; no override-redirect.
             .with_window_type(egui::X11WindowType::PopupMenu)
             .with_taskbar(false)
-            .with_active(true);
+            // Linux popup windows may keep keyboard focus on their owner.
+            // Shared menu ownership routes its input without forcing activation.
+            .with_active(!cfg!(target_os = "linux"));
         if let Some(position) = menu.position {
             builder = builder.with_position(position);
         }
         ctx.show_viewport_deferred(pin_menu_id(), builder, move |ui, _| {
-            #[cfg(target_os = "linux")]
-            if !focus_requested.swap(true, Ordering::AcqRel) {
-                // Popup windows do not receive normal-window activation on map.
-                // Request focus once so Escape works before choosing an item.
-                ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
-            }
             let has_focus = ui.input(|input| input.focused);
             if has_focus {
                 focused.store(true, Ordering::Release);
@@ -2038,12 +2089,14 @@ impl Snip2Pin {
                 input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
             }) || (!has_focus && focused.load(Ordering::Acquire))
             {
+                ui::pin::MenuInput::consume(ui.ctx());
                 let _ = events.send(Event::ClosePinMenu);
                 ui.ctx().request_repaint_of(ViewportId::ROOT);
                 return;
             }
             let ctx = ui.ctx().clone();
             ui::pin::menu(ui, id, locked, &|action| {
+                ui::pin::MenuInput::consume(&ctx);
                 dispatch_pin(action, &events, &ctx, None);
                 let _ = events.send(Event::ClosePinMenu);
             });
@@ -2111,12 +2164,16 @@ impl eframe::App for Snip2Pin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        route_pin_menu_input(&ctx, &self.sender);
         self.paint_pending_layers(&ctx);
-        if !self.recording.blocks_input(&ctx) {
+        if !self.recording.blocks_input(&ctx) && !ui::pin::MenuInput::blocks_input(&ctx) {
             ui::pin::route_gesture(ui, &|action| dispatch_pin(action, &self.sender, &ctx, None));
         }
         if !self.prepare_home(&ctx) {
             return;
+        }
+        if ui::pin::MenuInput::blocks_input(&ctx) {
+            ui.disable();
         }
         self.update_icon(&ctx);
         if self.recording.active() && self.quit_confirmation.is_none() {

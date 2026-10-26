@@ -3,6 +3,85 @@ use snip2pin::i18n::{Message, Text};
 
 const TITLE_PREFIX: &str = "Snip2Pin · 贴图 ";
 
+/// Event-triggered focus checks reuse one connection for a fallback menu's lifetime.
+#[derive(Default)]
+pub struct AppFocus {
+    #[cfg(target_os = "linux")]
+    x11: Option<(x11rb::rust_connection::RustConnection, u32)>,
+}
+
+impl AppFocus {
+    /// No focus query is made until a window explicitly reports losing focus.
+    /// Unsupported protocols, missing ownership data and query errors are unknown.
+    pub fn current(&mut self) -> Option<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+            if std::env::var_os("DISPLAY").is_none() {
+                return None;
+            }
+            if self.x11.is_none() {
+                let (connection, _) = x11rb::connect(None).ok()?;
+                let pid = connection
+                    .intern_atom(true, b"_NET_WM_PID")
+                    .ok()?
+                    .reply()
+                    .ok()?
+                    .atom;
+                if pid == 0 {
+                    return None;
+                }
+                self.x11 = Some((connection, pid));
+            }
+            let (connection, pid) = self.x11.as_ref()?;
+            let focus = connection.get_input_focus().ok()?.reply().ok()?.focus;
+            focus_owned_by(focus, std::process::id(), |window| {
+                let property = connection
+                    .get_property(false, window, *pid, AtomEnum::CARDINAL, 0, 1)
+                    .ok()?
+                    .reply()
+                    .ok()?;
+                let process = if property.format == 0 {
+                    None
+                } else if property.format == 32 && property.bytes_after == 0 {
+                    Some(property.value32()?.next()?)
+                } else {
+                    return None;
+                };
+                let parent = if process.is_some() {
+                    0
+                } else {
+                    connection.query_tree(window).ok()?.reply().ok()?.parent
+                };
+                Some((process, parent))
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn focus_owned_by(
+    mut window: u32,
+    process: u32,
+    mut inspect: impl FnMut(u32) -> Option<(Option<u32>, u32)>,
+) -> Option<bool> {
+    // None and PointerRoot are not concrete focus owners. A transient gap in
+    // focus transfer must not be mistaken for another application's window.
+    while window > 1 {
+        let (owner, parent) = inspect(window)?;
+        if let Some(owner) = owner.filter(|owner| *owner != 0) {
+            return Some(owner == process);
+        }
+        if parent == window {
+            return None;
+        }
+        window = parent;
+    }
+    None
+}
+
 pub(crate) fn title(id: u64) -> String {
     format!("{TITLE_PREFIX}{id}")
 }
@@ -130,6 +209,45 @@ pub(super) fn raise_selection() -> Result<(), Message> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod focus_tests {
+    #[test]
+    fn current_focus_uses_process_ownership_including_child_windows() {
+        for (name, focus, nodes, expected) in [
+            ("own menu", 10, vec![(10, Some(42), 0)], Some(true)),
+            (
+                "menu child with PID on ancestor",
+                20,
+                vec![(20, None, 10), (10, Some(42), 0)],
+                Some(true),
+            ),
+            (
+                "external app child",
+                20,
+                vec![(20, None, 30), (30, Some(99), 0)],
+                Some(false),
+            ),
+            ("missing PID", 20, vec![(20, None, 2), (2, None, 0)], None),
+            ("query failure", 20, vec![], None),
+            ("no focus", 0, vec![], None),
+            ("pointer root", 1, vec![], None),
+        ] {
+            let mut inspected = Vec::new();
+            let actual = super::focus_owned_by(focus, 42, |window| {
+                inspected.push(window);
+                nodes
+                    .iter()
+                    .find(|node| node.0 == window)
+                    .map(|node| (node.1, node.2))
+            });
+            assert_eq!(actual, expected, "{name}");
+            if focus <= 1 {
+                assert!(inspected.is_empty(), "special focus values have no window");
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

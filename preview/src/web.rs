@@ -344,9 +344,11 @@ impl Sandbox {
 
 impl Sandbox {
     fn show(&mut self, ui: &mut egui::Ui) {
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
         // A virtual window shares the root event stream. Preserve modal ownership
         // through this frame even when Escape just finished recording or a menu.
-        let input_was_blocked = self.recording.blocks_input(ui.ctx()) || self.menu.is_some();
+        let input_was_blocked =
+            self.recording.blocks_input(ui.ctx()) || pin_view::MenuInput::blocks_input(ui.ctx());
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         self.update_icon(ui.ctx());
@@ -517,8 +519,10 @@ impl Sandbox {
             self.menu = None;
         }
         let events = RefCell::new(Vec::new());
-        let pins_interactive =
-            !input_was_blocked && !self.recording.blocks_input(ui.ctx()) && self.menu.is_none();
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
+        let pins_interactive = !input_was_blocked
+            && !self.recording.blocks_input(ui.ctx())
+            && !pin_view::MenuInput::blocks_input(ui.ctx());
         for pin in &mut self.pins {
             let pointer = ui.ctx().pointer_latest_pos();
             if let Some(gesture) = &pin.gesture
@@ -637,6 +641,7 @@ impl Sandbox {
                 }
             }
         }
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
     }
 }
 
