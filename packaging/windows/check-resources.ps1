@@ -14,7 +14,7 @@ public static class Snip2PinResourceProbe {
 }
 # Index -1 queries the embedded icon count without allocating icon handles.
 $icons = [Snip2PinResourceProbe]::ExtractIconExW($path, -1, [IntPtr]::Zero, [IntPtr]::Zero, 0)
-if ($icons -eq 0 -or $icons -eq [uint32]::MaxValue) { throw 'Application has no readable embedded icon' }
+if ($icons -ne 2) { throw 'Expected separate application and notification-area icon groups' }
 $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
 if ($version.ProductName -ne 'Snip2Pin' -or $version.OriginalFilename -ne 'snip2pin.exe') {
     throw 'Application version resources are incomplete'

@@ -13,9 +13,9 @@ pub(super) fn icon() -> Result<tray_icon::Icon, Message> {
 }
 
 fn resource_icon(size: (u32, u32)) -> Result<tray_icon::Icon, Message> {
-    // build.rs embeds group 1 from the multi-size ICO. The library delegates
-    // frame selection/scaling to LoadImageW and owns the resulting HICON.
-    tray_icon::Icon::from_resource(1, Some(size)).map_err(|error| error.to_string().into())
+    // build.rs embeds the status symbol as group 2, preserving app icon group 1.
+    // The library delegates frame selection/scaling to LoadImageW and owns HICON.
+    tray_icon::Icon::from_resource(2, Some(size)).map_err(|error| error.to_string().into())
 }
 
 #[allow(unsafe_code)]
@@ -56,12 +56,12 @@ mod tests {
 
     #[test]
     fn embedded_resource_loads_at_system_small_icon_metrics() {
-        // Exercise the production resource constructor at 100/125/150/200%.
+        // Exercise the production resource constructor from 100% through 400%.
         // The native bitmap probe verifies the same LoadImageW resource contract;
         // tray-icon keeps its own HICON private. This is not visual acceptance.
-        for dpi in [96, 120, 144, 192] {
+        for dpi in [96, 120, 144, 168, 192, 240, 288, 384] {
             let size = small_icon_size_for_dpi(dpi).expect("system small-icon metric");
-            let _icon = resource_icon(size).expect("library loads embedded icon group 1");
+            let _icon = resource_icon(size).expect("library loads embedded status icon group 2");
             assert_eq!(native_resource_size(size), size, "DPI {dpi}");
         }
         let _icon = icon().expect("current taskbar's DPI selects an embedded icon");
@@ -75,7 +75,7 @@ mod tests {
         unsafe {
             let handle = LoadImageW(
                 GetModuleHandleW(std::ptr::null()),
-                1usize as _,
+                2usize as _,
                 IMAGE_ICON,
                 size.0 as i32,
                 size.1 as i32,
