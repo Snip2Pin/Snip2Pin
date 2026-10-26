@@ -681,6 +681,7 @@ fn footer(ui: &mut egui::Ui, locale: Locale) {
                         concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"),
                     )
                     .on_hover_ui(|ui| super::tooltip(ui, locale.text(Text::DownloadsHelp)));
+                    ui.hyperlink_to(locale.text(Text::Help), crate::HELP_URL);
                 });
             });
         });

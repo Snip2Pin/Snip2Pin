@@ -89,6 +89,8 @@ macOS 首次截图需允许屏幕录制权限，按应用中的提示操作即�
 
 语言、主题和图标默认跟随系统，可在主页手动选择；开机自启默认关闭。菜单栏／托盘与 macOS Dock 也提供截图和主页入口。
 
+主页及菜单中的「帮助」可打开 [Wiki 使用指南](https://github.com/Snip2Pin/Snip2Pin/wiki)。
+
 截图和贴图保存在内存中，不上传，也不保留历史记录。剪贴板由系统管理。Linux 部分截图后端会使用临时文件，读取后清理。
 
 <details>
@@ -148,6 +150,8 @@ The context menu also offers Copy, Lock and Close. Quitting asks for confirmatio
 With a pin focused, use arrows for fine movement. Holding an arrow key gradually increases its step size; Shift+arrows moves quickly. Use `+` / `-` to zoom and `0` to restore the original size.
 
 Language, theme and icon follow the system with manual overrides on Home. Login startup is off by default. The menu bar / tray and macOS Dock also offer Capture and Home.
+
+Choose **Help** on Home or in the menu to open the [Wiki guide](https://github.com/Snip2Pin/Snip2Pin/wiki).
 
 Images stay in memory; there is no upload or capture history. The OS manages the clipboard. Some Linux capture backends use temporary files, removed after reading.
 

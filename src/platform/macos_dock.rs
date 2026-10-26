@@ -24,6 +24,7 @@ const HOME_TAG: isize = 1;
 const CAPTURE_TAG: isize = 2;
 const CLOSE_PINS_TAG: isize = 3;
 const UNLOCK_PINS_TAG: isize = 4;
+const HELP_TAG: isize = 5;
 // Public AppleEvents.h / AEDataModel.h wire identifiers.
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
 const QUIT_APPLICATION: u32 = u32::from_be_bytes(*b"quit");
@@ -64,6 +65,11 @@ define_class!(
         #[unsafe(method(snip2pinCapture:))]
         fn capture(&self, _sender: Option<&AnyObject>) {
             (self.ivars().callback)(Action::Capture);
+        }
+
+        #[unsafe(method(snip2pinHelp:))]
+        fn help(&self, _sender: Option<&AnyObject>) {
+            (self.ivars().callback)(Action::Help);
         }
 
         #[unsafe(method(snip2pinClosePins:))]
@@ -135,6 +141,7 @@ struct DockMenu {
     capture: Retained<NSMenuItem>,
     close_pins: Retained<NSMenuItem>,
     unlock_pins: Retained<NSMenuItem>,
+    help: Retained<NSMenuItem>,
     state: Option<MenuState>,
 }
 
@@ -221,17 +228,20 @@ impl Dock {
         let unlock_pins = menu
             .itemWithTag(UNLOCK_PINS_TAG)
             .ok_or(Text::DockMenuLoadFailed)?;
+        let help = menu.itemWithTag(HELP_TAG).ok_or(Text::DockMenuLoadFailed)?;
         menu.setAutoenablesItems(false);
         bind(&home, &self.target, sel!(snip2pinOpenHome:));
         bind(&capture, &self.target, sel!(snip2pinCapture:));
         bind(&close_pins, &self.target, sel!(snip2pinClosePins:));
         bind(&unlock_pins, &self.target, sel!(snip2pinUnlockPins:));
+        bind(&help, &self.target, sel!(snip2pinHelp:));
         self.menu = Some(DockMenu {
             _menu: menu,
             home,
             capture,
             close_pins,
             unlock_pins,
+            help,
             state: None,
         });
         Ok(())
@@ -288,6 +298,9 @@ impl Dock {
         menu.unlock_pins
             .setTitle(&NSString::from_str(state.locale.text(Text::UnlockPins)));
         menu.unlock_pins.setEnabled(state.has_locked_pins);
+        menu.help
+            .setTitle(&NSString::from_str(state.locale.text(Text::Help)));
+        menu.help.setEnabled(true);
         menu.state = Some(state);
     }
 }
@@ -367,6 +380,7 @@ impl Drop for Dock {
                 &menu.capture,
                 &menu.close_pins,
                 &menu.unlock_pins,
+                &menu.help,
             ] {
                 item.setEnabled(false);
                 // SAFETY: Removing target/action links is valid on the main thread;

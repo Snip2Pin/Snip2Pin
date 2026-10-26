@@ -125,6 +125,7 @@ catalogue! {
     Demo => ("Demo: no screen access.", "演示模式：不读取屏幕。"),
     Downloads => ("Releases ↗", "版本与下载 ↗"),
     DownloadsHelp => ("View GitHub Releases in your browser.", "在浏览器中查看 GitHub Releases。"),
+    Help => ("Help", "帮助"),
     Home => ("Open home", "打开主页"),
     ClosePins => ("Close unlocked pins", "关闭未锁定贴图"),
     UnlockPins => ("Unlock all pins", "解锁全部贴图"),

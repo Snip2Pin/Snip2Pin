@@ -312,36 +312,60 @@ fn click(ctx: &egui::Context, size: Vec2, point: Pos2, busy: bool) -> (FullOutpu
 }
 
 #[test]
-fn release_link_remains_usable_in_small_windows_and_during_capture() {
+fn footer_links_remain_usable_in_both_languages_and_small_windows() {
     for size in [Vec2::from(LAUNCHER.window), egui::vec2(280.0, 220.0)] {
         for dark in [false, true] {
             for busy in [false, true] {
-                let ctx = egui::Context::default();
-                ctx.set_visuals(if dark {
-                    egui::Visuals::dark()
-                } else {
-                    egui::Visuals::light()
-                });
-                let _ = frame(&ctx, size, vec![], busy);
-                let (output, _) = frame(&ctx, size, vec![], busy);
-                let link = visible_text(&output, "版本与下载 ↗");
-                assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(link));
-                let (output, action) = click(&ctx, size, link.center(), busy);
-                assert!(
-                    action.is_none(),
-                    "navigation cannot start a capture or change preferences"
-                );
-                assert!(
-                    output
-                        .platform_output
-                        .commands
-                        .iter()
-                        .any(|command| matches!(
-                            command, egui::OutputCommand::OpenUrl(url)
-                            if url.url == concat!(env!("CARGO_PKG_REPOSITORY"), "/releases")
-                        )),
-                    "the system browser is requested without opening it in the test"
-                );
+                for locale in [Locale::Chinese, Locale::English] {
+                    let ctx = egui::Context::default();
+                    ctx.set_visuals(if dark {
+                        egui::Visuals::dark()
+                    } else {
+                        egui::Visuals::light()
+                    });
+                    let paint = |events| frame_with_pins(&ctx, size, events, busy, locale, &[]);
+                    let _ = paint(vec![]);
+                    let (output, _) = paint(vec![]);
+                    let help = visible_text(&output, locale.text(Text::Help));
+                    let downloads = visible_text(&output, locale.text(Text::Downloads));
+                    assert!(!help.intersects(downloads));
+                    for (label, target) in [
+                        (Text::Help, crate::HELP_URL),
+                        (
+                            Text::Downloads,
+                            concat!(env!("CARGO_PKG_REPOSITORY"), "/releases"),
+                        ),
+                    ] {
+                        let (output, _) = paint(vec![]);
+                        let link = visible_text(&output, locale.text(label));
+                        assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(link));
+                        let point = link.center();
+                        let _ = paint(vec![Event::PointerMoved(point)]);
+                        let pointer = |pressed| Event::PointerButton {
+                            pos: point,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        };
+                        let _ = paint(vec![pointer(true)]);
+                        let (output, action) = paint(vec![pointer(false)]);
+                        assert!(
+                            action.is_none(),
+                            "navigation cannot start a capture or change preferences"
+                        );
+                        assert!(
+                            output
+                                .platform_output
+                                .commands
+                                .iter()
+                                .any(|command| matches!(
+                                    command, egui::OutputCommand::OpenUrl(url)
+                                    if url.url == target
+                                )),
+                            "the system browser is requested without opening it in the test"
+                        );
+                    }
+                }
             }
         }
     }
