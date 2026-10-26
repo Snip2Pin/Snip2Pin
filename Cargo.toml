@@ -51,7 +51,10 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.100"
 windows-result = "0.100"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_LibraryLoader"] }
 
 [build-dependencies]
 winresource = "0.1.34"

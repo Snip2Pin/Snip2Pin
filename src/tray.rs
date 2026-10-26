@@ -5,6 +5,10 @@ use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
+#[cfg(target_os = "windows")]
+#[path = "tray/windows.rs"]
+mod windows;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Home,
@@ -84,14 +88,7 @@ impl Tray {
             &quit,
         ])
         .map_err(|error| error.to_string())?;
-        let pixels = if cfg!(target_os = "macos") {
-            snip2pin::icon::status()?
-        } else {
-            snip2pin::icon::render(snip2pin::icon::Variant::Line, snip2pin::icon::STATUS_SIZE)?
-        };
-        let (width, height) = pixels.dimensions();
-        let icon = tray_icon::Icon::from_rgba(pixels.into_raw(), width, height)
-            .map_err(|error| error.to_string())?;
+        let icon = icon()?;
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Snip2Pin");
@@ -129,6 +126,23 @@ impl Tray {
             .set_text(state.locale.text(Text::UnlockPins));
         self.unlock_pins.set_enabled(state.has_locked_pins);
         self.state = Some(state);
+    }
+}
+
+fn icon() -> Result<tray_icon::Icon, Message> {
+    #[cfg(target_os = "windows")]
+    return windows::icon();
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pixels = if cfg!(target_os = "macos") {
+            snip2pin::icon::status()?
+        } else {
+            snip2pin::icon::render(snip2pin::icon::Variant::Line, snip2pin::icon::STATUS_SIZE)?
+        };
+        let (width, height) = pixels.dimensions();
+        tray_icon::Icon::from_rgba(pixels.into_raw(), width, height)
+            .map_err(|error| error.to_string().into())
     }
 }
 
