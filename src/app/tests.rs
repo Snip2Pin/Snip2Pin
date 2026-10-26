@@ -2278,6 +2278,46 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
     );
     assert!(app.unlock_hint.as_ref().unwrap().until.is_some());
     assert!(!app.home_visible);
+    assert!(
+        app.layers[&0].paint_pending,
+        "revealing needs a presented frame"
+    );
+    assert!(
+        !shown
+            .viewport_commands
+            .get(&layer_id(0))
+            .is_some_and(|commands| commands.contains(&ViewportCommand::RequestPaintWhileHidden)),
+        "publish the visible callback before requesting its paint"
+    );
+    let mut revealed = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    revealed.textures_delta.clear();
+    let viewport = &revealed.viewport_output[&layer_id(0)];
+    assert_eq!(viewport.builder.visible, Some(true));
+    assert!(
+        viewport
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    let frame = paint(viewport.viewport_ui_cb.as_ref().unwrap());
+    assert!(frame.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
+    )));
+    assert!(!app.layers[&0].paint_pending);
+    assert!(
+        app.events
+            .try_iter()
+            .all(|event| !matches!(event, Event::HintFrameDrawn { .. }))
+    );
+    let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
+    app.handle_event(Event::HintFrameDrawn { hint, display: 0 }, &ctx);
+    assert!(
+        !app.layers[&0].paint_pending,
+        "duplicate acknowledgements do not repaint"
+    );
     app.clear_unlock_hint(&ctx);
     let mut cleared = ctx.run_ui(egui::RawInput::default(), |ui| {
         let mut frame = eframe::Frame::_new_kittest();

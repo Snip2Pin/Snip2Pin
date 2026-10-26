@@ -609,6 +609,11 @@ impl Snip2Pin {
                     let until = *current
                         .until
                         .get_or_insert_with(|| Instant::now() + ui::screen_hint::UNLOCK_DURATION);
+                    // Hidden GL drawing need not survive showing the window.
+                    // Publish visibility before requesting the visible child frame.
+                    if let Some(layer) = self.layers.get_mut(&display) {
+                        layer.paint_pending = true;
+                    }
                     ctx.send_viewport_cmd_to(
                         ViewportId::ROOT,
                         ViewportCommand::RequestPaintWhileHidden,
