@@ -4333,6 +4333,7 @@ fn capture_completion_and_cancellation_do_not_request_home_activation() {
     for home_visible in [false, true] {
         for completed in [false, true] {
             let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
             let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
             warmup.textures_delta.clear();
             let mut app = app();
@@ -4370,17 +4371,18 @@ fn capture_completion_and_cancellation_do_not_request_home_activation() {
                 },
                 ..Default::default()
             };
-            let output = ctx.run_logic(&input, |ctx| {
-                eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+            let mut output = ctx.run_ui(input, |ui| {
+                eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
             });
+            output.textures_delta.clear();
             assert!(matches!(app.phase, Phase::Idle));
             assert_eq!(app.pins.contains_key(&1), completed);
             assert!(app.layers.values().all(|layer| layer.selection.is_none()));
             assert!(
                 output
-                    .viewport_commands
+                    .viewport_output
                     .values()
-                    .flatten()
+                    .flat_map(|viewport| &viewport.commands)
                     .all(|command| *command != ViewportCommand::Focus),
                 "finishing capture must let the WM restore focus without a Home attention request"
             );
