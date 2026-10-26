@@ -186,9 +186,21 @@ fn windows_named(title: &str) -> Result<Vec<windows_sys::Win32::Foundation::HWND
 #[allow(unsafe_code)]
 pub(super) fn raise_selection() -> Result<(), Message> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SetWindowPos,
+        GWL_EXSTYLE, GetWindowLongW, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOOWNERZORDER, SWP_NOSIZE, SetLayeredWindowAttributes, SetWindowPos, WS_EX_LAYERED,
+        WS_EX_TRANSPARENT,
     };
     for window in windows_named(snip2pin::SELECTION_WINDOW_TITLE)? {
+        // winit's mouse passthrough adds these styles without initializing the
+        // layered opacity. Reinitialize after capture clears the layered style.
+        let passthrough = WS_EX_LAYERED | WS_EX_TRANSPARENT;
+        // SAFETY: Enumeration returns only this process's live selection HWNDs.
+        if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32 & passthrough == passthrough
+            // SAFETY: Alpha 255 adds no attenuation; leave DWM's setup unchanged.
+            && unsafe { SetLayeredWindowAttributes(window, 0, u8::MAX, LWA_ALPHA) } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string().into());
+        }
         // SAFETY: Only this process's live selection windows are returned, used
         // synchronously on their UI thread. Preserve geometry and focus.
         if unsafe {
