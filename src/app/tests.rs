@@ -4316,8 +4316,109 @@ fn right_click_menu_preserves_current_viewport_coordinates_after_dpi_changes() {
                 opened.viewport_output[&pin_menu_id()].builder.position,
                 Some(expected)
             );
+            assert_eq!(
+                opened.viewport_output[&pin_menu_id()].builder.window_type,
+                Some(egui::X11WindowType::PopupMenu),
+                "the real right-click path must request a menu layer above pinned images"
+            );
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capture_completion_and_cancellation_do_not_request_home_activation() {
+    for home_visible in [false, true] {
+        for completed in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            app.home_visible = home_visible;
+            let session = app.gate.begin().expect("capture");
+            app.accept_capture(session, Ok(vec![capture::demo()]), None, &ctx);
+            app.demo = false;
+            if completed {
+                app.selection_action(
+                    session,
+                    0,
+                    overlay::Action::Select(geometry::PixelRect {
+                        x: 12,
+                        y: 18,
+                        width: 3,
+                        height: 5,
+                    }),
+                    &ctx,
+                );
+                app.sender
+                    .send(Event::PinFrameDrawn { session, pin_id: 1 })
+                    .expect("pin painted");
+            }
+            let input = egui::RawInput {
+                events: if completed {
+                    Vec::new()
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                },
+                ..Default::default()
+            };
+            let output = ctx.run_logic(&input, |ctx| {
+                eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+            });
+            assert!(matches!(app.phase, Phase::Idle));
+            assert_eq!(app.pins.contains_key(&1), completed);
+            assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+            assert!(
+                output
+                    .viewport_commands
+                    .values()
+                    .flatten()
+                    .all(|command| *command != ViewportCommand::Focus),
+                "finishing capture must let the WM restore focus without a Home attention request"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fallback_popup_requests_keyboard_focus_once_and_remains_managed() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.open_pin_menu(1, None, &ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pin_menu(ui.ctx()));
+    setup.textures_delta.clear();
+    let menu = &setup.viewport_output[&pin_menu_id()];
+    assert_ne!(menu.builder.override_redirect, Some(true));
+    let paint = menu.viewport_ui_cb.as_ref().expect("menu callback");
+    for first in [true, false] {
+        let mut input = egui::RawInput {
+            viewport_id: pin_menu_id(),
+            focused: false,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                ui::pin::MENU_SIZE,
+            )),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(pin_menu_id(), egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| paint(ui));
+        output.textures_delta.clear();
+        let requests = output.viewport_output[&pin_menu_id()]
+            .commands
+            .iter()
+            .filter(|command| **command == ViewportCommand::Focus)
+            .count();
+        assert_eq!(requests, usize::from(first));
+    }
+    assert!(app.pin_menu.is_some());
 }
 
 #[test]

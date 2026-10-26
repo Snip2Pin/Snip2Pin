@@ -236,6 +236,8 @@ struct PinMenu {
     pin_id: u64,
     position: Option<egui::Pos2>,
     focused: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    focus_requested: Arc<AtomicBool>,
 }
 
 struct QuitConfirmation {
@@ -1074,6 +1076,8 @@ impl Snip2Pin {
             pin_id: id,
             position,
             focused: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "linux")]
+            focus_requested: Arc::new(AtomicBool::new(false)),
         });
         ctx.request_repaint_of(pin_menu_id());
     }
@@ -1994,6 +1998,8 @@ impl Snip2Pin {
         let id = menu.pin_id;
         let locked = self.pins.get(&id).is_some_and(|pin| pin.locked);
         let focused = menu.focused.clone();
+        #[cfg(target_os = "linux")]
+        let focus_requested = menu.focus_requested.clone();
         let events = self.sender.clone();
         let mut builder = self
             .window_icon(egui::ViewportBuilder::default())
@@ -2004,12 +2010,21 @@ impl Snip2Pin {
             .with_resizable(false)
             .with_has_shadow(true)
             .with_always_on_top()
+            // X11 compositors stack popup menus above always-on-top images.
+            // Keep WM management for focus and dismissal; no override-redirect.
+            .with_window_type(egui::X11WindowType::PopupMenu)
             .with_taskbar(false)
             .with_active(true);
         if let Some(position) = menu.position {
             builder = builder.with_position(position);
         }
         ctx.show_viewport_deferred(pin_menu_id(), builder, move |ui, _| {
+            #[cfg(target_os = "linux")]
+            if !focus_requested.swap(true, Ordering::AcqRel) {
+                // Popup windows do not receive normal-window activation on map.
+                // Request focus once so Escape works before choosing an item.
+                ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
+            }
             let has_focus = ui.input(|input| input.focused);
             if has_focus {
                 focused.store(true, Ordering::Release);

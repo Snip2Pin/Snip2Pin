@@ -329,8 +329,13 @@ pub fn finish_capture(ctx: &egui::Context) {
             application.deactivate();
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    // Hiding the Linux selection layer lets the WM restore the previous focus.
+    // Activating Home here can instead produce a GNOME "window is ready" notice
+    // when focus-stealing prevention rejects that unsolicited activation.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = ctx;
 }
 
 /// A GUI-subsystem executable has no visible stderr when opened from Explorer.
