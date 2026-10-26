@@ -201,11 +201,16 @@ fn image_with_host(
     // Native drag/resize APIs need the initiating button press, before an egui
     // drag threshold turns it into a later mouse-move event.
     let pressed = ui.input(|input| {
-        input
-            .pointer
-            .primary_pressed()
-            .then(|| input.pointer.press_origin())
-            .flatten()
+        input.events.iter().rev().find_map(|event| match event {
+            // press_origin is cleared when release arrives in the same frame.
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => Some(*pos),
+            _ => None,
+        })
     });
     let pressed_on_image = ui.is_enabled()
         && pressed.is_some_and(|point| {
@@ -214,7 +219,7 @@ fn image_with_host(
                 && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
                 && !excluded.is_some_and(|rect| rect.contains(point))
         });
-    if !locked && pressed_on_image {
+    if !locked && pressed_on_image && ui.input(|input| input.pointer.primary_down()) {
         let pressed_edge = (!native_edges)
             .then_some(pressed)
             .flatten()

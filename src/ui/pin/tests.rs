@@ -153,6 +153,12 @@ fn complete_view_owns_focus_painting_and_excludes_buttons_from_native_gestures()
 
 #[test]
 fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
+    for released in [false, true] {
+        check_locked_pin_hint(released);
+    }
+}
+
+fn check_locked_pin_hint(released: bool) {
     let ctx = egui::Context::default();
     let texture = texture(&ctx);
     let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(160.0, 80.0));
@@ -163,7 +169,11 @@ fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
             egui::RawInput {
                 screen_rect: Some(bounds),
                 events: if frame == 1 {
-                    vec![Event::PointerMoved(point), pointer(point, true)]
+                    let mut events = vec![Event::PointerMoved(point), pointer(point, true)];
+                    if released {
+                        events.push(pointer(point, false));
+                    }
+                    events
                 } else {
                     vec![Event::PointerMoved(point)]
                 },
@@ -180,8 +190,12 @@ fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
                         ..Default::default()
                     },
                     &|action| actions.borrow_mut().push(action),
-                    |_| {},
+                    |_| panic!("locked input never starts a native gesture"),
                 );
+                if frame == 1 && ui.ctx().current_pass_index() == 0 {
+                    ui.ctx()
+                        .request_discard("repeat the same input without repeating its hint");
+                }
             },
         );
         output.textures_delta.clear();
@@ -194,6 +208,110 @@ fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
         );
     }
     assert_eq!(*actions.borrow(), [Action::UnlockHint(7)]);
+}
+
+#[test]
+fn a_released_press_never_starts_a_late_native_drag_or_resize() {
+    for native_edges in [false, true] {
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+        for point in [bounds.center(), egui::pos2(1.0, 80.0)] {
+            let ctx = egui::Context::default();
+            let texture = texture(&ctx);
+            paint_image(
+                &ctx,
+                &texture,
+                bounds,
+                vec![Event::PointerMoved(point)],
+                native_edges,
+                0.0,
+                false,
+            );
+            let (output, actions) = paint_image(
+                &ctx,
+                &texture,
+                bounds,
+                vec![pointer(point, true), pointer(point, false)],
+                native_edges,
+                0.1,
+                true,
+            );
+            assert!(commands(&output).is_empty());
+            assert!(actions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn batched_presses_preserve_toolbar_exclusion_and_the_latest_native_origin() {
+    let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 160.0));
+    let body = bounds.center();
+    let edge = egui::pos2(1.0, 80.0);
+    for (locked, excluded, events, expected) in [
+        (
+            true,
+            true,
+            vec![pointer(body, true), pointer(body, false)],
+            vec![],
+        ),
+        (
+            false,
+            false,
+            vec![
+                pointer(body, true),
+                pointer(body, false),
+                pointer(edge, true),
+            ],
+            vec![ViewportCommand::BeginResize(ResizeDirection::West)],
+        ),
+        (
+            false,
+            false,
+            vec![
+                pointer(edge, true),
+                pointer(edge, false),
+                pointer(body, true),
+            ],
+            vec![ViewportCommand::StartDrag],
+        ),
+    ] {
+        let ctx = egui::Context::default();
+        let texture = texture(&ctx);
+        let actions = RefCell::new(Vec::new());
+        for (frame, events) in [vec![Event::PointerMoved(body)], events]
+            .into_iter()
+            .enumerate()
+        {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(bounds),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    image_with_host(
+                        ui,
+                        7,
+                        &texture,
+                        Interaction {
+                            locked,
+                            toolbar: excluded.then_some(Toolbar {
+                                bounds: Rect::from_center_size(body, Vec2::splat(METRICS.button)),
+                                count: 1,
+                            }),
+                            ..Default::default()
+                        },
+                        &|action| actions.borrow_mut().push(action),
+                        |command| ctx.send_viewport_cmd(command),
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            if frame == 1 {
+                assert_eq!(commands(&output), expected.as_slice());
+            }
+        }
+        assert!(actions.into_inner().is_empty());
+    }
 }
 
 fn texture(ctx: &egui::Context) -> TextureHandle {
