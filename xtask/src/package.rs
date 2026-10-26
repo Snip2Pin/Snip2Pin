@@ -298,11 +298,11 @@ pub fn prepare_payload(binary: &Path, target: &str, payload: &Path) -> Result {
 
 fn linux_resources(payload: &Path) -> Result {
     fs::copy(
-        crate::root().join("packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop"),
+        crate::root()?.join("packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop"),
         payload.join("io.github.Snip2Pin.Snip2Pin.desktop"),
     )?;
     // Export at a standard hicolor size; 1024x1024 is not registered by the theme.
-    image::open(crate::root().join("assets/icons/line.png"))?
+    image::open(crate::root()?.join("assets/icons/line.png"))?
         .resize_exact(
             LINUX_ICON_SIZE,
             LINUX_ICON_SIZE,
@@ -870,7 +870,7 @@ mod tests {
             .join("custom target with spaces");
         let metadata = output(
             Command::new("cargo")
-                .current_dir(crate::root())
+                .current_dir(crate::root().expect("runtime workspace"))
                 .env("CARGO_TARGET_DIR", &custom)
                 .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
         )

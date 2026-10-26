@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn runtime_pngs_exactly_match_vector_sources() {
-        let root = crate::root();
+        let root = crate::root().expect("runtime workspace");
         for (name, size) in ICONS {
             let stem = root.join("assets/icons").join(name);
             let svg = std::fs::read_to_string(stem.with_extension("svg")).expect("SVG source");
@@ -82,7 +82,9 @@ mod tests {
 
     #[test]
     fn windows_icon_contains_the_generated_vector_sizes() {
-        let root = crate::root().join("assets/icons/line");
+        let root = crate::root()
+            .expect("runtime workspace")
+            .join("assets/icons/line");
         let svg = std::fs::read_to_string(root.with_extension("svg")).expect("SVG source");
         assert_eq!(
             std::fs::read(root.with_extension("ico")).expect("LFS Windows icon"),
