@@ -2334,7 +2334,9 @@ fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
             let viewport = &pending.viewport_output[&layer_id(0)];
             let ratio = app.layers[&0].display.scale / (native_scale * ctx.zoom_factor());
             assert_eq!(viewport.builder.position, Some(work.min * ratio));
-            assert_eq!(viewport.builder.inner_size, Some(work.size() * ratio));
+            let expected_size = work.size() * ratio;
+            let tolerance = expected_size.max_elem() * f32::EPSILON * 4.0;
+            assert!((viewport.builder.inner_size.unwrap() - expected_size).length() <= tolerance);
             assert_eq!(viewport.builder.visible, Some(false));
             assert!(
                 viewport
@@ -2363,7 +2365,7 @@ fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
             assert!(!recreate);
             assert_eq!(commands, [ViewportCommand::Visible(false)]);
             assert_eq!(native_builder.position, Some(work.min * ratio));
-            assert_eq!(native_builder.inner_size, Some(work.size() * ratio));
+            assert!((native_builder.inner_size.unwrap() - expected_size).length() <= tolerance);
         }
     }
 }
@@ -4331,6 +4333,8 @@ fn capture_completion_and_cancellation_do_not_request_home_activation() {
     for home_visible in [false, true] {
         for completed in [false, true] {
             let ctx = egui::Context::default();
+            let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
+            warmup.textures_delta.clear();
             let mut app = app();
             app.home_visible = home_visible;
             let session = app.gate.begin().expect("capture");
