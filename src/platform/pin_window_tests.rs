@@ -88,6 +88,13 @@ fn passive_selection_initializes_layered_opacity_after_each_capture_transition()
             unsafe { GetLayeredWindowAttributes(selection.0, &mut color, &mut alpha, &mut flags) },
             0
         );
+        assert_eq!(alpha, 0);
+        assert_eq!(unsafe { IsWindowVisible(selection.0) }, 0);
+        super::selection_opacity(u8::MAX).unwrap();
+        assert_ne!(
+            unsafe { GetLayeredWindowAttributes(selection.0, &mut color, &mut alpha, &mut flags) },
+            0
+        );
         assert_eq!(alpha, u8::MAX);
         assert_eq!(flags, LWA_ALPHA);
         assert_eq!(unsafe { IsWindowVisible(selection.0) }, 0);

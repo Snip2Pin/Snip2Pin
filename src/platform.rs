@@ -312,6 +312,13 @@ pub fn raise_screen_hint() -> Result<(), Message> {
     Ok(())
 }
 
+/// Reveal prepared passive Windows layers without changing geometry or focus.
+pub fn reveal_screen_hint() -> Result<(), Message> {
+    #[cfg(target_os = "windows")]
+    pin_window::selection_opacity(u8::MAX)?;
+    Ok(())
+}
+
 pub fn finish_capture(ctx: &egui::Context) {
     #[cfg(target_os = "macos")]
     {

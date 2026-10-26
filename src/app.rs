@@ -153,7 +153,14 @@ pub enum Event {
         hint: Arc<AtomicBool>,
         display: u32,
     },
-    HintError(Message),
+    HintVisibleFrameDrawn {
+        hint: Arc<AtomicBool>,
+        display: u32,
+    },
+    HintError {
+        hint: Arc<AtomicBool>,
+        error: Message,
+    },
     Shortcut {
         id: u32,
         recording: bool,
@@ -225,6 +232,7 @@ struct UnlockHint {
     areas: BTreeMap<u32, egui::Rect>,
     until: Option<Instant>,
     ready: BTreeSet<u32>,
+    visible_ready: BTreeSet<u32>,
     raised: Arc<AtomicBool>,
 }
 
@@ -631,9 +639,15 @@ impl Snip2Pin {
                     && current.areas.contains_key(&display)
                     && current.ready.insert(display)
                 {
-                    let until = *current
-                        .until
-                        .get_or_insert_with(|| Instant::now() + ui::screen_hint::UNLOCK_DURATION);
+                    if !cfg!(target_os = "windows") {
+                        let until = *current.until.get_or_insert_with(|| {
+                            Instant::now() + ui::screen_hint::UNLOCK_DURATION
+                        });
+                        ctx.request_repaint_after_for(
+                            until.saturating_duration_since(Instant::now()),
+                            ViewportId::ROOT,
+                        );
+                    }
                     // Hidden GL drawing need not survive showing the window.
                     // Publish visibility before requesting the visible child frame.
                     if let Some(layer) = self.layers.get_mut(&display) {
@@ -644,13 +658,48 @@ impl Snip2Pin {
                         ViewportCommand::RequestPaintWhileHidden,
                     );
                     ctx.request_repaint_of(ViewportId::ROOT);
-                    ctx.request_repaint_after_for(
-                        until.saturating_duration_since(Instant::now()),
-                        ViewportId::ROOT,
-                    );
                 }
             }
-            Event::HintError(error) => self.message = Some(Text::ScreenHintError.context(error)),
+            Event::HintVisibleFrameDrawn { hint, display } => {
+                if cfg!(target_os = "windows")
+                    && let Some(current) = &mut self.unlock_hint
+                    && Arc::ptr_eq(&current.raised, &hint)
+                    && current.ready.contains(&display)
+                    && current.visible_ready.insert(display)
+                    && current.visible_ready.len() == current.areas.len()
+                    && current.until.is_none()
+                {
+                    // Root consumes this only after the visible child's renderer
+                    // has returned. Keep every target transparent until then.
+                    match if self.demo {
+                        Ok(())
+                    } else {
+                        platform::reveal_screen_hint()
+                    } {
+                        Ok(()) => {
+                            current.until = Some(Instant::now() + ui::screen_hint::UNLOCK_DURATION);
+                            ctx.request_repaint_after_for(
+                                ui::screen_hint::UNLOCK_DURATION,
+                                ViewportId::ROOT,
+                            );
+                        }
+                        Err(error) => {
+                            self.clear_unlock_hint(ctx);
+                            self.message = Some(Text::ScreenHintError.context(error));
+                        }
+                    }
+                }
+            }
+            Event::HintError { hint, error } => {
+                if self
+                    .unlock_hint
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(&current.raised, &hint))
+                {
+                    self.clear_unlock_hint(ctx);
+                    self.message = Some(Text::ScreenHintError.context(error));
+                }
+            }
             Event::UnlockHint(id) => {
                 let point = if self.demo {
                     None
@@ -1183,6 +1232,9 @@ impl Snip2Pin {
 
     fn clear_unlock_hint(&mut self, ctx: &egui::Context) {
         if let Some(hint) = self.unlock_hint.take() {
+            // A retained old callback must not prepare native opacity after
+            // cancellation or after a newer generation has already appeared.
+            hint.raised.store(true, Ordering::Release);
             self.queue_layer_paints(hint.areas.into_keys(), ctx);
         }
     }
@@ -1243,6 +1295,7 @@ impl Snip2Pin {
                 .collect(),
             until: None,
             ready: BTreeSet::new(),
+            visible_ready: BTreeSet::new(),
             raised: Arc::new(AtomicBool::new(false)),
         });
         self.queue_layer_paints(displays.iter().map(|display| display.id), ctx);
@@ -1757,6 +1810,10 @@ impl Snip2Pin {
                 .unlock_hint
                 .as_ref()
                 .is_some_and(|hint| hint.ready.contains(&display_id));
+            let hint_visible_ready = self
+                .unlock_hint
+                .as_ref()
+                .is_some_and(|hint| hint.visible_ready.contains(&display_id));
             let display_bounds =
                 egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
             // A passive Windows notice must not be classified as a fullscreen
@@ -1851,7 +1908,7 @@ impl Snip2Pin {
                                 local,
                                 &ui::screen_hint::unlock_text(ui.ctx()),
                             );
-                            if !hint_ready
+                            if (!hint_ready || (cfg!(target_os = "windows") && !hint_visible_ready))
                                 && !ui.ctx().will_discard()
                                 && let Some(hint) = &hint_raised
                             {
@@ -1859,12 +1916,25 @@ impl Snip2Pin {
                                     && !hint.swap(true, Ordering::AcqRel)
                                     && let Err(error) = platform::raise_screen_hint()
                                 {
-                                    let _ = events.send(Event::HintError(error));
+                                    let _ = events.send(Event::HintError {
+                                        hint: hint.clone(),
+                                        error,
+                                    });
+                                    ui.ctx().request_repaint_of(ViewportId::ROOT);
+                                    return;
                                 }
-                                let _ = events.send(Event::HintFrameDrawn {
-                                    hint: hint.clone(),
-                                    display: display_id,
-                                });
+                                let event = if hint_ready {
+                                    Event::HintVisibleFrameDrawn {
+                                        hint: hint.clone(),
+                                        display: display_id,
+                                    }
+                                } else {
+                                    Event::HintFrameDrawn {
+                                        hint: hint.clone(),
+                                        display: display_id,
+                                    }
+                                };
+                                let _ = events.send(event);
                                 ui.ctx().request_repaint_of(ViewportId::ROOT);
                             }
                         }

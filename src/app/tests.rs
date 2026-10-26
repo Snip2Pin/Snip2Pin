@@ -2143,7 +2143,7 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
         }
         let hint = app.unlock_hint.as_ref().unwrap();
         assert_eq!(hint.ready.len(), hint.areas.len());
-        assert!(hint.until.is_some());
+        assert_eq!(hint.until.is_some(), !cfg!(target_os = "windows"));
     }
     assert!(matches!(app.phase, Phase::Idle));
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
@@ -2173,6 +2173,10 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     let stale = app.unlock_hint.as_ref().unwrap().raised.clone();
     app.show_unlock_hint(1, None, &ctx);
     let current = app.unlock_hint.as_ref().unwrap().raised.clone();
+    assert!(
+        stale.load(Ordering::Acquire),
+        "cancelled callbacks cannot prepare opacity"
+    );
     for (hint, display) in [(stale, 0), (current.clone(), u32::MAX)] {
         app.handle_event(Event::HintFrameDrawn { hint, display }, &ctx);
         let waiting = app.unlock_hint.as_ref().unwrap();
@@ -2184,6 +2188,15 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
         display: 0,
     };
     app.handle_event(drawn(), &ctx);
+    if cfg!(target_os = "windows") {
+        app.handle_event(
+            Event::HintVisibleFrameDrawn {
+                hint: current.clone(),
+                display: 0,
+            },
+            &ctx,
+        );
+    }
     let deadline = app.unlock_hint.as_ref().unwrap().until.unwrap();
     app.handle_event(drawn(), &ctx);
     assert_eq!(app.unlock_hint.as_ref().unwrap().until, Some(deadline));
@@ -2276,7 +2289,10 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
         shown.viewport_commands[&ViewportId::ROOT]
             .contains(&ViewportCommand::RequestPaintWhileHidden)
     );
-    assert!(app.unlock_hint.as_ref().unwrap().until.is_some());
+    assert_eq!(
+        app.unlock_hint.as_ref().unwrap().until.is_some(),
+        !cfg!(target_os = "windows")
+    );
     assert!(!app.home_visible);
     assert!(
         app.layers[&0].paint_pending,
@@ -2307,11 +2323,23 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
         &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
     )));
     assert!(!app.layers[&0].paint_pending);
+    let visible_frames: Vec<_> = app.events.try_iter().collect();
     assert!(
-        app.events
-            .try_iter()
+        visible_frames
+            .iter()
             .all(|event| !matches!(event, Event::HintFrameDrawn { .. }))
     );
+    assert_eq!(
+        visible_frames
+            .iter()
+            .filter(|event| matches!(event, Event::HintVisibleFrameDrawn { .. }))
+            .count(),
+        usize::from(cfg!(target_os = "windows"))
+    );
+    for event in visible_frames {
+        app.handle_event(event, &ctx);
+    }
+    assert!(app.unlock_hint.as_ref().unwrap().until.is_some());
     let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
     app.handle_event(Event::HintFrameDrawn { hint, display: 0 }, &ctx);
     assert!(
@@ -2340,6 +2368,90 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
         &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
     )));
     assert!(!app.layers[&0].paint_pending);
+}
+
+#[test]
+fn notice_errors_only_terminate_their_own_generation() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let stale = app.unlock_hint.as_ref().unwrap().raised.clone();
+    app.show_unlock_hint(1, None, &ctx);
+    let current = app.unlock_hint.as_ref().unwrap().raised.clone();
+    app.handle_event(
+        Event::HintError {
+            hint: stale,
+            error: "prepare failed".into(),
+        },
+        &ctx,
+    );
+    assert!(Arc::ptr_eq(
+        &app.unlock_hint.as_ref().unwrap().raised,
+        &current
+    ));
+    app.handle_event(
+        Event::HintError {
+            hint: current.clone(),
+            error: "prepare failed".into(),
+        },
+        &ctx,
+    );
+    assert!(app.unlock_hint.is_none());
+    app.handle_event(
+        Event::HintFrameDrawn {
+            hint: current.clone(),
+            display: 0,
+        },
+        &ctx,
+    );
+    app.handle_event(
+        Event::HintVisibleFrameDrawn {
+            hint: current,
+            display: 0,
+        },
+        &ctx,
+    );
+    assert!(app.unlock_hint.is_none());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn notice_reveals_only_after_every_visible_display_frame() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
+    let area = app.unlock_hint.as_ref().unwrap().areas[&0];
+    app.unlock_hint.as_mut().unwrap().areas.insert(1, area);
+    let visible = |display| Event::HintVisibleFrameDrawn {
+        hint: hint.clone(),
+        display,
+    };
+    app.handle_event(visible(0), &ctx);
+    assert!(app.unlock_hint.as_ref().unwrap().visible_ready.is_empty());
+    for display in [0, 1] {
+        app.handle_event(
+            Event::HintFrameDrawn {
+                hint: hint.clone(),
+                display,
+            },
+            &ctx,
+        );
+    }
+    for display in [u32::MAX, 0, 0] {
+        app.handle_event(visible(display), &ctx);
+        assert!(app.unlock_hint.as_ref().unwrap().until.is_none());
+    }
+    app.handle_event(visible(1), &ctx);
+    let deadline = app.unlock_hint.as_ref().unwrap().until.unwrap();
+    app.handle_event(visible(1), &ctx);
+    assert_eq!(app.unlock_hint.as_ref().unwrap().until, Some(deadline));
+    app.show_unlock_hint(1, None, &ctx);
+    app.handle_event(visible(0), &ctx);
+    assert!(app.unlock_hint.as_ref().unwrap().visible_ready.is_empty());
 }
 
 #[cfg(target_os = "windows")]
