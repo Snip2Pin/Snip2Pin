@@ -95,10 +95,13 @@ fn root() -> Result<PathBuf> {
     {
         return Err("xtask must run in the Snip2Pin Cargo workspace".into());
     }
+    // Cargo already returns an absolute workspace manifest. Preserve its native
+    // spelling: canonicalize adds a Windows verbatim prefix that external tools
+    // such as PowerShell cannot consistently resolve as a local script path.
     Ok(manifest
         .parent()
         .ok_or("Cargo workspace manifest has no parent directory")?
-        .canonicalize()?)
+        .to_owned())
 }
 
 fn output(command: &mut Command) -> Result<String> {

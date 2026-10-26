@@ -28,7 +28,10 @@ fn reused_binary_resolves_the_runtime_workspace_from_root_member_or_cargo_manife
             );
         } else {
             let root = crate::root().expect("runtime workspace");
-            assert_eq!(root, Path::new(&expected));
+            assert_eq!(
+                root.canonicalize().expect("resolved workspace identity"),
+                Path::new(&expected)
+            );
             std::env::set_current_dir(&root).expect("run command in workspace");
             assert_eq!(crate::root().expect("subsequent resource lookup"), root);
         }
@@ -79,4 +82,30 @@ fn reused_binary_resolves_the_runtime_workspace_from_root_member_or_cargo_manife
             String::from_utf8_lossy(&result.stderr)
         );
     }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn workspace_root_allows_the_real_powershell_archive_adapter() {
+    let root = crate::root().expect("runtime workspace");
+    assert!(root.is_absolute());
+    let directory = tempfile::tempdir().expect("isolated archive fixture");
+    let payload = directory.path().join("payload with spaces");
+    fs::create_dir(&payload).expect("fixture payload");
+    fs::write(payload.join("snip2pin.exe"), b"archive fixture").expect("fixture executable");
+    let archive = directory.path().join("fixture.zip");
+    let result = Command::new("pwsh")
+        .current_dir(&root)
+        .args(["-NoProfile", "-File", "packaging/windows/archive.ps1"])
+        .arg(&payload)
+        .arg(&archive)
+        .output()
+        .expect("run the production archive adapter without policy overrides");
+    assert!(
+        result.status.success(),
+        "archive adapter failed from {root:?}: {}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::metadata(archive).expect("archive output").len() > 0);
 }
