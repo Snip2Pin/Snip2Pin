@@ -187,3 +187,35 @@ fn lint() -> Result {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod desktop_features_tests {
+    #[test]
+    fn hyperlink_commands_have_a_native_browser_backend() {
+        let graph = crate::output(
+            std::process::Command::new("cargo")
+                .current_dir(crate::root().expect("workspace"))
+                .args([
+                    "tree",
+                    "--locked",
+                    "--package",
+                    "snip2pin",
+                    "--edges",
+                    "features",
+                    "--invert",
+                    "egui-winit",
+                    "--prefix",
+                    "none",
+                ]),
+        )
+        .expect("resolved application features");
+        for feature in ["links", "webbrowser"] {
+            assert!(
+                graph
+                    .lines()
+                    .any(|line| line == format!("egui-winit feature {feature:?}")),
+                "OpenUrl output needs the native {feature} adapter enabled"
+            );
+        }
+    }
+}
