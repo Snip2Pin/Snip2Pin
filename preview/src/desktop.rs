@@ -178,7 +178,7 @@ pub fn show(
     scene: &mut Scene,
 ) -> Vec<(egui::LayerId, Rect)> {
     let bounds = ui.max_rect();
-    let image = wallpaper.size_vec2();
+    let image = wallpaper.resolution_vec2();
     let scale = (bounds.width() / image.x).max(bounds.height() / image.y);
     let uv = Rect::from_center_size(egui::pos2(0.5, 0.5), bounds.size() / (image * scale));
     ui.painter()

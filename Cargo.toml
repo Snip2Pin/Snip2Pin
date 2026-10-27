@@ -13,6 +13,13 @@ members = ["xtask", "preview"]
 default-members = ["."]
 resolver = "3"
 
+# Temporary native validation of https://github.com/emilk/egui/pull/8650.
+# Keep direct and transitive egui types on the same immutable upstream source.
+[patch.crates-io]
+eframe = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+egui = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+egui-winit = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
 # Keep the bundled emoji fallback that was included by default before egui 0.37.

@@ -209,9 +209,9 @@ impl Sandbox {
         self.selection = Some(FrozenCapture {
             selection: overlay::Selection {
                 texture: ctx.load_texture("generated-desktop", source.clone(), Default::default()),
-                pixels: source.size.map(|n| n as u32),
+                pixels: source.resolution().map(|n| n as u32),
                 pixel_step: [1, 1],
-                windows: desktop::pixel_regions(self.desktop_bounds, source.size, &windows),
+                windows: desktop::pixel_regions(self.desktop_bounds, source.resolution(), &windows),
                 press: None,
                 start: None,
                 // A browser simulation must not request native window activation.
@@ -289,7 +289,7 @@ impl Sandbox {
                             pin.image.min * ui.ctx().zoom_factor(),
                             pin.image.size() * ui.ctx().zoom_factor(),
                         ),
-                        pin.texture.size(),
+                        pin.texture.resolution(),
                         ui.ctx().native_pixels_per_point().unwrap_or(1.0),
                         &commands,
                     )
@@ -397,7 +397,7 @@ impl Sandbox {
                         let layout = pin::frame_geometry(
                             geometry::pin_placement(
                                 rect,
-                                capture.pixels.size.map(|n| n as u32),
+                                capture.pixels.resolution().map(|n| n as u32),
                                 bounds.min.into(),
                                 bounds.size().into(),
                             ),
@@ -436,7 +436,7 @@ impl Sandbox {
                 id: pin.id,
                 name: &pin.name,
                 texture: &pin.texture,
-                size: pin.texture.size(),
+                size: pin.texture.resolution(),
                 display_size: Some(pin.image.size()),
                 locked: pin.locked,
                 selected: self.focused_pin == Some(pin.id),

@@ -1773,7 +1773,7 @@ fn keyboard_zoom_and_movement_require_native_focus_and_an_unlocked_pin() {
                     output.textures_delta.clear();
                     assert_no_geometry(&output);
                     assert_eq!(image_mesh(&output, &texture), bounds);
-                    assert_eq!(texture.size(), [2, 2]);
+                    assert_eq!(texture.resolution(), [2, 2]);
                     assert_eq!(
                         actions.into_inner(),
                         if focused == Some(true) && !locked {
@@ -2103,7 +2103,7 @@ fn narrow_text_image_keeps_its_displayed_dimensions_with_only_close_visible() {
     assert!(visible);
     assert!(actions.is_empty());
     assert_eq!(image_mesh(&output, &texture).size(), egui::vec2(32.0, 72.0));
-    assert_eq!(texture.size(), [32, 72]);
+    assert_eq!(texture.resolution(), [32, 72]);
 }
 
 #[test]

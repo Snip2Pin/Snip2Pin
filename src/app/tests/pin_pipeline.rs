@@ -260,7 +260,7 @@ fn callback_keys_keep_child_observations_when_root_geometry_is_stale() {
             input(1, rect, scale, key_tap(egui::Key::Num0).into()),
         );
         let restored = consume(&mut app, &ctx, input(1, stale, 4.0, vec![]));
-        let expected = egui::vec2(original.size[0] as f32, original.size[1] as f32) / scale / zoom;
+        let expected = egui::vec2(original.width() as f32, original.height() as f32) / scale / zoom;
         assert!(matches!(geometry(&restored, 1).as_slice(),
             [ViewportCommand::InnerSize(size)] if (*size - expected).length() < 0.001));
     }

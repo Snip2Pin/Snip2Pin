@@ -999,10 +999,13 @@ impl Snip2Pin {
         }
         let result = result.and_then(|snapshots| {
             let limit = ctx.input(|input| input.max_texture_side);
-            if snapshots
-                .iter()
-                .any(|snapshot| snapshot.pixels.size.iter().any(|side| *side > limit))
-            {
+            if snapshots.iter().any(|snapshot| {
+                snapshot
+                    .pixels
+                    .resolution()
+                    .iter()
+                    .any(|side| *side > limit)
+            }) {
                 Err(Text::TextureLimit.with(limit))
             } else {
                 Ok(snapshots)
@@ -1445,7 +1448,7 @@ impl Snip2Pin {
         else {
             return;
         };
-        let pixels = pin.pixels.size;
+        let pixels = pin.pixels.resolution();
         let zoom = ctx.zoom_factor();
         let geometry = observed.or_else(|| {
             ctx.input(|input| {
@@ -2427,7 +2430,7 @@ impl eframe::App for Snip2Pin {
                 id,
                 name: &pin.name,
                 texture: &pin.texture,
-                size: pin.pixels.size,
+                size: pin.pixels.resolution(),
                 display_size: ctx.input(|input| {
                     input
                         .raw

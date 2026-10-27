@@ -366,8 +366,8 @@ fn initial_display_fit_keeps_original_capture_pixels_for_copy() {
     let rect = geometry::PixelRect {
         x: 0,
         y: 0,
-        width: original.size[0] as u32,
-        height: original.size[1] as u32,
+        width: original.resolution()[0] as u32,
+        height: original.resolution()[1] as u32,
     };
     let session = app.gate.begin().expect("capture");
     app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
@@ -968,7 +968,7 @@ fn single_pixel_selections_copy_the_original_without_an_application_size_floor()
             assert_eq!(app.pins.len(), usize::from(valid));
             assert_eq!(output.platform_output.commands.len(), usize::from(valid));
             if valid {
-                assert_eq!(app.pins[&1].pixels.size, [edge as usize; 2]);
+                assert_eq!(app.pins[&1].pixels.resolution(), [edge as usize; 2]);
                 assert!((app.pins[&1].initial.width() - scale.recip()).abs() < 0.00001);
                 assert!((app.pins[&1].initial.height() - scale.recip()).abs() < 0.00001);
             }
@@ -1929,7 +1929,7 @@ fn narrow_capture_keeps_its_display_size_and_text_density() {
         expected.size,
     );
     assert!(builder.min_inner_size.is_none());
-    assert_eq!(app.pins[&1].pixels.size, [24, 240]);
+    assert_eq!(app.pins[&1].pixels.resolution(), [24, 240]);
 }
 
 #[cfg(target_os = "macos")]
@@ -2039,7 +2039,7 @@ fn retina_overlay_canonicalizes_odd_pixels_before_copy_and_initial_placement() {
             height: 402,
         };
         assert_eq!(selected, Some(rect));
-        assert_eq!(app.pins[&1].pixels.size, [602, 402]);
+        assert_eq!(app.pins[&1].pixels.resolution(), [602, 402]);
         assert_eq!(
             copies,
             [capture::crop(&source, rect).expect("canonical source crop")]
@@ -2097,7 +2097,7 @@ fn pin_builder_cancels_backend_zoom_without_enlarging_tiny_images_for_controls()
                 let model = &app.pins[&1];
                 assert!(builder.min_inner_size.is_none());
                 assert_eq!(
-                    model.pixels.size,
+                    model.pixels.resolution(),
                     [rect.width as usize, rect.height as usize]
                 );
                 let unzoomed = pin::frame_geometry(
@@ -4876,7 +4876,7 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
         );
         assert_eq!(app.pins[&1].initial, initial);
         assert_eq!(app.pins[&1].pixels.as_ref(), original.as_ref());
-        assert_eq!(original.size, [3, 5]);
+        assert_eq!(original.resolution(), [3, 5]);
     }
 }
 
