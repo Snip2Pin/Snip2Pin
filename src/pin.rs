@@ -203,6 +203,21 @@ pub struct Toolbar {
 }
 
 impl Toolbar {
+    pub fn controls(self) -> impl Iterator<Item = (Control, Rect)> {
+        Control::ALL
+            .into_iter()
+            .skip(Control::ALL.len().saturating_sub(self.count))
+            .enumerate()
+            .map(move |(index, control)| {
+                let rect = Rect::from_min_size(
+                    self.bounds.min
+                        + egui::vec2(index as f32 * (METRICS.button + METRICS.button_gap), 0.0),
+                    Vec2::splat(METRICS.button),
+                );
+                (control, rect)
+            })
+    }
+
     pub fn translate(self, offset: Vec2) -> Self {
         Self {
             bounds: self.bounds.translate(offset),

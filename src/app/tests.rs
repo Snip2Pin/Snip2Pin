@@ -18,7 +18,7 @@ fn app() -> Snip2Pin {
         active_display: None,
         pins: BTreeMap::new(),
         pin_menu: None,
-        unlock_hint: None,
+        layer_presentation: None,
         quit_confirmation: None,
         next_quit_request: 0,
         #[cfg(target_os = "macos")]
@@ -46,6 +46,90 @@ fn app() -> Snip2Pin {
         permission: ScreenPermission::default(),
         relaunch: Arc::new(Mutex::new(None)),
     }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn capture_paints_hidden_then_mapped_before_accepting_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let request = app.gate.begin().expect("capture request");
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    let publish = |app: &Snip2Pin| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        output
+    };
+    for visible in [false, true] {
+        let output = publish(&app);
+        let viewport = &output.viewport_output[&layer_id(0)];
+        assert_eq!(viewport.builder.visible, Some(visible));
+        assert_eq!(viewport.builder.mouse_passthrough, Some(true));
+        let bounds = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            app.layers[&0].display.logical_size().into(),
+        );
+        let mut input = egui::RawInput {
+            viewport_id: layer_id(0),
+            screen_rect: Some(bounds),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(layer_id(0), egui::ViewportInfo::default());
+        let mut frame = ctx.run_ui(input, |ui| viewport.viewport_ui_cb.as_ref().unwrap()(ui));
+        frame.textures_delta.clear();
+        assert!(
+            frame
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Mesh(_)))
+        );
+        assert!(
+            frame
+                .viewport_output
+                .values()
+                .flat_map(|viewport| &viewport.commands)
+                .all(|command| !matches!(command, ViewportCommand::Focus))
+        );
+        assert!(
+            !app.layers[&0]
+                .selection
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .focus_requested
+        );
+        let events = app.events.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Selection { .. }))
+        );
+        for event in events {
+            app.handle_event(event, &ctx);
+        }
+    }
+    let output = publish(&app);
+    assert_eq!(
+        output.viewport_output[&layer_id(0)]
+            .builder
+            .mouse_passthrough,
+        Some(false)
+    );
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    app.reset_capture(&ctx);
+    assert!(app.layer_presentation.is_none());
 }
 
 #[test]
@@ -455,7 +539,11 @@ fn screen_layers_are_visible_only_for_capture_or_recovery_notice() {
     assert!(!visible(&app), "an idle layer must not occupy the desktop");
     let request = app.gate.begin().expect("capture request");
     app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
-    assert!(visible(&app), "capture must reveal the prepared layer");
+    assert_eq!(
+        visible(&app),
+        !cfg!(target_os = "windows"),
+        "Windows capture must paint before mapping its layer"
+    );
     app.reset_capture(&ctx);
     assert!(!visible(&app), "cancellation must unmap the layer");
     app.toggle_pin_lock(1, &ctx);
@@ -465,15 +553,15 @@ fn screen_layers_are_visible_only_for_capture_or_recovery_notice() {
         "prepare a notice before revealing its layer"
     );
     app.handle_event(
-        Event::HintFrameDrawn {
-            hint: app.unlock_hint.as_ref().unwrap().raised.clone(),
+        Event::LayerFrameDrawn {
+            hint: app.layer_presentation.as_ref().unwrap().raised.clone(),
             display: 0,
             bounds: test_hint_bounds(),
         },
         &ctx,
     );
     assert!(visible(&app), "a recovery notice must remain visible");
-    app.clear_unlock_hint(&ctx);
+    app.clear_layer_presentation(&ctx);
     assert!(!visible(&app), "expired notices must release the desktop");
 }
 
@@ -2120,7 +2208,7 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
         (None, None),
     ] {
         app.show_unlock_hint(1, point, &ctx);
-        assert!(app.unlock_hint.as_ref().unwrap().until.is_none());
+        assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
         let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
         setup.textures_delta.clear();
         for (&id, layer) in &app.layers {
@@ -2176,13 +2264,16 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
         let drawn = app
             .events
             .try_iter()
-            .filter(|event| matches!(event, Event::HintFrameDrawn { .. }))
+            .filter(|event| matches!(event, Event::LayerFrameDrawn { .. }))
             .collect::<Vec<_>>();
-        assert_eq!(drawn.len(), app.unlock_hint.as_ref().unwrap().areas.len());
+        assert_eq!(
+            drawn.len(),
+            app.layer_presentation.as_ref().unwrap().areas.len()
+        );
         for event in drawn {
             app.handle_event(event, &ctx);
         }
-        let hint = app.unlock_hint.as_ref().unwrap();
+        let hint = app.layer_presentation.as_ref().unwrap();
         assert_eq!(hint.ready.len(), hint.areas.len());
         assert_eq!(hint.until.is_some(), !cfg!(target_os = "windows"));
     }
@@ -2191,15 +2282,18 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
     assert_eq!(initial, app.pins[&1].initial);
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     app.unlock_pins(&ctx);
-    assert!(app.unlock_hint.is_none());
+    assert!(app.layer_presentation.is_none());
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, Some([900.0, 600.0]), &ctx);
-    app.unlock_hint.as_mut().expect("active reminder").until = Some(Instant::now());
+    app.layer_presentation
+        .as_mut()
+        .expect("active reminder")
+        .until = Some(Instant::now());
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
     });
     assert!(
-        app.unlock_hint.is_none(),
+        app.layer_presentation.is_none(),
         "scheduled repaint expires the notice without polling"
     );
 }
@@ -2211,27 +2305,27 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     let mut app = tiny_pin_app(&ctx);
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, None, &ctx);
-    let stale = app.unlock_hint.as_ref().unwrap().raised.clone();
+    let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
     app.show_unlock_hint(1, None, &ctx);
-    let current = app.unlock_hint.as_ref().unwrap().raised.clone();
+    let current = app.layer_presentation.as_ref().unwrap().raised.clone();
     assert!(
         stale.load(Ordering::Acquire),
         "cancelled callbacks cannot prepare opacity"
     );
     for (hint, display) in [(stale, 0), (current.clone(), u32::MAX)] {
         app.handle_event(
-            Event::HintFrameDrawn {
+            Event::LayerFrameDrawn {
                 hint,
                 display,
                 bounds: test_hint_bounds(),
             },
             &ctx,
         );
-        let waiting = app.unlock_hint.as_ref().unwrap();
+        let waiting = app.layer_presentation.as_ref().unwrap();
         assert!(waiting.until.is_none());
         assert!(waiting.ready.is_empty());
     }
-    let drawn = || Event::HintFrameDrawn {
+    let drawn = || Event::LayerFrameDrawn {
         hint: current.clone(),
         display: 0,
         bounds: test_hint_bounds(),
@@ -2239,19 +2333,22 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     app.handle_event(drawn(), &ctx);
     if cfg!(target_os = "windows") {
         app.handle_event(
-            Event::HintVisibleFrameDrawn {
+            Event::LayerVisibleFrameDrawn {
                 hint: current.clone(),
                 display: 0,
             },
             &ctx,
         );
     }
-    let deadline = app.unlock_hint.as_ref().unwrap().until.unwrap();
+    let deadline = app.layer_presentation.as_ref().unwrap().until.unwrap();
     app.handle_event(drawn(), &ctx);
-    assert_eq!(app.unlock_hint.as_ref().unwrap().until, Some(deadline));
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        Some(deadline)
+    );
     app.unlock_pins(&ctx);
     app.handle_event(drawn(), &ctx);
-    assert!(app.unlock_hint.is_none());
+    assert!(app.layer_presentation.is_none());
 }
 
 #[test]
@@ -2306,9 +2403,9 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
     assert!(
         app.events
             .try_iter()
-            .all(|event| !matches!(event, Event::HintFrameDrawn { .. }))
+            .all(|event| !matches!(event, Event::LayerFrameDrawn { .. }))
     );
-    assert!(app.unlock_hint.as_ref().unwrap().until.is_none());
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
     let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
         let mut frame = eframe::Frame::_new_kittest();
         eframe::App::logic(&mut app, ui.ctx(), &mut frame);
@@ -2339,7 +2436,7 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
             .contains(&ViewportCommand::RequestPaintWhileHidden)
     );
     assert_eq!(
-        app.unlock_hint.as_ref().unwrap().until.is_some(),
+        app.layer_presentation.as_ref().unwrap().until.is_some(),
         !cfg!(target_os = "windows")
     );
     assert!(!app.home_visible);
@@ -2376,22 +2473,22 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
     assert!(
         visible_frames
             .iter()
-            .all(|event| !matches!(event, Event::HintFrameDrawn { .. }))
+            .all(|event| !matches!(event, Event::LayerFrameDrawn { .. }))
     );
     assert_eq!(
         visible_frames
             .iter()
-            .filter(|event| matches!(event, Event::HintVisibleFrameDrawn { .. }))
+            .filter(|event| matches!(event, Event::LayerVisibleFrameDrawn { .. }))
             .count(),
         usize::from(cfg!(target_os = "windows"))
     );
     for event in visible_frames {
         app.handle_event(event, &ctx);
     }
-    assert!(app.unlock_hint.as_ref().unwrap().until.is_some());
-    let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_some());
+    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
     app.handle_event(
-        Event::HintFrameDrawn {
+        Event::LayerFrameDrawn {
             hint,
             display: 0,
             bounds: test_hint_bounds(),
@@ -2402,7 +2499,7 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
         !app.layers[&0].paint_pending,
         "duplicate acknowledgements do not repaint"
     );
-    app.clear_unlock_hint(&ctx);
+    app.clear_layer_presentation(&ctx);
     let mut cleared = ctx.run_ui(egui::RawInput::default(), |ui| {
         let mut frame = eframe::Frame::_new_kittest();
         eframe::App::logic(&mut app, ui.ctx(), &mut frame);
@@ -2432,30 +2529,30 @@ fn notice_errors_only_terminate_their_own_generation() {
     let mut app = tiny_pin_app(&ctx);
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, None, &ctx);
-    let stale = app.unlock_hint.as_ref().unwrap().raised.clone();
+    let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
     app.show_unlock_hint(1, None, &ctx);
-    let current = app.unlock_hint.as_ref().unwrap().raised.clone();
+    let current = app.layer_presentation.as_ref().unwrap().raised.clone();
     app.handle_event(
-        Event::HintError {
+        Event::LayerError {
             hint: stale,
             error: "prepare failed".into(),
         },
         &ctx,
     );
     assert!(Arc::ptr_eq(
-        &app.unlock_hint.as_ref().unwrap().raised,
+        &app.layer_presentation.as_ref().unwrap().raised,
         &current
     ));
     app.handle_event(
-        Event::HintError {
+        Event::LayerError {
             hint: current.clone(),
             error: "prepare failed".into(),
         },
         &ctx,
     );
-    assert!(app.unlock_hint.is_none());
+    assert!(app.layer_presentation.is_none());
     app.handle_event(
-        Event::HintFrameDrawn {
+        Event::LayerFrameDrawn {
             hint: current.clone(),
             display: 0,
             bounds: test_hint_bounds(),
@@ -2463,13 +2560,13 @@ fn notice_errors_only_terminate_their_own_generation() {
         &ctx,
     );
     app.handle_event(
-        Event::HintVisibleFrameDrawn {
+        Event::LayerVisibleFrameDrawn {
             hint: current,
             display: 0,
         },
         &ctx,
     );
-    assert!(app.unlock_hint.is_none());
+    assert!(app.layer_presentation.is_none());
 }
 
 #[cfg(target_os = "windows")]
@@ -2480,18 +2577,28 @@ fn notice_reveals_only_after_every_visible_display_frame() {
     let mut app = tiny_pin_app(&ctx);
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, None, &ctx);
-    let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
-    let area = app.unlock_hint.as_ref().unwrap().areas[&0];
-    app.unlock_hint.as_mut().unwrap().areas.insert(1, area);
-    let visible = |display| Event::HintVisibleFrameDrawn {
+    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
+    let area = app.layer_presentation.as_ref().unwrap().areas[&0];
+    app.layer_presentation
+        .as_mut()
+        .unwrap()
+        .areas
+        .insert(1, area);
+    let visible = |display| Event::LayerVisibleFrameDrawn {
         hint: hint.clone(),
         display,
     };
     app.handle_event(visible(0), &ctx);
-    assert!(app.unlock_hint.as_ref().unwrap().visible_ready.is_empty());
+    assert!(
+        app.layer_presentation
+            .as_ref()
+            .unwrap()
+            .visible_ready
+            .is_empty()
+    );
     for display in [0, 1] {
         app.handle_event(
-            Event::HintFrameDrawn {
+            Event::LayerFrameDrawn {
                 hint: hint.clone(),
                 display,
                 bounds: test_hint_bounds(),
@@ -2501,15 +2608,24 @@ fn notice_reveals_only_after_every_visible_display_frame() {
     }
     for display in [u32::MAX, 0, 0] {
         app.handle_event(visible(display), &ctx);
-        assert!(app.unlock_hint.as_ref().unwrap().until.is_none());
+        assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
     }
     app.handle_event(visible(1), &ctx);
-    let deadline = app.unlock_hint.as_ref().unwrap().until.unwrap();
+    let deadline = app.layer_presentation.as_ref().unwrap().until.unwrap();
     app.handle_event(visible(1), &ctx);
-    assert_eq!(app.unlock_hint.as_ref().unwrap().until, Some(deadline));
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        Some(deadline)
+    );
     app.show_unlock_hint(1, None, &ctx);
     app.handle_event(visible(0), &ctx);
-    assert!(app.unlock_hint.as_ref().unwrap().visible_ready.is_empty());
+    assert!(
+        app.layer_presentation
+            .as_ref()
+            .unwrap()
+            .visible_ready
+            .is_empty()
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -2526,7 +2642,12 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
             app.show_unlock_hint(1, None, &ctx);
             let work =
                 egui::Rect::from_min_size(egui::pos2(-728.0, 40.0), egui::vec2(700.0, 480.0));
-            *app.unlock_hint.as_mut().unwrap().areas.get_mut(&0).unwrap() = work;
+            *app.layer_presentation
+                .as_mut()
+                .unwrap()
+                .areas
+                .get_mut(&0)
+                .unwrap() = work;
             let input = || {
                 let mut input = egui::RawInput::default();
                 input.viewports.insert(
@@ -2568,7 +2689,7 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
             for event in app.events.try_iter().collect::<Vec<_>>() {
                 app.handle_event(event, &ctx);
             }
-            let panel = app.unlock_hint.as_ref().unwrap().ready[&0];
+            let panel = app.layer_presentation.as_ref().unwrap().ready[&0];
             assert!(work.contains_rect(panel));
             assert!(panel.height() < work.height() / 2.0);
             let mut ready = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
@@ -2606,7 +2727,12 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
                 );
             }
             app.show_unlock_hint(1, None, &ctx);
-            *app.unlock_hint.as_mut().unwrap().areas.get_mut(&0).unwrap() = work;
+            *app.layer_presentation
+                .as_mut()
+                .unwrap()
+                .areas
+                .get_mut(&0)
+                .unwrap() = work;
             let mut repeated = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
             repeated.textures_delta.clear();
             let repeated_viewport = &repeated.viewport_output[&layer_id(0)];
@@ -2624,14 +2750,14 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
             for event in app.events.try_iter().collect::<Vec<_>>() {
                 app.handle_event(event, &ctx);
             }
-            assert_eq!(app.unlock_hint.as_ref().unwrap().ready[&0], panel);
+            assert_eq!(app.layer_presentation.as_ref().unwrap().ready[&0], panel);
             let mut ready_again = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
             ready_again.textures_delta.clear();
             let (commands, recreate) =
                 native_builder.patch(ready_again.viewport_output[&layer_id(0)].builder.clone());
             assert!(!recreate);
             assert_eq!(commands, [ViewportCommand::Visible(true)]);
-            app.clear_unlock_hint(&ctx);
+            app.clear_layer_presentation(&ctx);
             let mut idle = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
             idle.textures_delta.clear();
             let (commands, recreate) =

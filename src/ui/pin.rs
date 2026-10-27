@@ -217,7 +217,18 @@ fn image_with_host(
             bounds.contains(point)
                 && ui.clip_rect().contains(point)
                 && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-                && !excluded.is_some_and(|rect| rect.contains(point))
+                && !toolbar.is_some_and(|toolbar| {
+                    if locked {
+                        // Preserve egui's hit tolerance for copy and unlock.
+                        // Disabled close remains a blocked interaction attempt.
+                        let radius = ui.ctx().global_style().interaction.interact_radius;
+                        toolbar.controls().any(|(control, rect)| {
+                            control != Control::Close && rect.expand(radius).contains(point)
+                        })
+                    } else {
+                        toolbar.bounds.contains(point)
+                    }
+                })
         });
     if !locked && pressed_on_image && ui.input(|input| input.pointer.primary_down()) {
         let pressed_edge = (!native_edges)
@@ -250,21 +261,12 @@ fn image_with_host(
 
 fn controls(ui: &mut egui::Ui, id: u64, locked: bool, toolbar: Toolbar, events: &dyn Fn(Action)) {
     let locale = crate::i18n::locale(ui.ctx());
-    let step = METRICS.button + METRICS.button_gap;
-    for (index, control) in Control::ALL
-        .into_iter()
-        .skip(Control::ALL.len().saturating_sub(toolbar.count))
-        .enumerate()
-    {
+    for (control, rect) in toolbar.controls() {
         let command = match control {
             Control::Copy => MenuCommand::Copy,
             Control::Lock => MenuCommand::ToggleLock,
             Control::Close => MenuCommand::Close,
         };
-        let rect = Rect::from_min_size(
-            toolbar.bounds.min + egui::vec2(index as f32 * step, 0.0),
-            egui::Vec2::splat(METRICS.button),
-        );
         let enabled = command.enabled(locked);
         let response = ui
             .push_id(("pin-control", id, control), |ui| {

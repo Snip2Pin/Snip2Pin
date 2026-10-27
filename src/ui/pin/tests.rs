@@ -152,6 +152,90 @@ fn complete_view_owns_focus_painting_and_excludes_buttons_from_native_gestures()
 }
 
 #[test]
+fn locked_toolbar_only_excludes_available_actions_from_recovery_hint() {
+    for size in [egui::vec2(50.0, 33.0), egui::vec2(240.0, 160.0)] {
+        let bounds = Rect::from_min_size(Pos2::ZERO, size);
+        let toolbar = snip2pin::pin::toolbar_geometry(bounds, &[], bounds, 1.0).unwrap();
+        let step = METRICS.button + METRICS.button_gap;
+        let mut cases = vec![(bounds.center(), Action::UnlockHint(7))];
+        for (index, control) in Control::ALL.into_iter().skip(3 - toolbar.count).enumerate() {
+            let point = toolbar.bounds.min
+                + egui::vec2(
+                    index as f32 * step + METRICS.button / 2.0,
+                    METRICS.button / 2.0,
+                );
+            cases.push((
+                point,
+                match control {
+                    Control::Copy => Action::CopyPin(7),
+                    Control::Lock => Action::ToggleLock(7),
+                    Control::Close => Action::UnlockHint(7),
+                },
+            ));
+        }
+        if toolbar.count > 1 {
+            cases.push((
+                toolbar.bounds.min
+                    + egui::vec2(
+                        METRICS.button + METRICS.button_gap / 2.0,
+                        METRICS.button / 2.0,
+                    ),
+                Action::ToggleLock(7),
+            ));
+        }
+        for (point, expected) in cases {
+            for first_hover_with_press in [false, true] {
+                let ctx = egui::Context::default();
+                let texture = texture(&ctx);
+                let actions = RefCell::new(Vec::new());
+                for events in [
+                    if first_hover_with_press {
+                        vec![]
+                    } else {
+                        vec![Event::PointerMoved(point)]
+                    },
+                    vec![Event::PointerMoved(point), pointer(point, true)],
+                    vec![pointer(point, false)],
+                ] {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(bounds),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            show(
+                                ui,
+                                7,
+                                &texture,
+                                Interaction {
+                                    locked: true,
+                                    toolbar: Some(toolbar),
+                                    ..Default::default()
+                                },
+                                &|action| actions.borrow_mut().push(action),
+                                |_| panic!("locked toolbar input cannot start native gestures"),
+                            )
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+                let expected = if first_hover_with_press && expected != Action::UnlockHint(7) {
+                    vec![]
+                } else {
+                    vec![expected.clone()]
+                };
+                assert_eq!(
+                    *actions.borrow(),
+                    expected,
+                    "size={size:?}, point={point:?}, first_hover_with_press={first_hover_with_press}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn locked_pin_hint_is_not_painted_inside_the_image_viewport() {
     for released in [false, true] {
         check_locked_pin_hint(released);
@@ -310,7 +394,14 @@ fn batched_presses_preserve_toolbar_exclusion_and_the_latest_native_origin() {
                 assert_eq!(commands(&output), expected.as_slice());
             }
         }
-        assert!(actions.into_inner().is_empty());
+        assert_eq!(
+            actions.into_inner(),
+            if locked {
+                vec![Action::UnlockHint(7)]
+            } else {
+                vec![]
+            }
+        );
     }
 }
 
@@ -2030,13 +2121,17 @@ fn locked_controls_allow_copy_and_unlock_while_close_stays_disabled() {
     for (size, cases) in [
         (
             egui::vec2(86.0, 26.0),
-            vec![Some(Action::CopyPin(7)), Some(Action::ToggleLock(7)), None],
+            vec![
+                Some(Action::CopyPin(7)),
+                Some(Action::ToggleLock(7)),
+                Some(Action::UnlockHint(7)),
+            ],
         ),
         (
             egui::vec2(56.0, 26.0),
-            vec![Some(Action::ToggleLock(7)), None],
+            vec![Some(Action::ToggleLock(7)), Some(Action::UnlockHint(7))],
         ),
-        (egui::vec2(26.0, 26.0), vec![None]),
+        (egui::vec2(26.0, 26.0), vec![Some(Action::UnlockHint(7))]),
     ] {
         for (index, expected) in cases.into_iter().enumerate() {
             let ctx = egui::Context::default();

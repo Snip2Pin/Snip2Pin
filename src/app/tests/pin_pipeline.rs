@@ -1,5 +1,70 @@
 use super::*;
 
+#[test]
+fn small_locked_close_press_reaches_the_screen_notice_presentation() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(26.0, 26.0));
+    let point = egui::pos2(13.0, 13.0);
+    paint_pin(
+        &app,
+        &ctx,
+        input(1, rect, 1.0, vec![egui::Event::PointerMoved(point)]),
+    );
+    paint_pin(
+        &app,
+        &ctx,
+        input(
+            1,
+            rect,
+            1.0,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ),
+    );
+    consume(&mut app, &ctx, input(1, rect, 1.0, vec![]));
+    assert!(app.layer_presentation.is_some());
+    assert!(app.pins[&1].locked);
+    assert!(matches!(app.phase, Phase::Idle));
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    setup.textures_delta.clear();
+    let callback = setup.viewport_output[&layer_id(0)]
+        .viewport_ui_cb
+        .as_ref()
+        .unwrap();
+    let mut layer_input = egui::RawInput {
+        viewport_id: layer_id(0),
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            app.layers[&0].display.logical_size().into(),
+        )),
+        ..Default::default()
+    };
+    layer_input
+        .viewports
+        .insert(layer_id(0), egui::ViewportInfo::default());
+    let mut output = ctx.run_ui(layer_input, |ui| callback(ui));
+    output.textures_delta.clear();
+    let text = ui::screen_hint::unlock_text(&ctx);
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text)));
+    assert!(
+        output
+            .viewport_output
+            .values()
+            .flat_map(|viewport| &viewport.commands)
+            .all(|command| !matches!(
+                command,
+                ViewportCommand::Focus | ViewportCommand::MousePassthrough(false)
+            ))
+    );
+}
+
 fn key_tap(key: egui::Key) -> [egui::Event; 2] {
     [true, false].map(|pressed| egui::Event::Key {
         key,

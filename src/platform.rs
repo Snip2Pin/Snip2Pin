@@ -305,7 +305,7 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
 }
 
 /// Raise this process's existing transparent layers without focus or geometry changes.
-pub fn raise_screen_hint() -> Result<(), Message> {
+pub fn prepare_screen_layers() -> Result<(), Message> {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pin_window::raise_selection()?;
     // macOS selection layers already have a higher native level than pins.
@@ -313,9 +313,16 @@ pub fn raise_screen_hint() -> Result<(), Message> {
 }
 
 /// Reveal prepared passive Windows layers without changing geometry or focus.
-pub fn reveal_screen_hint() -> Result<(), Message> {
+pub fn reveal_screen_layers() -> Result<(), Message> {
     #[cfg(target_os = "windows")]
     pin_window::selection_opacity(u8::MAX)?;
+    Ok(())
+}
+
+/// Conceal existing passive Windows layers before changing their bounds.
+pub fn conceal_screen_layers() -> Result<(), Message> {
+    #[cfg(target_os = "windows")]
+    pin_window::selection_opacity(0)?;
     Ok(())
 }
 
