@@ -1715,6 +1715,42 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
 }
 
 #[test]
+fn pin_maximization_policy_is_stable_across_lock_changes_and_preserves_resize() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let mut previous = None::<egui::ViewportBuilder>;
+    for locked in [false, true, false] {
+        app.set_pin_locked(1, locked, &ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        output.textures_delta.clear();
+        let builder = &output.viewport_output[&pin_id(1)].builder;
+        assert_eq!(
+            builder.maximize_button,
+            cfg!(target_os = "windows").then_some(false)
+        );
+        assert_eq!(
+            builder.resizable,
+            Some(cfg!(target_os = "macos") || !locked)
+        );
+        if let Some(previous) = &mut previous {
+            assert!(
+                !previous.patch(builder.clone()).1,
+                "locking must not recreate the pin"
+            );
+        } else {
+            previous = Some(builder.clone());
+        }
+        assert!(
+            output.viewport_output[&ViewportId::ROOT]
+                .builder
+                .maximize_button
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn narrow_capture_keeps_its_display_size_and_text_density() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
