@@ -2011,8 +2011,6 @@ impl Snip2Pin {
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false);
-            #[cfg(target_os = "windows")]
-            let builder = builder.with_maximize_button(false);
             #[cfg(target_os = "macos")]
             let builder = {
                 // Querying maximized state moves an ordered borderless AppKit window.
