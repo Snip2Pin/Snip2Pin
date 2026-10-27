@@ -2920,6 +2920,25 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
                         .contains_rect(shape.shape.visual_bounding_rect())
                 );
             }
+            let generation = app.layer_presentation.as_ref().unwrap().raised.clone();
+            app.show_unlock_hint(1, None, &ctx);
+            let mut refreshed = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            refreshed.textures_delta.clear();
+            assert!(Arc::ptr_eq(
+                &generation,
+                &app.layer_presentation.as_ref().unwrap().raised
+            ));
+            let (commands, recreate) =
+                native_builder.patch(refreshed.viewport_output[&layer_id(0)].builder.clone());
+            assert!(!recreate);
+            assert!(
+                commands.is_empty(),
+                "refresh keeps the visible panel mapped"
+            );
+
+            // A genuinely new notice still prepares while hidden, preserving
+            // the previous panel bounds until its own measurement is ready.
+            app.clear_layer_presentation(&ctx);
             app.show_unlock_hint(1, None, &ctx);
             *app.layer_presentation
                 .as_mut()
