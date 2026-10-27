@@ -2485,6 +2485,7 @@ fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
             ctx.set_embed_viewports(false);
             ctx.set_zoom_factor(zoom);
             let mut app = tiny_pin_app(&ctx);
+            app.layers.get_mut(&0).unwrap().display.origin = [-800.0, 0.0];
             app.toggle_pin_lock(1, &ctx);
             app.show_unlock_hint(1, None, &ctx);
             let work =
