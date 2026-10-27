@@ -2366,6 +2366,7 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, None, &ctx);
     let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.clear_layer_presentation(&ctx);
     app.show_unlock_hint(1, None, &ctx);
     let current = app.layer_presentation.as_ref().unwrap().raised.clone();
     assert!(
@@ -2408,6 +2409,138 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     );
     app.unlock_pins(&ctx);
     app.handle_event(drawn(), &ctx);
+    assert!(app.layer_presentation.is_none());
+}
+
+#[test]
+fn deferred_locked_drag_refreshes_after_hold_and_drops_blocked_presses() {
+    for blocker in ["none", "menu", "recording"] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        app.home_visible = false;
+        app.toggle_pin_lock(1, &ctx);
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        setup.textures_delta.clear();
+        let paint = setup.viewport_output[&pin_id(1)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap();
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 180.0));
+        let origin = bounds.center();
+        for frame in 0..4 {
+            if frame == 1 {
+                if blocker == "menu" {
+                    ui::pin::MenuInput::sync(&ctx, true);
+                }
+                if blocker == "recording" {
+                    app.recording.start();
+                    app.recording.sync_input(&ctx);
+                }
+            }
+            if frame == 2 {
+                ui::pin::MenuInput::sync(&ctx, false);
+                app.recording.cancel();
+                app.recording.sync_input(&ctx);
+            }
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(origin)],
+                1 => vec![egui::Event::PointerButton {
+                    pos: origin,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                2 => vec![],
+                _ => vec![egui::Event::PointerMoved(origin + egui::vec2(30.0, 0.0))],
+            };
+            let mut input = egui::RawInput {
+                viewport_id: pin_id(1),
+                screen_rect: Some(bounds),
+                time: Some(frame as f64),
+                events,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                pin_id(1),
+                egui::ViewportInfo {
+                    native_pixels_per_point: Some(1.0),
+                    inner_rect: Some(bounds),
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| paint(ui));
+            output.textures_delta.clear();
+            let pending: Vec<_> = app.events.try_iter().collect();
+            let count = pending
+                .iter()
+                .filter(|event| matches!(event, Event::UnlockHint(1)))
+                .count();
+            assert_eq!(
+                count,
+                usize::from(blocker == "none" && (frame == 1 || frame == 3)),
+                "{blocker}, frame={frame}"
+            );
+            for event in pending {
+                app.handle_event(event, &ctx);
+            }
+            if frame == 2 && blocker == "none" {
+                // Simulate the initial notice's scheduled one-second expiry.
+                app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+                let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+                    eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+                });
+                assert!(app.layer_presentation.is_none());
+            }
+            if frame == 3 {
+                assert_eq!(app.layer_presentation.is_some(), blocker == "none");
+            }
+        }
+    }
+}
+
+#[test]
+fn repeating_a_hint_reuses_preparation_and_refreshes_the_visible_deadline() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let generation = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.show_unlock_hint(1, None, &ctx);
+    assert!(Arc::ptr_eq(
+        &generation,
+        &app.layer_presentation.as_ref().unwrap().raised
+    ));
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    app.show_unlock_hint(1, None, &ctx);
+    let current = app.layer_presentation.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&generation, &current.raised));
+    assert!(current.until.unwrap() > Instant::now());
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    app.sender.send(Event::UnlockHint(1)).unwrap();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    let current = app.layer_presentation.as_ref().unwrap();
+    assert!(
+        Arc::ptr_eq(&generation, &current.raised),
+        "queued movement refreshes before expiry conceals the layer"
+    );
+    let deadline = current.until;
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        deadline,
+        "idle logic cannot extend the notice"
+    );
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
     assert!(app.layer_presentation.is_none());
 }
 
@@ -2590,6 +2723,7 @@ fn notice_errors_only_terminate_their_own_generation() {
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, None, &ctx);
     let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.clear_layer_presentation(&ctx);
     app.show_unlock_hint(1, None, &ctx);
     let current = app.layer_presentation.as_ref().unwrap().raised.clone();
     app.handle_event(

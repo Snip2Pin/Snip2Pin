@@ -1336,7 +1336,6 @@ impl Snip2Pin {
         {
             return;
         }
-        self.clear_layer_presentation(ctx);
         // Missing desktop coordinates (for example Wayland) must not make a
         // recovery notice unreachable. Use all known display layers there.
         let display = point.and_then(|point| {
@@ -1354,6 +1353,23 @@ impl Snip2Pin {
         if displays.is_empty() {
             return;
         }
+        if let Some(current) = &mut self.layer_presentation
+            && matches!(current.purpose, LayerPurpose::Hint { pin } if pin == id)
+            && current
+                .areas
+                .keys()
+                .copied()
+                .eq(displays.iter().map(|display| display.id))
+        {
+            // Movement may arrive while the first frame is still preparing.
+            // Reuse it, or extend an already presented notice without hiding it.
+            if let Some(until) = &mut current.until {
+                *until = Instant::now() + ui::screen_hint::UNLOCK_DURATION;
+                ctx.request_repaint_after_for(ui::screen_hint::UNLOCK_DURATION, ViewportId::ROOT);
+            }
+            return;
+        }
+        self.clear_layer_presentation(ctx);
         let areas = display_areas(&displays, self.demo);
         self.layer_presentation = Some(LayerPresentation {
             purpose: LayerPurpose::Hint { pin: id },
@@ -2321,14 +2337,6 @@ impl eframe::App for Snip2Pin {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_locale(ctx, self.preferences.language.resolve(self.system_locale));
-        if let Some(until) = self.layer_presentation.as_ref().and_then(|hint| hint.until) {
-            let remaining = until.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                self.clear_layer_presentation(ctx);
-            } else {
-                ctx.request_repaint_after_for(remaining, ViewportId::ROOT);
-            }
-        }
         if ctx.current_pass_index() == 0
             && !self.recording.blocks_input(ctx)
             && ctx.input(|input| {
@@ -2351,6 +2359,14 @@ impl eframe::App for Snip2Pin {
         }
         while let Ok(event) = self.events.try_recv() {
             self.handle_event(event, ctx);
+        }
+        if let Some(until) = self.layer_presentation.as_ref().and_then(|hint| hint.until) {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.clear_layer_presentation(ctx);
+            } else {
+                ctx.request_repaint_after_for(remaining, ViewportId::ROOT);
+            }
         }
         let menu_state = self.menu_state();
         if let Some(tray) = &mut self.tray {

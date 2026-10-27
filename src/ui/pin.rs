@@ -21,6 +21,16 @@ pub fn forget(ctx: &egui::Context, id: u64) {
 }
 
 pub fn forget_input(ctx: &egui::Context, id: u64) {
+    ctx.data_mut(|data| data.remove::<bool>(locked_press_key(id)));
+    forget_adjustments(ctx, id);
+}
+
+fn locked_press_key(id: u64) -> egui::Id {
+    // Only eligibility belongs to us; egui owns the press and drag episode.
+    egui::Id::unique(("pin-locked-press", id))
+}
+
+fn forget_adjustments(ctx: &egui::Context, id: u64) {
     keyboard::forget(ctx, id);
     ctx.data_mut(|data| {
         data.remove::<session::Session>(session::key(id));
@@ -246,9 +256,37 @@ fn image_with_host(
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
-    if locked && ui.ctx().current_pass_index() == 0 && pressed_on_image {
-        events(Action::UnlockHint(id));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    if ui.ctx().current_pass_index() == 0 {
+        let key = locked_press_key(id);
+        let enabled = ui.is_enabled();
+        let lost_focus = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+        });
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let eligible = ui.ctx().data_mut(|data| {
+            if !locked || !enabled || lost_focus {
+                data.remove::<bool>(key);
+                return false;
+            }
+            if pressed.is_some() {
+                data.insert_temp(key, pressed_on_image);
+            }
+            let eligible = data.get_temp::<bool>(key).unwrap_or(false);
+            if !primary_down {
+                data.remove::<bool>(key);
+            }
+            eligible
+        });
+        let moved = primary_down
+            && response.dragged_by(egui::PointerButton::Primary)
+            && ui.input(|input| input.pointer.delta() != egui::Vec2::ZERO);
+        if locked && !lost_focus && (pressed_on_image || (eligible && moved)) {
+            events(Action::UnlockHint(id));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
     if ui.ctx().current_pass_index() == 0 && !locked && close_requested(ui, focused) {
         events(Action::ClosePin(id));
