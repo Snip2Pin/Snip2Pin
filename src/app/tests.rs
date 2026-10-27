@@ -49,6 +49,59 @@ fn app() -> Snip2Pin {
 }
 
 #[cfg(target_os = "windows")]
+fn prepare_capture_layers(app: &mut Snip2Pin, ctx: &egui::Context) {
+    for visible in [false, true] {
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            eframe::App::logic(app, ui.ctx(), &mut frame);
+            eframe::App::ui(app, ui, &mut frame);
+        });
+        root.textures_delta.clear();
+        for (&display, layer) in &app.layers {
+            let viewport = &root.viewport_output[&layer_id(display)];
+            assert_eq!(viewport.builder.visible, Some(visible));
+            assert_eq!(viewport.builder.mouse_passthrough, Some(true));
+            let bounds =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, layer.display.logical_size().into());
+            let mut input = egui::RawInput {
+                viewport_id: layer_id(display),
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                layer_id(display),
+                egui::ViewportInfo {
+                    inner_rect: Some(bounds),
+                    native_pixels_per_point: Some(layer.display.scale),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                viewport
+                    .viewport_ui_cb
+                    .as_ref()
+                    .expect("production capture callback")(ui)
+            });
+            output.textures_delta.clear();
+        }
+    }
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(app, ui.ctx(), &mut frame);
+        eframe::App::ui(app, ui, &mut frame);
+    });
+    root.textures_delta.clear();
+    for &display in app.layers.keys() {
+        assert_eq!(
+            root.viewport_output[&layer_id(display)]
+                .builder
+                .mouse_passthrough,
+            Some(false)
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[test]
 fn capture_paints_hidden_then_mapped_before_accepting_input() {
     let ctx = egui::Context::default();
@@ -769,6 +822,8 @@ fn clicking_a_recognized_window_pins_and_copies_the_frozen_region_once() {
         egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
     let session = app.gate.begin().expect("capture");
     app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
     let mut layers = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
     layers.textures_delta.clear();
     let viewport = layer_id(0);
@@ -1778,6 +1833,8 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
     );
     let layout = pin::frame_geometry(placement, screen, 1.0);
     app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
     app.selection_action(id, 0, overlay::Action::Select(rect), &ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.show_pins(ui.ctx());
@@ -1796,7 +1853,10 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
         output.viewport_output[&ViewportId::ROOT]
             .commands
             .iter()
-            .all(|command| matches!(command, ViewportCommand::SetTheme(_))),
+            .all(|command| matches!(
+                command,
+                ViewportCommand::SetTheme(_) | ViewportCommand::RequestPaintWhileHidden
+            )),
         "unexpected root commands: {:?}",
         output.viewport_output[&ViewportId::ROOT].commands
     );
