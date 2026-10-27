@@ -254,7 +254,7 @@ struct Pin {
     session: u64,
     // The UI callback has drawn the image; compositor presentation is not observed.
     first_frame_drawn: Arc<AtomicBool>,
-    locked: bool,
+    locked: Arc<AtomicBool>,
     #[cfg(target_os = "macos")]
     lock_limits: Option<platform::PinLock>,
     #[cfg(target_os = "macos")]
@@ -263,6 +263,10 @@ struct Pin {
 }
 
 impl Pin {
+    fn locked(&self) -> bool {
+        self.locked.load(Ordering::Acquire)
+    }
+
     fn release(self, id: u64, ctx: &egui::Context) {
         ui::pin::forget(ctx, id);
         ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
@@ -785,7 +789,7 @@ impl Snip2Pin {
             #[cfg(target_os = "macos")]
             Event::BeginPinDrag { pin_id: id, press } => {
                 if !self.recording.blocks_input(ctx)
-                    && self.pins.get(&id).is_some_and(|pin| !pin.locked)
+                    && self.pins.get(&id).is_some_and(|pin| !pin.locked())
                 {
                     self.pin_drag.begin(id, press);
                 }
@@ -893,7 +897,7 @@ impl Snip2Pin {
                 }
                 self.recording.cancel();
                 self.reset_capture(ctx);
-                if self.pins.values().any(|pin| pin.locked) {
+                if self.pins.values().any(|pin| pin.locked()) {
                     self.next_quit_request = self.next_quit_request.wrapping_add(1);
                     self.quit_confirmation = Some(QuitConfirmation {
                         id: self.next_quit_request,
@@ -1179,7 +1183,7 @@ impl Snip2Pin {
                     screen_areas,
                     session: id,
                     first_frame_drawn: Arc::new(AtomicBool::new(false)),
-                    locked: false,
+                    locked: Arc::new(AtomicBool::new(false)),
                     #[cfg(target_os = "macos")]
                     lock_limits: None,
                     #[cfg(target_os = "macos")]
@@ -1209,7 +1213,7 @@ impl Snip2Pin {
             match platform::pin_menu::show(
                 id,
                 self.preferences.language.resolve(self.system_locale),
-                pin.locked,
+                pin.locked(),
             ) {
                 Ok(true) => return,
                 Ok(false) => {}
@@ -1250,7 +1254,7 @@ impl Snip2Pin {
     }
 
     fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
-        if self.pins.get(&id).is_some_and(|pin| pin.locked) {
+        if self.pins.get(&id).is_some_and(|pin| pin.locked()) {
             return;
         }
         if self.pin_menu.as_ref().is_some_and(|menu| menu.pin_id == id) {
@@ -1274,7 +1278,7 @@ impl Snip2Pin {
 
     fn toggle_pin_lock(&mut self, id: u64, ctx: &egui::Context) {
         if let Some(pin) = self.pins.get(&id) {
-            self.set_pin_locked(id, !pin.locked, ctx);
+            self.set_pin_locked(id, !pin.locked(), ctx);
         }
     }
 
@@ -1282,7 +1286,7 @@ impl Snip2Pin {
         let ids: Vec<_> = self
             .pins
             .iter()
-            .filter_map(|(&id, pin)| pin.locked.then_some(id))
+            .filter_map(|(&id, pin)| pin.locked().then_some(id))
             .collect();
         for id in ids {
             self.set_pin_locked(id, false, ctx);
@@ -1328,7 +1332,8 @@ impl Snip2Pin {
     }
 
     fn show_unlock_hint(&mut self, id: u64, point: Option<[f32; 2]>, ctx: &egui::Context) {
-        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked) {
+        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked())
+        {
             return;
         }
         self.clear_layer_presentation(ctx);
@@ -1377,7 +1382,7 @@ impl Snip2Pin {
             self.message = Some(error);
             return;
         }
-        pin.locked = locked;
+        pin.locked.store(locked, Ordering::Release);
         #[cfg(not(target_os = "macos"))]
         ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Resizable(!locked));
         if !locked && self.layer_presentation.as_ref().is_some_and(|presentation| matches!(presentation.purpose, LayerPurpose::Hint { pin } if pin == id)) {
@@ -1410,7 +1415,7 @@ impl Snip2Pin {
         let Some(pin) = self
             .pins
             .get(&id)
-            .filter(|pin| !pin.locked && !commands.is_empty())
+            .filter(|pin| !pin.locked() && !commands.is_empty())
         else {
             return;
         };
@@ -1500,7 +1505,7 @@ impl Snip2Pin {
         observed: Option<ObservedPosition>,
         ctx: &egui::Context,
     ) {
-        if !self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+        if !self.pins.get(&id).is_some_and(|pin| !pin.locked()) {
             return;
         }
         let zoom = ctx.zoom_factor();
@@ -1565,8 +1570,8 @@ impl Snip2Pin {
             capture_enabled: matches!(self.phase, Phase::Idle | Phase::Capturing)
                 && !self.recording.active()
                 && self.quit_confirmation.is_none(),
-            has_unlocked_pins: self.pins.values().any(|pin| !pin.locked),
-            has_locked_pins: self.pins.values().any(|pin| pin.locked),
+            has_unlocked_pins: self.pins.values().any(|pin| !pin.locked()),
+            has_locked_pins: self.pins.values().any(|pin| pin.locked()),
             capturing: matches!(self.phase, Phase::Capturing),
         }
     }
@@ -1585,7 +1590,7 @@ impl Snip2Pin {
             self.cancel_quit(ctx);
             self.hide_home(ctx);
         } else {
-            if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked) {
+            if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked()) {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             }
             self.tray_action(crate::tray::Action::Quit, ctx);
@@ -2098,7 +2103,7 @@ impl Snip2Pin {
             let screen = pin.screen;
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
-            let locked = pin.locked;
+            let locked = pin.locked.clone();
             let demo = self.demo;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
@@ -2110,7 +2115,7 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
-                .with_resizable(cfg!(target_os = "macos") || !locked)
+                .with_resizable(cfg!(target_os = "macos") || !pin.locked())
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false);
@@ -2134,6 +2139,9 @@ impl Snip2Pin {
                 builder.with_visible(false)
             };
             ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
+                // A child may receive input while the root is occluded and its
+                // previous deferred callback is still installed.
+                let locked = locked.load(Ordering::Acquire);
                 let recording = ui::shortcut::Recorder::input_blocked(ui.ctx());
                 route_pin_menu_input(ui.ctx(), &events);
                 let blocked = recording || ui::pin::MenuInput::blocks_input(ui.ctx());
@@ -2260,7 +2268,7 @@ impl Snip2Pin {
             return;
         };
         let id = menu.pin_id;
-        let locked = self.pins.get(&id).is_some_and(|pin| pin.locked);
+        let locked = self.pins.get(&id).is_some_and(|pin| pin.locked());
         let focused = menu.focused.clone();
         let events = self.sender.clone();
         let mut builder = self
@@ -2402,7 +2410,7 @@ impl eframe::App for Snip2Pin {
                         .inner_rect
                         .map(|rect| rect.size())
                 }),
-                locked: pin.locked,
+                locked: pin.locked(),
                 selected: pin_focused(&ctx, id),
             })
             .collect::<Vec<_>>();

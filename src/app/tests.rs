@@ -1501,7 +1501,7 @@ fn stale_unlocked_callback_cannot_close_a_newly_locked_pin() {
         eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
     });
     root.textures_delta.clear();
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(root.viewport_output.contains_key(&viewport));
     assert!(
         !root.viewport_output[&viewport]
@@ -1533,7 +1533,7 @@ fn cancelling_capture_preserves_a_locked_pending_pin() {
     app.cancel_capture(&ctx);
     assert!(matches!(app.phase, Phase::Idle));
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(pixels.upgrade().is_some());
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
     output.textures_delta.clear();
@@ -2858,7 +2858,7 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
         screen_areas: pin.screen_areas.clone(),
         session: pin.session,
         first_frame_drawn: Arc::new(AtomicBool::new(true)),
-        locked: false,
+        locked: Arc::new(AtomicBool::new(false)),
         #[cfg(target_os = "macos")]
         lock_limits: None,
         #[cfg(target_os = "macos")]
@@ -2885,7 +2885,7 @@ fn unlock_all_is_idempotent_and_preserves_images_and_geometry() {
         app.tray_action(crate::tray::Action::UnlockPins, ctx);
     });
     assert_eq!(app.pins.len(), 2);
-    assert!(app.pins.values().all(|pin| !pin.locked));
+    assert!(app.pins.values().all(|pin| !pin.locked()));
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     assert_eq!(initial, app.pins[&1].initial);
     for commands in output.viewport_commands.values() {
@@ -2936,7 +2936,7 @@ fn recovery_key_in_a_legacy_capture_binding_never_starts_capture() {
     });
     output.textures_delta.clear();
     assert!(matches!(app.phase, Phase::Idle));
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
 }
 
 #[test]
@@ -2953,7 +2953,7 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
     let locked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         app.toggle_pin_lock(1, ctx)
     });
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     #[cfg(not(target_os = "macos"))]
     assert!(locked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(false)));
     #[cfg(target_os = "macos")]
@@ -2990,7 +2990,7 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
     let unlocked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         app.toggle_pin_lock(1, ctx)
     });
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
     #[cfg(not(target_os = "macos"))]
     assert!(unlocked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(true)));
     #[cfg(target_os = "macos")]
@@ -3017,7 +3017,7 @@ fn locating_a_locked_pin_preserves_original_and_geometry() {
     let initial = app.pins[&1].initial;
     let texture = app.pins[&1].texture.id();
     let selected = ctx.run_logic(&egui::RawInput::default(), |ctx| app.select_pin(1, ctx));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     assert_eq!(app.pins[&1].initial, initial);
     assert_eq!(app.pins[&1].texture.id(), texture);
@@ -3157,7 +3157,11 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
         !absent.viewport_commands.contains_key(&pin_id(1)),
         "missing observed size must not fall back to initial geometry"
     );
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.sender
         .send(Event::ZoomPin {
             pin_id: 1,
@@ -3296,7 +3300,11 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
             }),
         })
         .expect("queued before lock");
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     let locked = ctx.run_logic(&input, |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
     });
@@ -3363,7 +3371,11 @@ fn home_zoom_hint_uses_current_native_content_size_instead_of_source_or_initial_
         (Some(egui::Vec2::splat(1.0)), false, false, false),
         (Some(egui::Vec2::splat(1.0)), true, true, false),
     ] {
-        app.pins.get_mut(&1).expect("pin").locked = locked;
+        app.pins
+            .get_mut(&1)
+            .expect("pin")
+            .locked
+            .store(locked, Ordering::Release);
         for _ in 0..2 {
             let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -3511,7 +3523,7 @@ fn queued_recording_shortcuts_cannot_act_after_escape_cancels_recording() {
             matches!(app.phase, Phase::Idle),
             "cancelled recording must not capture"
         );
-        assert!(app.pins[&1].locked, "cancelled recording must not unlock");
+        assert!(app.pins[&1].locked(), "cancelled recording must not unlock");
         app.reset_capture(&ctx);
     }
 }
@@ -3610,13 +3622,13 @@ fn global_shortcuts_outside_recording_capture_and_unlock_but_ignore_obsolete_ids
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
     assert!(matches!(app.phase, Phase::Idle));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     queue_shortcut(Binding::unlock_all().0.id(), &app.sender, &ctx);
     queue_shortcut(id, &app.sender, &ctx);
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
     assert!(!matches!(app.phase, Phase::Idle));
     assert!(app.gate.active().is_some());
     app.reset_capture(&ctx);
@@ -3653,7 +3665,7 @@ fn registered_recovery_shortcut_reports_reserved_input_even_without_its_key_even
         app.recording.feedback(),
         Some(&Text::ReservedUnlockShortcut.into())
     );
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(matches!(app.phase, Phase::Idle));
 }
 
@@ -3831,7 +3843,11 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.recording.start();
     let modifiers = if cfg!(target_os = "macos") {
         egui::Modifiers::MAC_CMD | egui::Modifiers::ALT | egui::Modifiers::SHIFT
@@ -3860,7 +3876,7 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
         },
     );
     output.textures_delta.clear();
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert_eq!(
         app.recording.feedback(),
         Some(&Text::ReservedUnlockShortcut.into())
@@ -3877,7 +3893,7 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
     );
     output.textures_delta.clear();
     assert!(
-        !app.pins[&1].locked,
+        !app.pins[&1].locked(),
         "normal recovery still works after recording"
     );
 }
@@ -3961,7 +3977,7 @@ fn editing_pin_names_preserves_identity_originals_and_geometry_when_other_rows_c
     app.close_pin(2, &ctx);
     let _ = home_frame(&mut app, &ctx, vec![egui::Event::Text(" 2".into())]);
     assert_eq!(app.pins[&1].name, "参考 Reference 2");
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
     assert_eq!(app.pins[&1].initial, initial);
     assert_eq!(app.pins[&1].texture.id(), texture);
@@ -4078,7 +4094,7 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
             }
         } else {
             assert_eq!(app.pins.len(), 2);
-            assert!(app.pins[&1].locked);
+            assert!(app.pins[&1].locked());
             assert!(original.upgrade().is_some());
             assert!(
                 clicked.viewport_output[&ViewportId::ROOT]
@@ -4105,7 +4121,7 @@ fn closing_home_without_a_tray_or_locked_pins_quits_and_releases_images() {
     add_second_test_pin(&mut app);
     let original = Arc::downgrade(&app.pins[&1].pixels);
     assert!(app.tray.is_none());
-    assert!(app.pins.values().all(|pin| !pin.locked));
+    assert!(app.pins.values().all(|pin| !pin.locked()));
     let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
     assert!(app.exiting);
     assert!(app.quit_confirmation.is_none());
@@ -4168,7 +4184,7 @@ fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
             }
         } else {
             assert_eq!(app.pins.len(), 2);
-            assert!(app.pins[&1].locked);
+            assert!(app.pins[&1].locked());
             assert_eq!(app.pins[&1].initial, initial);
             assert!(Arc::ptr_eq(
                 &original.upgrade().expect("retained original"),
@@ -4275,7 +4291,7 @@ fn pending_quit_keeps_its_host_after_the_last_pin_is_unlocked() {
         });
         let id = app.quit_confirmation.as_ref().expect("pending quit").id;
         assert!(app.tray.is_none());
-        assert!(!app.pins[&1].locked);
+        assert!(!app.pins[&1].locked());
         let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
         assert!(
             output
@@ -4397,7 +4413,11 @@ fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
     let mut app = tiny_pin_app(&ctx);
     // Set state before opting into the native presentation path. No native pin
     // adapter is called, and the test frame never owns a real host window.
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.demo = false;
     let frame = eframe::Frame::_new_kittest();
     assert!(
@@ -4443,7 +4463,11 @@ fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
 fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
     let ctx = egui::Context::default();
     let mut app = tiny_pin_app(&ctx);
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.demo = false;
     let frame = eframe::Frame::_new_kittest();
     assert!(frame.window_handle().is_err());
@@ -4479,7 +4503,7 @@ fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
         QuitPresentation::Fallback
     ));
     assert!(!app.exiting);
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
 }
 
 #[test]
@@ -4510,7 +4534,7 @@ fn failed_native_quit_presentation_falls_back_without_losing_pins() {
     );
     app.quit_decision(id, Ok(false), &ctx);
     assert!(app.quit_confirmation.is_none());
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
 }
 
 #[test]
@@ -5176,7 +5200,7 @@ fn native_menu_commands_keep_queue_order_and_share_copy_cleanup() {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
     assert!(
-        app.pins[&1].locked,
+        app.pins[&1].locked(),
         "the native lock must precede the queued close"
     );
     assert!(

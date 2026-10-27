@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn retained_pin_callback_reads_lock_changes_before_body_input() {
+    for locked in [true, false] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        app.set_pin_locked(1, !locked, &ctx);
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        setup.textures_delta.clear();
+        let callback = setup.viewport_output[&pin_id(1)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap();
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(63.0, 42.0));
+        let point = egui::pos2(56.0, 40.0);
+        let mut warm = ctx.run_ui(
+            input(1, rect, 1.0, vec![egui::Event::PointerMoved(point)]),
+            |ui| callback(ui),
+        );
+        warm.textures_delta.clear();
+        // The root need not publish a replacement callback before child input.
+        app.set_pin_locked(1, locked, &ctx);
+        let mut child = ctx.run_ui(
+            input(
+                1,
+                rect,
+                1.0,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ),
+            |ui| callback(ui),
+        );
+        child.textures_delta.clear();
+        let events = app.events.try_iter().collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::UnlockHint(1)))
+                .count(),
+            usize::from(locked),
+            "retained callback must read the current lock state"
+        );
+        if locked {
+            assert!(
+                geometry(&child, 1).is_empty(),
+                "a newly locked body must not start a native gesture"
+            );
+        } else {
+            assert!(
+                geometry(&child, 1).iter().any(|command| matches!(
+                    command,
+                    ViewportCommand::StartDrag | ViewportCommand::BeginResize(_)
+                )),
+                "a newly unlocked body must allow native gestures"
+            );
+        }
+        for event in events {
+            app.handle_event(event, &ctx);
+        }
+        assert_eq!(app.layer_presentation.is_some(), locked);
+    }
+}
+
+#[test]
 fn small_locked_close_press_reaches_the_screen_notice_presentation() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -30,7 +97,7 @@ fn small_locked_close_press_reaches_the_screen_notice_presentation() {
     );
     consume(&mut app, &ctx, input(1, rect, 1.0, vec![]));
     assert!(app.layer_presentation.is_some());
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(matches!(app.phase, Phase::Idle));
     let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
     setup.textures_delta.clear();
@@ -689,7 +756,7 @@ fn queued_callback_keys_cannot_move_or_resize_a_pin_locked_before_consumption() 
     );
     app.toggle_pin_lock(1, &ctx);
     let root = consume(&mut app, &ctx, input(1, rect, 2.0, vec![]));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(geometry(&root, 1).is_empty());
 
     let pointer = egui::pos2(100.0, 100.0);
