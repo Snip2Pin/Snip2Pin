@@ -781,6 +781,16 @@ impl Snip2Pin {
                 session,
                 pin_id: pin,
             } => {
+                #[cfg(target_os = "windows")]
+                if !self.demo
+                    && self
+                        .pins
+                        .get(&pin)
+                        .is_some_and(|current| current.session == session)
+                    && let Err(error) = platform::pin_window::prepare_pin_order(pin)
+                {
+                    self.message = Some(error);
+                }
                 if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
                 {
                     self.reset_capture(ctx);

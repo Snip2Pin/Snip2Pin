@@ -1,6 +1,13 @@
 //! Focus this process's pins while keeping the originating Home reachable.
 use snip2pin::i18n::{Message, Text};
 
+#[cfg(any(target_os = "windows", test))]
+#[path = "pin_window/taskbar.rs"]
+mod taskbar;
+
+#[cfg(target_os = "windows")]
+pub(crate) use taskbar::install as prepare_pin_order;
+
 const TITLE_PREFIX: &str = "Snip2Pin · 贴图 ";
 
 /// Event-triggered focus checks reuse one connection for a fallback menu's lifetime.
