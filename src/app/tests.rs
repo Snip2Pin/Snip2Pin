@@ -468,6 +468,7 @@ fn screen_layers_are_visible_only_for_capture_or_recovery_notice() {
         Event::HintFrameDrawn {
             hint: app.unlock_hint.as_ref().unwrap().raised.clone(),
             display: 0,
+            bounds: test_hint_bounds(),
         },
         &ctx,
     );
@@ -2040,6 +2041,10 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
     app
 }
 
+fn test_hint_bounds() -> egui::Rect {
+    egui::Rect::from_min_size(egui::pos2(120.0, 20.0), egui::vec2(360.0, 36.0))
+}
+
 #[test]
 fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
     let ctx = egui::Context::default();
@@ -2178,7 +2183,14 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
         "cancelled callbacks cannot prepare opacity"
     );
     for (hint, display) in [(stale, 0), (current.clone(), u32::MAX)] {
-        app.handle_event(Event::HintFrameDrawn { hint, display }, &ctx);
+        app.handle_event(
+            Event::HintFrameDrawn {
+                hint,
+                display,
+                bounds: test_hint_bounds(),
+            },
+            &ctx,
+        );
         let waiting = app.unlock_hint.as_ref().unwrap();
         assert!(waiting.until.is_none());
         assert!(waiting.ready.is_empty());
@@ -2186,6 +2198,7 @@ fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
     let drawn = || Event::HintFrameDrawn {
         hint: current.clone(),
         display: 0,
+        bounds: test_hint_bounds(),
     };
     app.handle_event(drawn(), &ctx);
     if cfg!(target_os = "windows") {
@@ -2341,7 +2354,14 @@ fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
     }
     assert!(app.unlock_hint.as_ref().unwrap().until.is_some());
     let hint = app.unlock_hint.as_ref().unwrap().raised.clone();
-    app.handle_event(Event::HintFrameDrawn { hint, display: 0 }, &ctx);
+    app.handle_event(
+        Event::HintFrameDrawn {
+            hint,
+            display: 0,
+            bounds: test_hint_bounds(),
+        },
+        &ctx,
+    );
     assert!(
         !app.layers[&0].paint_pending,
         "duplicate acknowledgements do not repaint"
@@ -2402,6 +2422,7 @@ fn notice_errors_only_terminate_their_own_generation() {
         Event::HintFrameDrawn {
             hint: current.clone(),
             display: 0,
+            bounds: test_hint_bounds(),
         },
         &ctx,
     );
@@ -2437,6 +2458,7 @@ fn notice_reveals_only_after_every_visible_display_frame() {
             Event::HintFrameDrawn {
                 hint: hint.clone(),
                 display,
+                bounds: test_hint_bounds(),
             },
             &ctx,
         );
@@ -2456,16 +2478,17 @@ fn notice_reveals_only_after_every_visible_display_frame() {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
-    for zoom in [1.0, 2.0] {
-        for native_scale in [1.0, 1.5] {
+fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
+    for zoom in [1.0, 1.5, 2.0] {
+        for native_scale in [1.0, 1.5, 2.0] {
             let ctx = egui::Context::default();
             ctx.set_embed_viewports(false);
             ctx.set_zoom_factor(zoom);
             let mut app = tiny_pin_app(&ctx);
             app.toggle_pin_lock(1, &ctx);
             app.show_unlock_hint(1, None, &ctx);
-            let work = egui::Rect::from_min_size(egui::pos2(28.0, 40.0), egui::vec2(700.0, 480.0));
+            let work =
+                egui::Rect::from_min_size(egui::pos2(-728.0, 40.0), egui::vec2(700.0, 480.0));
             *app.unlock_hint.as_mut().unwrap().areas.get_mut(&0).unwrap() = work;
             let input = || {
                 let mut input = egui::RawInput::default();
@@ -2485,10 +2508,10 @@ fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
             pending.textures_delta.clear();
             let viewport = &pending.viewport_output[&layer_id(0)];
             let ratio = app.layers[&0].display.scale / (native_scale * ctx.zoom_factor());
-            assert_eq!(viewport.builder.position, Some(work.min * ratio));
-            let expected_size = work.size() * ratio;
+            assert!(viewport.builder.position.is_none());
+            assert!(viewport.builder.inner_size.is_none());
+            let expected_size = egui::Vec2::from(app.layers[&0].display.logical_size()) * ratio;
             let tolerance = expected_size.max_elem() * f32::EPSILON * 4.0;
-            assert!((viewport.builder.inner_size.unwrap() - expected_size).length() <= tolerance);
             assert_eq!(viewport.builder.visible, Some(false));
             assert!(
                 viewport
@@ -2496,17 +2519,79 @@ fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
                     .contains(&ViewportCommand::RequestPaintWhileHidden)
             );
             let mut native_builder = viewport.builder.clone();
-            app.handle_event(
-                Event::HintFrameDrawn {
-                    hint: app.unlock_hint.as_ref().unwrap().raised.clone(),
-                    display: 0,
-                },
-                &ctx,
-            );
+            let paint = |callback: &Arc<egui::DeferredViewportUiCallback>, size| {
+                let mut child = input();
+                child.viewport_id = layer_id(0);
+                child.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
+                let mut output = ctx.run_ui(child, |ui| callback(ui));
+                output.textures_delta.clear();
+                output
+            };
+            let measured = paint(viewport.viewport_ui_cb.as_ref().unwrap(), expected_size);
+            for event in app.events.try_iter().collect::<Vec<_>>() {
+                app.handle_event(event, &ctx);
+            }
+            let panel = app.unlock_hint.as_ref().unwrap().ready[&0];
+            assert!(work.contains_rect(panel));
+            assert!(panel.height() < work.height() / 2.0);
             let mut ready = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
             ready.textures_delta.clear();
+            let ready_viewport = &ready.viewport_output[&layer_id(0)];
+            assert_eq!(ready_viewport.builder.position, Some(panel.min * ratio));
+            let panel_size = panel.size() * ratio;
+            assert!(
+                (ready_viewport.builder.inner_size.unwrap() - panel_size).length() <= tolerance
+            );
+            let (commands, recreate) = native_builder.patch(ready_viewport.builder.clone());
+            assert!(!recreate);
+            assert!(commands.contains(&ViewportCommand::Visible(true)));
+            let presented = paint(ready_viewport.viewport_ui_cb.as_ref().unwrap(), panel_size);
+            let text_rows = |output: &egui::FullOutput| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            Some(text.galley.rows.len())
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("complete notice")
+            };
+            assert_eq!(text_rows(&measured), text_rows(&presented));
+            let client = egui::Rect::from_min_size(egui::Pos2::ZERO, panel_size);
+            for shape in &presented.shapes {
+                assert!(
+                    client
+                        .expand(0.001)
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+            }
+            app.show_unlock_hint(1, None, &ctx);
+            *app.unlock_hint.as_mut().unwrap().areas.get_mut(&0).unwrap() = work;
+            let mut repeated = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            repeated.textures_delta.clear();
+            let repeated_viewport = &repeated.viewport_output[&layer_id(0)];
+            let (commands, recreate) = native_builder.patch(repeated_viewport.builder.clone());
+            assert!(!recreate);
+            assert_eq!(
+                commands,
+                [ViewportCommand::Visible(false)],
+                "hide without expanding the previous visible panel"
+            );
+            paint(
+                repeated_viewport.viewport_ui_cb.as_ref().unwrap(),
+                panel_size,
+            );
+            for event in app.events.try_iter().collect::<Vec<_>>() {
+                app.handle_event(event, &ctx);
+            }
+            assert_eq!(app.unlock_hint.as_ref().unwrap().ready[&0], panel);
+            let mut ready_again = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            ready_again.textures_delta.clear();
             let (commands, recreate) =
-                native_builder.patch(ready.viewport_output[&layer_id(0)].builder.clone());
+                native_builder.patch(ready_again.viewport_output[&layer_id(0)].builder.clone());
             assert!(!recreate);
             assert_eq!(commands, [ViewportCommand::Visible(true)]);
             app.clear_unlock_hint(&ctx);
@@ -2516,8 +2601,23 @@ fn passive_notice_prepares_inside_work_area_and_hides_without_expanding() {
                 native_builder.patch(idle.viewport_output[&layer_id(0)].builder.clone());
             assert!(!recreate);
             assert_eq!(commands, [ViewportCommand::Visible(false)]);
-            assert_eq!(native_builder.position, Some(work.min * ratio));
-            assert!((native_builder.inner_size.unwrap() - expected_size).length() <= tolerance);
+            assert_eq!(native_builder.position, Some(panel.min * ratio));
+            assert!((native_builder.inner_size.unwrap() - panel_size).length() <= tolerance);
+            let request = app.gate.begin().expect("capture after passive notice");
+            app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+            let mut capture = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            capture.textures_delta.clear();
+            let bounds = egui::Rect::from_min_size(
+                app.layers[&0].display.position().into(),
+                app.layers[&0].display.logical_size().into(),
+            );
+            let builder = &capture.viewport_output[&layer_id(0)].builder;
+            assert_eq!(builder.position, Some(bounds.min * ratio));
+            assert!((builder.inner_size.unwrap() - bounds.size() * ratio).length() <= tolerance);
+            assert!(
+                !native_builder.patch(builder.clone()).1,
+                "reuse the capture HWND"
+            );
         }
     }
 }

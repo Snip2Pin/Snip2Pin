@@ -152,6 +152,7 @@ pub enum Event {
     HintFrameDrawn {
         hint: Arc<AtomicBool>,
         display: u32,
+        bounds: egui::Rect,
     },
     HintVisibleFrameDrawn {
         hint: Arc<AtomicBool>,
@@ -231,7 +232,7 @@ struct UnlockHint {
     pin: u64,
     areas: BTreeMap<u32, egui::Rect>,
     until: Option<Instant>,
-    ready: BTreeSet<u32>,
+    ready: BTreeMap<u32, egui::Rect>,
     visible_ready: BTreeSet<u32>,
     raised: Arc<AtomicBool>,
 }
@@ -633,12 +634,19 @@ impl Snip2Pin {
             return;
         }
         match event {
-            Event::HintFrameDrawn { hint, display } => {
+            Event::HintFrameDrawn {
+                hint,
+                display,
+                bounds,
+            } => {
                 if let Some(current) = &mut self.unlock_hint
                     && Arc::ptr_eq(&current.raised, &hint)
                     && current.areas.contains_key(&display)
-                    && current.ready.insert(display)
+                    && !current.ready.contains_key(&display)
+                    && bounds.is_finite()
+                    && bounds.is_positive()
                 {
+                    current.ready.insert(display, bounds);
                     if !cfg!(target_os = "windows") {
                         let until = *current.until.get_or_insert_with(|| {
                             Instant::now() + ui::screen_hint::UNLOCK_DURATION
@@ -664,7 +672,7 @@ impl Snip2Pin {
                 if cfg!(target_os = "windows")
                     && let Some(current) = &mut self.unlock_hint
                     && Arc::ptr_eq(&current.raised, &hint)
-                    && current.ready.contains(&display)
+                    && current.ready.contains_key(&display)
                     && current.visible_ready.insert(display)
                     && current.visible_ready.len() == current.areas.len()
                     && current.until.is_none()
@@ -1294,7 +1302,7 @@ impl Snip2Pin {
                 .zip(areas)
                 .collect(),
             until: None,
-            ready: BTreeSet::new(),
+            ready: BTreeMap::new(),
             visible_ready: BTreeSet::new(),
             raised: Arc::new(AtomicBool::new(false)),
         });
@@ -1806,20 +1814,21 @@ impl Snip2Pin {
                 .unlock_hint
                 .as_ref()
                 .and_then(|hint| hint.areas.get(&display_id).copied());
-            let hint_ready = self
+            let hint_panel = self
                 .unlock_hint
                 .as_ref()
-                .is_some_and(|hint| hint.ready.contains(&display_id));
+                .and_then(|hint| hint.ready.get(&display_id).copied());
+            let hint_ready = hint_panel.is_some();
             let hint_visible_ready = self
                 .unlock_hint
                 .as_ref()
                 .is_some_and(|hint| hint.visible_ready.contains(&display_id));
             let display_bounds =
                 egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
-            // A passive Windows notice must not be classified as a fullscreen
-            // window by the shell. Idle layers retain their previous geometry.
+            // Only the painted notice is mapped on Windows. The work area is
+            // used for hidden measurement, not as a screen-sized passive window.
             let bounds = if cfg!(target_os = "windows") && !active {
-                hint_area
+                hint_panel
             } else {
                 Some(display_bounds)
             };
@@ -1901,9 +1910,15 @@ impl Snip2Pin {
                             let local = egui::Rect::from_min_max(
                                 (area.min - origin) * ratio,
                                 (area.max - origin) * ratio,
-                            )
-                            .intersect(ui.max_rect());
-                            ui::screen_hint::show(
+                            );
+                            // Keep the original available width and top offset
+                            // when the same HWND shrinks to the measured panel.
+                            let local = if cfg!(target_os = "windows") {
+                                local
+                            } else {
+                                local.intersect(ui.max_rect())
+                            };
+                            let panel = ui::screen_hint::show(
                                 ui,
                                 local,
                                 &ui::screen_hint::unlock_text(ui.ctx()),
@@ -1932,6 +1947,18 @@ impl Snip2Pin {
                                     Event::HintFrameDrawn {
                                         hint: hint.clone(),
                                         display: display_id,
+                                        bounds: egui::Rect::from_min_max(
+                                            ((origin + panel.min.to_vec2() / ratio)
+                                                * display.scale)
+                                                .floor()
+                                                .to_pos2()
+                                                / display.scale,
+                                            ((origin + panel.max.to_vec2() / ratio)
+                                                * display.scale)
+                                                .ceil()
+                                                .to_pos2()
+                                                / display.scale,
+                                        ),
                                     }
                                 };
                                 let _ = events.send(event);

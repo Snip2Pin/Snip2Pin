@@ -12,14 +12,16 @@ pub fn unlock_text(ctx: &egui::Context) -> String {
         .render(crate::i18n::locale(ctx))
 }
 
-pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) {
+/// Layout uses the available screen area, even in a tightly sized notice window.
+/// Return the painted panel so its native host can use exactly the same bounds.
+pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) -> Rect {
     let painter = ui
         .ctx()
         .layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
             ui.scope_id().with("screen-hint"),
         ))
-        .with_clip_rect(bounds);
+        .with_clip_rect(bounds.intersect(ui.max_rect()));
     let padding = egui::Vec2::from(OVERLAY.hint_padding);
     let galley = painter.layout(
         text.into(),
@@ -40,10 +42,74 @@ pub fn show(ui: &egui::Ui, bounds: Rect, text: &str) {
     );
     painter.rect_filled(rect, OVERLAY.hint_radius, OVERLAY.hint_fill);
     painter.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+    rect
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_tight_host_keeps_the_original_layout_without_wrapping_or_adding_top_space() {
+        use eframe::egui::{self, Pos2, Rect};
+        for locale in [crate::i18n::Locale::Chinese, crate::i18n::Locale::English] {
+            for width in [180.0, 700.0, 1440.0] {
+                let ctx = egui::Context::default();
+                crate::i18n::set_locale(&ctx, locale);
+                let available = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 700.0));
+                let mut panel = Rect::NOTHING;
+                let mut first = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(available),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel = super::show(ui, available, &super::unlock_text(&ctx));
+                    },
+                );
+                first.textures_delta.clear();
+                let text_rows = |output: &egui::FullOutput| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text.galley.rows.len())
+                            } else {
+                                None
+                            }
+                        })
+                        .expect("notice text")
+                };
+                let tight = Rect::from_min_size(Pos2::ZERO, panel.size());
+                let mut translated = Rect::NOTHING;
+                let mut second = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(tight),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        translated = super::show(
+                            ui,
+                            available.translate(-panel.min.to_vec2()),
+                            &super::unlock_text(&ctx),
+                        );
+                    },
+                );
+                second.textures_delta.clear();
+                assert!(translated.min.distance(Pos2::ZERO) < 0.001);
+                assert!((translated.size() - panel.size()).length() < 0.001);
+                assert_eq!(text_rows(&first), text_rows(&second));
+                for shape in &second.shapes {
+                    assert!(
+                        tight
+                            .expand(0.001)
+                            .contains_rect(shape.shape.visual_bounding_rect())
+                    );
+                    assert!(tight.contains_rect(shape.clip_rect));
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_long_notice_uses_available_width_before_wrapping() {
         use eframe::egui::{self, Pos2, Rect};
@@ -55,7 +121,9 @@ mod tests {
                 screen_rect: Some(bounds),
                 ..Default::default()
             },
-            |ui| super::show(ui, bounds, text),
+            |ui| {
+                super::show(ui, bounds, text);
+            },
         );
         output.textures_delta.clear();
         let galley = output
@@ -88,7 +156,9 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ui| super::show(ui, bounds, &text),
+                    |ui| {
+                        super::show(ui, bounds, &text);
+                    },
                 );
                 output.textures_delta.clear();
                 let shape = output.shapes.iter().find(|shape| matches!(&shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text)).expect("complete recovery text");
