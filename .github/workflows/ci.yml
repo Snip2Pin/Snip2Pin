@@ -162,6 +162,8 @@ jobs:
           lfs: true
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          desktop: 'false'
       - name: Check shared Rust UI for WebAssembly (no desktop or system services)
         run: |
           rustup target add wasm32-unknown-unknown
