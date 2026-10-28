@@ -279,14 +279,14 @@ mod tests {
                 .join()
                 .expect("independent thread")
         );
-        let mut message = MSG {
+        let message = MSG {
             hwnd: fixture.owner,
             message: WM_LBUTTONUP,
             ..Default::default()
         };
         // SAFETY: Exercise the real installed filter through User32. No owned
         // popup is tracking, so even a Capture-shaped message must pass through.
-        assert_eq!(unsafe { CallMsgFilterW(&mut message, MSGF_MENU as i32) }, 0);
+        assert_eq!(unsafe { CallMsgFilterW(&message, MSGF_MENU as i32) }, 0);
         assert!(!scope.pending.get());
         hook.remove()
             .expect("remove native hook before releasing handles");
