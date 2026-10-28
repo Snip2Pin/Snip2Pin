@@ -16,6 +16,8 @@
                 <menuItem title="Capture &amp; pin" enabled="NO" tag="2" id="dock-capture"/>
                 <menuItem title="Close unlocked pins" enabled="NO" tag="3" id="dock-close-pins"/>
                 <menuItem title="Unlock all pins" enabled="NO" tag="4" id="dock-unlock-pins"/>
+                <menuItem isSeparatorItem="YES" id="dock-help-separator"/>
+                <menuItem title="Help" enabled="NO" tag="5" id="dock-help"/>
             </items>
         </menu>
     </objects>

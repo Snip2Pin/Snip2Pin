@@ -186,6 +186,29 @@ fn capture_paints_hidden_then_mapped_before_accepting_input() {
 }
 
 #[test]
+fn help_menu_requests_the_wiki_without_showing_home_or_capturing() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.home_visible = false;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.handle_event(Event::Tray(crate::tray::Action::Help), ui.ctx());
+    });
+    output.textures_delta.clear();
+    assert!(!app.home_visible);
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(
+        output
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(
+                command,
+                egui::OutputCommand::OpenUrl(url) if url.url == snip2pin::HELP_URL
+            ))
+    );
+}
+
+#[test]
 fn language_changes_preserve_pins_preferences_and_retranslate_existing_messages() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);

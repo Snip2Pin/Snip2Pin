@@ -15,6 +15,7 @@ pub enum Action {
     #[cfg(target_os = "windows")]
     ShowMenu,
     Home,
+    Help,
     Capture,
     ClosePins,
     UnlockPins,
@@ -38,6 +39,7 @@ pub struct Tray {
     _icon: TrayIcon,
     capture: MenuItem,
     home: MenuItem,
+    help: MenuItem,
     close_pins: MenuItem,
     unlock_pins: MenuItem,
     quit: MenuItem,
@@ -96,6 +98,7 @@ impl Tray {
         }
         let menu = Menu::new();
         let home = MenuItem::with_id("home", locale.text(Text::Home), true, None);
+        let help = MenuItem::with_id("help", locale.text(Text::Help), true, None);
         let capture = MenuItem::with_id("capture", locale.text(Text::Capture), true, None);
         let close_pins = MenuItem::with_id("close-pins", locale.text(Text::ClosePins), false, None);
         let unlock_pins =
@@ -107,6 +110,7 @@ impl Tray {
             &close_pins,
             &unlock_pins,
             &PredefinedMenuItem::separator(),
+            &help,
             &quit,
         ])
         .map_err(|error| error.to_string())?;
@@ -137,6 +141,7 @@ impl Tray {
             _icon: icon,
             capture,
             home,
+            help,
             close_pins,
             unlock_pins,
             quit,
@@ -159,6 +164,7 @@ impl Tray {
         }
         self.capture.set_enabled(state.capture_enabled);
         self.home.set_text(state.locale.text(Text::Home));
+        self.help.set_text(state.locale.text(Text::Help));
         self.close_pins.set_text(state.locale.text(Text::ClosePins));
         self.quit.set_text(state.locale.text(Text::Quit));
         self.capture.set_text(state.locale.text(if state.capturing {
@@ -204,6 +210,7 @@ impl Drop for Tray {
 fn action(id: &str) -> Option<Action> {
     match id {
         "home" => Some(Action::Home),
+        "help" => Some(Action::Help),
         "capture" => Some(Action::Capture),
         "close-pins" => Some(Action::ClosePins),
         "unlock-pins" => Some(Action::UnlockPins),
@@ -248,6 +255,7 @@ mod tests {
     fn menu_dispatches_only_known_application_commands() {
         for (id, expected) in [
             ("home", Action::Home),
+            ("help", Action::Help),
             ("capture", Action::Capture),
             ("close-pins", Action::ClosePins),
             ("unlock-pins", Action::UnlockPins),
