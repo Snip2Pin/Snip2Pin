@@ -875,6 +875,7 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),
+            Action::Help => ctx.open_url(egui::OpenUrl::new_tab(snip2pin::HELP_URL)),
             #[cfg(target_os = "windows")]
             Action::ShowMenu => {
                 let state = self.menu_state();
