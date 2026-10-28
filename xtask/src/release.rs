@@ -276,8 +276,18 @@ pub fn publish(
     {
         return Err("existing version tag points to another commit".into());
     }
-    let draft = api(&format!("releases/tags/{tag}"))?;
-    if draft["draft"] != true || draft["target_commitish"] != revision {
+    // The REST tag endpoint returns published releases only. The CLI resolves
+    // unpublished drafts too, including ones whose tag does not exist yet.
+    let draft: Value = serde_json::from_str(&output(Command::new("gh").args([
+        "release",
+        "view",
+        &tag,
+        "--repo",
+        REPOSITORY,
+        "--json",
+        "isDraft,targetCommitish,body,assets",
+    ]))?)?;
+    if draft["isDraft"] != true || draft["targetCommitish"] != revision {
         return Err("draft target/draft state mismatch".into());
     }
     if distribution == Distribution::Unverified

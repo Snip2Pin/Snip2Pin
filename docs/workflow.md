@@ -301,6 +301,10 @@ CI 来源校验分页读取工作流的普通运行历史，逐条精确匹配�
 `-unsigned`，旁边的目标 JSON 记录版本、提交、目标和 SHA-256。过期后重新手动构建，
 不要改用不同提交的包。日常 CI 用 `debug` 检验同一条打包路径，并且不上传这些包。
 
+开始生成候选包后，尽量保持主分支不变，直到发布完成。若期间必须合入工作流修复，
+等新主分支 CI 通过，再以该提交重新生成候选包；不要扩大令牌权限来为旧提交创建 Release。
+GitHub 对相较默认分支存在工作流差异的目标提交有[额外权限要求](https://docs.github.com/en/rest/releases/releases#create-a-release)，Actions 自带令牌无法满足。
+
 ## Actions 准备安装包与草稿
 
 手动运行已有的 **Manage release packages (manual)**（`publish.yml`），选择 `main`，
