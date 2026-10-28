@@ -875,6 +875,18 @@ impl Snip2Pin {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             }
             Action::Capture => self.capture_command(ctx),
+            #[cfg(target_os = "windows")]
+            Action::ShowMenu => {
+                let state = self.menu_state();
+                if let Some(tray) = &mut self.tray {
+                    tray.update(state);
+                    match tray.show_menu() {
+                        Ok(true) => self.capture_command(ctx),
+                        Ok(false) => {}
+                        Err(error) => self.message = Some(error),
+                    }
+                }
+            }
             Action::UnlockPins => self.unlock_pins(ctx),
             Action::Pin { id, command } => {
                 self.handle_event(

@@ -1,5 +1,25 @@
 //! Select an embedded icon frame using the notification area's system metric.
 use snip2pin::i18n::Message;
+
+#[path = "windows/popup.rs"]
+mod popup;
+
+pub(super) fn requests_menu(id: &tray_icon::TrayIconId, event: &tray_icon::TrayIconEvent) -> bool {
+    matches!(event, tray_icon::TrayIconEvent::Click {
+        id: source,
+        button: tray_icon::MouseButton::Left | tray_icon::MouseButton::Right,
+        button_state: tray_icon::MouseButtonState::Up,
+        ..
+    } if source == id)
+}
+
+pub(super) fn show_menu(
+    icon: &tray_icon::TrayIcon,
+    menu: &tray_icon::menu::Menu,
+    capture: &tray_icon::menu::MenuId,
+) -> Result<bool, Message> {
+    popup::show(icon, menu, capture)
+}
 use windows_sys::{
     Win32::UI::{
         HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi},
@@ -48,6 +68,29 @@ fn small_icon_size_for_dpi(dpi: u32) -> Result<(u32, u32), Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_own_icon_left_or_right_release_requests_the_popup() {
+        use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent, TrayIconId};
+        let own = TrayIconId::from("own");
+        for id in [own.clone(), TrayIconId::from("other")] {
+            for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+                for state in [MouseButtonState::Up, MouseButtonState::Down] {
+                    let event = TrayIconEvent::Click {
+                        id: id.clone(),
+                        position: Default::default(),
+                        rect: Default::default(),
+                        button,
+                        button_state: state,
+                    };
+                    assert_eq!(
+                        requests_menu(&own, &event),
+                        id == own && button != MouseButton::Middle && state == MouseButtonState::Up
+                    );
+                }
+            }
+        }
+    }
     use windows_sys::Win32::{
         Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW},
         System::LibraryLoader::GetModuleHandleW,
