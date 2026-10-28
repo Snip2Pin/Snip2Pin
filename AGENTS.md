@@ -165,7 +165,7 @@ Examples: `fix(pin): 修复顶部按钮位置`, `ci: automate release signing`.
 Use `!` and a `BREAKING CHANGE:` body/footer when changing incompatible behavior.
 Explain why in the body when useful; avoid vague subjects such as `update` or `fix`.
 PR descriptions state the problem/result, scope, validation and unverified native
-coverage; link issues when applicable. `messages.yml` checks titles on edits and
+coverage; link issues when applicable. `messages.yml` checks open PR titles on edits and
 all branch commits on updates; fix/reword invalid commits before merging.
 Squash commits use the validated PR title and PR body. Do not bypass the required
 `messages` check. Conventional formatting never authorizes a version bump/release.

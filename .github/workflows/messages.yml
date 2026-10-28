@@ -9,6 +9,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   messages:
+    if: github.event.pull_request.state == 'open'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

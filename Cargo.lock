@@ -3635,7 +3635,7 @@ dependencies = [
 
 [[package]]
 name = "snip2pin"
-version = "1.0.0"
+version = "0.9.0"
 dependencies = [
  "block2 0.6.2",
  "directories",
@@ -3668,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "snip2pin-preview"
-version = "1.0.0"
+version = "0.9.0"
 dependencies = [
  "eframe",
  "snip2pin",
