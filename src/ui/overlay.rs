@@ -108,6 +108,29 @@ impl Selection {
     }
 }
 
+/// Paint the complete first capture frame without consuming input or focus.
+pub fn prepare(ui: &mut egui::Ui, selection: &Selection, active: bool) {
+    let bounds = ui.max_rect();
+    paint_background(ui, selection, bounds);
+    if active {
+        super::screen_hint::show(
+            ui,
+            bounds,
+            crate::i18n::locale(ui.ctx()).text(crate::i18n::Text::SelectionHelp),
+        );
+    }
+}
+
+fn paint_background(ui: &egui::Ui, selection: &Selection, bounds: Rect) {
+    ui.painter().image(
+        selection.texture.id(),
+        bounds,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    ui.painter().rect_filled(bounds, 0, OVERLAY.unselected_fill);
+}
+
 pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Option<Action> {
     let bounds = ui.max_rect();
     let activate = !active
@@ -131,13 +154,7 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
         selection.focus_requested = false;
         selection.press = None;
     }
-    ui.painter().image(
-        selection.texture.id(),
-        bounds,
-        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
-    );
-    ui.painter().rect_filled(bounds, 0, OVERLAY.unselected_fill);
+    paint_background(ui, selection, bounds);
     let response = ui.allocate_rect(bounds, Sense::click_and_drag());
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if ui.input(|input| input.key_pressed(egui::Key::Escape) || input.viewport().close_requested())
@@ -278,6 +295,57 @@ pub fn show(ui: &mut egui::Ui, selection: &mut Selection, active: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparing_capture_paints_image_and_help_without_consuming_input_or_focus() {
+        let ctx = egui::Context::default();
+        let selection = Selection {
+            texture: ctx.load_texture(
+                "preparing capture",
+                egui::ColorImage::filled([2, 2], Color32::RED),
+                Default::default(),
+            ),
+            pixels: [640, 480],
+            pixel_step: [1, 1],
+            windows: Vec::new(),
+            press: None,
+            start: None,
+            focus_requested: false,
+        };
+        let texture = selection.texture.id();
+        let bounds = Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0));
+        let input = egui::RawInput {
+            screen_rect: Some(bounds),
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(50.0, 50.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| prepare(ui, &selection, true));
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture)
+        ));
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|shape| matches!(&shape.shape, egui::Shape::Text(_)))
+        );
+        assert!(!selection.focus_requested);
+        assert!(selection.press.is_none());
+        assert!(selection.start.is_none());
+        assert!(
+            output
+                .viewport_output
+                .values()
+                .flat_map(|viewport| &viewport.commands)
+                .all(|command| !matches!(command, egui::ViewportCommand::Focus))
+        );
+    }
 
     #[test]
     fn touchscreen_region_and_cancel_use_the_same_selection_path() {

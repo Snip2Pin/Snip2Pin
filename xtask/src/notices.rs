@@ -48,7 +48,7 @@ fn write_for(destination: &Path, web: bool) -> Result {
     if output(
         Command::new("cargo-about")
             .arg("--version")
-            .current_dir(crate::root()),
+            .current_dir(crate::root()?),
     )? != VERSION
     {
         return Err(format!("license generation requires {VERSION}").into());
@@ -74,7 +74,7 @@ fn write_for(destination: &Path, web: bool) -> Result {
         ])
         .arg("--output-file")
         .arg(&collected)
-        .current_dir(crate::root());
+        .current_dir(crate::root()?);
     if web {
         command.args(["--target", "wasm32-unknown-unknown"]);
     }
@@ -153,7 +153,7 @@ fn reviewed_declaration(package: &Value, reviewed: &[Reviewed]) -> Result<String
     );
     if let Some(statement) = &entry.statement {
         text.push_str(&checked_text(
-            &crate::root().join(statement),
+            &crate::root()?.join(statement),
             entry
                 .statement_sha256
                 .as_deref()
@@ -228,7 +228,7 @@ fn render(data: &Value, reviewed: &[Reviewed], web: bool) -> Result<String> {
     }
     if !web {
         let nsis = checked_text(
-            &crate::root().join("packaging/licenses/NSIS-3.13-COPYING.txt"),
+            &crate::root()?.join("packaging/licenses/NSIS-3.13-COPYING.txt"),
             "9afab55b28917f993049218d52d5ed9ec56498bc6d53fe422aea5b60c867ee4b",
         )?;
         text.push_str(&format!("\n\n=== NSIS 3.13: Windows installer runtime only ===\nOfficial distribution copyright and license information:\n{nsis}\n"));

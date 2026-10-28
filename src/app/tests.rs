@@ -18,7 +18,7 @@ fn app() -> Snip2Pin {
         active_display: None,
         pins: BTreeMap::new(),
         pin_menu: None,
-        unlock_hint: None,
+        layer_presentation: None,
         quit_confirmation: None,
         next_quit_request: 0,
         #[cfg(target_os = "macos")]
@@ -46,6 +46,143 @@ fn app() -> Snip2Pin {
         permission: ScreenPermission::default(),
         relaunch: Arc::new(Mutex::new(None)),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn prepare_capture_layers(app: &mut Snip2Pin, ctx: &egui::Context) {
+    for visible in [false, true] {
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            eframe::App::logic(app, ui.ctx(), &mut frame);
+            eframe::App::ui(app, ui, &mut frame);
+        });
+        root.textures_delta.clear();
+        for (&display, layer) in &app.layers {
+            let viewport = &root.viewport_output[&layer_id(display)];
+            assert_eq!(viewport.builder.visible, Some(visible));
+            assert_eq!(viewport.builder.mouse_passthrough, Some(true));
+            let bounds =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, layer.display.logical_size().into());
+            let mut input = egui::RawInput {
+                viewport_id: layer_id(display),
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            input.viewports.insert(
+                layer_id(display),
+                egui::ViewportInfo {
+                    inner_rect: Some(bounds),
+                    native_pixels_per_point: Some(layer.display.scale),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                viewport
+                    .viewport_ui_cb
+                    .as_ref()
+                    .expect("production capture callback")(ui)
+            });
+            output.textures_delta.clear();
+        }
+    }
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(app, ui.ctx(), &mut frame);
+        eframe::App::ui(app, ui, &mut frame);
+    });
+    root.textures_delta.clear();
+    for &display in app.layers.keys() {
+        assert_eq!(
+            root.viewport_output[&layer_id(display)]
+                .builder
+                .mouse_passthrough,
+            Some(false)
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn capture_paints_hidden_then_mapped_before_accepting_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let request = app.gate.begin().expect("capture request");
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    let publish = |app: &Snip2Pin| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        output
+    };
+    for visible in [false, true] {
+        let output = publish(&app);
+        let viewport = &output.viewport_output[&layer_id(0)];
+        assert_eq!(viewport.builder.visible, Some(visible));
+        assert_eq!(viewport.builder.mouse_passthrough, Some(true));
+        let bounds = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            app.layers[&0].display.logical_size().into(),
+        );
+        let mut input = egui::RawInput {
+            viewport_id: layer_id(0),
+            screen_rect: Some(bounds),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(layer_id(0), egui::ViewportInfo::default());
+        let mut frame = ctx.run_ui(input, |ui| viewport.viewport_ui_cb.as_ref().unwrap()(ui));
+        frame.textures_delta.clear();
+        assert!(
+            frame
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Mesh(_)))
+        );
+        assert!(
+            frame
+                .viewport_output
+                .values()
+                .flat_map(|viewport| &viewport.commands)
+                .all(|command| !matches!(command, ViewportCommand::Focus))
+        );
+        assert!(
+            !app.layers[&0]
+                .selection
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .focus_requested
+        );
+        let events = app.events.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Selection { .. }))
+        );
+        for event in events {
+            app.handle_event(event, &ctx);
+        }
+    }
+    let output = publish(&app);
+    assert_eq!(
+        output.viewport_output[&layer_id(0)]
+            .builder
+            .mouse_passthrough,
+        Some(false)
+    );
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    app.reset_capture(&ctx);
+    assert!(app.layer_presentation.is_none());
 }
 
 #[test]
@@ -252,8 +389,8 @@ fn initial_display_fit_keeps_original_capture_pixels_for_copy() {
     let rect = geometry::PixelRect {
         x: 0,
         y: 0,
-        width: original.size[0] as u32,
-        height: original.size[1] as u32,
+        width: original.resolution()[0] as u32,
+        height: original.resolution()[1] as u32,
     };
     let session = app.gate.begin().expect("capture");
     app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
@@ -348,6 +485,7 @@ fn background_bootstrap_keeps_capture_layers_available_without_painting_home() {
             display,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
+            paint_pending: false,
         },
     );
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -453,6 +591,54 @@ fn capture_never_switches_the_desktop_into_native_fullscreen() {
         }),
         "capture must never enter/leave native fullscreen or switch monitors"
     );
+    assert_eq!(
+        output.viewport_output[&layer_id(0)].builder.window_type,
+        Some(egui::X11WindowType::Dock),
+        "X11 capture layers must cover panels without work-area constraints or native fullscreen"
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn screen_layers_are_visible_only_for_capture_or_recovery_notice() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let visible = |app: &Snip2Pin| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        output.textures_delta.clear();
+        output.viewport_output[&layer_id(0)]
+            .builder
+            .visible
+            .unwrap_or(true)
+    };
+    assert!(!visible(&app), "an idle layer must not occupy the desktop");
+    let request = app.gate.begin().expect("capture request");
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    assert_eq!(
+        visible(&app),
+        !cfg!(target_os = "windows"),
+        "Windows capture must paint before mapping its layer"
+    );
+    app.reset_capture(&ctx);
+    assert!(!visible(&app), "cancellation must unmap the layer");
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    assert!(
+        !visible(&app),
+        "prepare a notice before revealing its layer"
+    );
+    app.handle_event(
+        Event::LayerFrameDrawn {
+            hint: app.layer_presentation.as_ref().unwrap().raised.clone(),
+            display: 0,
+            bounds: test_hint_bounds(),
+        },
+        &ctx,
+    );
+    assert!(visible(&app), "a recovery notice must remain visible");
+    app.clear_layer_presentation(&ctx);
+    assert!(!visible(&app), "expired notices must release the desktop");
 }
 
 #[test]
@@ -659,6 +845,8 @@ fn clicking_a_recognized_window_pins_and_copies_the_frozen_region_once() {
         egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
     let session = app.gate.begin().expect("capture");
     app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
     let mut layers = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
     layers.textures_delta.clear();
     let viewport = layer_id(0);
@@ -803,7 +991,7 @@ fn single_pixel_selections_copy_the_original_without_an_application_size_floor()
             assert_eq!(app.pins.len(), usize::from(valid));
             assert_eq!(output.platform_output.commands.len(), usize::from(valid));
             if valid {
-                assert_eq!(app.pins[&1].pixels.size, [edge as usize; 2]);
+                assert_eq!(app.pins[&1].pixels.resolution(), [edge as usize; 2]);
                 assert!((app.pins[&1].initial.width() - scale.recip()).abs() < 0.00001);
                 assert!((app.pins[&1].initial.height() - scale.recip()).abs() < 0.00001);
             }
@@ -1336,7 +1524,7 @@ fn stale_unlocked_callback_cannot_close_a_newly_locked_pin() {
         eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
     });
     root.textures_delta.clear();
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(root.viewport_output.contains_key(&viewport));
     assert!(
         !root.viewport_output[&viewport]
@@ -1368,7 +1556,7 @@ fn cancelling_capture_preserves_a_locked_pending_pin() {
     app.cancel_capture(&ctx);
     assert!(matches!(app.phase, Phase::Idle));
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(pixels.upgrade().is_some());
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
     output.textures_delta.clear();
@@ -1668,6 +1856,8 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
     );
     let layout = pin::frame_geometry(placement, screen, 1.0);
     app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
     app.selection_action(id, 0, overlay::Action::Select(rect), &ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         app.show_pins(ui.ctx());
@@ -1686,10 +1876,49 @@ fn pin_window_is_created_at_the_selection_origin_without_changing_root() {
         output.viewport_output[&ViewportId::ROOT]
             .commands
             .iter()
-            .all(|command| matches!(command, ViewportCommand::SetTheme(_))),
+            .all(|command| matches!(
+                command,
+                ViewportCommand::SetTheme(_) | ViewportCommand::RequestPaintWhileHidden
+            )),
         "unexpected root commands: {:?}",
         output.viewport_output[&ViewportId::ROOT].commands
     );
+}
+
+#[test]
+fn pin_maximization_policy_is_stable_across_lock_changes_and_preserves_resize() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    let mut previous = None::<egui::ViewportBuilder>;
+    for locked in [false, true, false] {
+        app.set_pin_locked(1, locked, &ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        output.textures_delta.clear();
+        let builder = &output.viewport_output[&pin_id(1)].builder;
+        assert_eq!(
+            builder.maximize_button,
+            cfg!(target_os = "windows").then_some(false)
+        );
+        assert_eq!(
+            builder.resizable,
+            Some(cfg!(target_os = "macos") || !locked)
+        );
+        if let Some(previous) = &mut previous {
+            assert!(
+                !previous.patch(builder.clone()).1,
+                "locking must not recreate the pin"
+            );
+        } else {
+            previous = Some(builder.clone());
+        }
+        assert!(
+            output.viewport_output[&ViewportId::ROOT]
+                .builder
+                .maximize_button
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -1723,7 +1952,7 @@ fn narrow_capture_keeps_its_display_size_and_text_density() {
         expected.size,
     );
     assert!(builder.min_inner_size.is_none());
-    assert_eq!(app.pins[&1].pixels.size, [24, 240]);
+    assert_eq!(app.pins[&1].pixels.resolution(), [24, 240]);
 }
 
 #[cfg(target_os = "macos")]
@@ -1833,7 +2062,7 @@ fn retina_overlay_canonicalizes_odd_pixels_before_copy_and_initial_placement() {
             height: 402,
         };
         assert_eq!(selected, Some(rect));
-        assert_eq!(app.pins[&1].pixels.size, [602, 402]);
+        assert_eq!(app.pins[&1].pixels.resolution(), [602, 402]);
         assert_eq!(
             copies,
             [capture::crop(&source, rect).expect("canonical source crop")]
@@ -1891,7 +2120,7 @@ fn pin_builder_cancels_backend_zoom_without_enlarging_tiny_images_for_controls()
                 let model = &app.pins[&1];
                 assert!(builder.min_inner_size.is_none());
                 assert_eq!(
-                    model.pixels.size,
+                    model.pixels.resolution(),
                     [rect.width as usize, rect.height as usize]
                 );
                 let unzoomed = pin::frame_geometry(
@@ -2019,6 +2248,10 @@ fn tiny_pin_app(ctx: &egui::Context) -> Snip2Pin {
     app
 }
 
+fn test_hint_bounds() -> egui::Rect {
+    egui::Rect::from_min_size(egui::pos2(120.0, 20.0), egui::vec2(360.0, 36.0))
+}
+
 #[test]
 fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
     let ctx = egui::Context::default();
@@ -2045,6 +2278,7 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
                 display,
                 selection: None,
                 positioned: Arc::new(AtomicBool::new(true)),
+                paint_pending: false,
             },
         );
     }
@@ -2057,12 +2291,16 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
         (None, None),
     ] {
         app.show_unlock_hint(1, point, &ctx);
+        assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
         let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
         setup.textures_delta.clear();
         for (&id, layer) in &app.layers {
             let viewport = &setup.viewport_output[&layer_id(id)];
             assert_eq!(viewport.builder.mouse_passthrough, Some(true));
             assert_eq!(viewport.builder.active, Some(false));
+            if !cfg!(target_os = "macos") {
+                assert_eq!(viewport.builder.visible, Some(false));
+            }
             let paint = viewport
                 .viewport_ui_cb
                 .as_ref()
@@ -2106,23 +2344,681 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
                     ))
             );
         }
+        let drawn = app
+            .events
+            .try_iter()
+            .filter(|event| matches!(event, Event::LayerFrameDrawn { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drawn.len(),
+            app.layer_presentation.as_ref().unwrap().areas.len()
+        );
+        for event in drawn {
+            app.handle_event(event, &ctx);
+        }
+        let hint = app.layer_presentation.as_ref().unwrap();
+        assert_eq!(hint.ready.len(), hint.areas.len());
+        assert_eq!(hint.until.is_some(), !cfg!(target_os = "windows"));
     }
     assert!(matches!(app.phase, Phase::Idle));
     assert!(app.layers.values().all(|layer| layer.selection.is_none()));
     assert_eq!(initial, app.pins[&1].initial);
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     app.unlock_pins(&ctx);
-    assert!(app.unlock_hint.is_none());
+    assert!(app.layer_presentation.is_none());
     app.toggle_pin_lock(1, &ctx);
     app.show_unlock_hint(1, Some([900.0, 600.0]), &ctx);
-    app.unlock_hint.as_mut().expect("active reminder").until = Instant::now();
+    app.layer_presentation
+        .as_mut()
+        .expect("active reminder")
+        .until = Some(Instant::now());
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
     });
     assert!(
-        app.unlock_hint.is_none(),
+        app.layer_presentation.is_none(),
         "scheduled repaint expires the notice without polling"
     );
+}
+
+#[test]
+fn notice_presentation_ignores_stale_duplicate_and_unknown_display_frames() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.clear_layer_presentation(&ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let current = app.layer_presentation.as_ref().unwrap().raised.clone();
+    assert!(
+        stale.load(Ordering::Acquire),
+        "cancelled callbacks cannot prepare opacity"
+    );
+    for (hint, display) in [(stale, 0), (current.clone(), u32::MAX)] {
+        app.handle_event(
+            Event::LayerFrameDrawn {
+                hint,
+                display,
+                bounds: test_hint_bounds(),
+            },
+            &ctx,
+        );
+        let waiting = app.layer_presentation.as_ref().unwrap();
+        assert!(waiting.until.is_none());
+        assert!(waiting.ready.is_empty());
+    }
+    let drawn = || Event::LayerFrameDrawn {
+        hint: current.clone(),
+        display: 0,
+        bounds: test_hint_bounds(),
+    };
+    app.handle_event(drawn(), &ctx);
+    if cfg!(target_os = "windows") {
+        app.handle_event(
+            Event::LayerVisibleFrameDrawn {
+                hint: current.clone(),
+                display: 0,
+            },
+            &ctx,
+        );
+    }
+    let deadline = app.layer_presentation.as_ref().unwrap().until.unwrap();
+    app.handle_event(drawn(), &ctx);
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        Some(deadline)
+    );
+    app.unlock_pins(&ctx);
+    app.handle_event(drawn(), &ctx);
+    assert!(app.layer_presentation.is_none());
+}
+
+#[test]
+fn deferred_locked_drag_refreshes_after_hold_and_drops_blocked_presses() {
+    for blocker in ["none", "menu", "recording"] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = tiny_pin_app(&ctx);
+        app.home_visible = false;
+        app.toggle_pin_lock(1, &ctx);
+        let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+        setup.textures_delta.clear();
+        let paint = setup.viewport_output[&pin_id(1)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap();
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 180.0));
+        let origin = bounds.center();
+        for frame in 0..4 {
+            if frame == 1 {
+                if blocker == "menu" {
+                    ui::pin::MenuInput::sync(&ctx, true);
+                }
+                if blocker == "recording" {
+                    app.recording.start();
+                    app.recording.sync_input(&ctx);
+                }
+            }
+            if frame == 2 {
+                ui::pin::MenuInput::sync(&ctx, false);
+                app.recording.cancel();
+                app.recording.sync_input(&ctx);
+            }
+            let events = match frame {
+                0 => vec![egui::Event::PointerMoved(origin)],
+                1 => vec![egui::Event::PointerButton {
+                    pos: origin,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                2 => vec![],
+                _ => vec![egui::Event::PointerMoved(origin + egui::vec2(30.0, 0.0))],
+            };
+            let mut input = egui::RawInput {
+                viewport_id: pin_id(1),
+                screen_rect: Some(bounds),
+                time: Some(frame as f64),
+                events,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                pin_id(1),
+                egui::ViewportInfo {
+                    native_pixels_per_point: Some(1.0),
+                    inner_rect: Some(bounds),
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| paint(ui));
+            output.textures_delta.clear();
+            let pending: Vec<_> = app.events.try_iter().collect();
+            let count = pending
+                .iter()
+                .filter(|event| matches!(event, Event::UnlockHint(1)))
+                .count();
+            assert_eq!(
+                count,
+                usize::from(blocker == "none" && (frame == 1 || frame == 3)),
+                "{blocker}, frame={frame}"
+            );
+            for event in pending {
+                app.handle_event(event, &ctx);
+            }
+            if frame == 2 && blocker == "none" {
+                // Simulate the initial notice's scheduled one-second expiry.
+                app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+                let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+                    eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+                });
+                assert!(app.layer_presentation.is_none());
+            }
+            if frame == 3 {
+                assert_eq!(app.layer_presentation.is_some(), blocker == "none");
+            }
+        }
+    }
+}
+
+#[test]
+fn repeating_a_hint_reuses_preparation_and_refreshes_the_visible_deadline() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let generation = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.show_unlock_hint(1, None, &ctx);
+    assert!(Arc::ptr_eq(
+        &generation,
+        &app.layer_presentation.as_ref().unwrap().raised
+    ));
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    app.show_unlock_hint(1, None, &ctx);
+    let current = app.layer_presentation.as_ref().unwrap();
+    assert!(Arc::ptr_eq(&generation, &current.raised));
+    assert!(current.until.unwrap() > Instant::now());
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    app.sender.send(Event::UnlockHint(1)).unwrap();
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    let current = app.layer_presentation.as_ref().unwrap();
+    assert!(
+        Arc::ptr_eq(&generation, &current.raised),
+        "queued movement refreshes before expiry conceals the layer"
+    );
+    let deadline = current.until;
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        deadline,
+        "idle logic cannot extend the notice"
+    );
+    app.layer_presentation.as_mut().unwrap().until = Some(Instant::now());
+    let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(app.layer_presentation.is_none());
+}
+
+#[test]
+fn notice_logic_only_start_publishes_the_callback_before_child_paint() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.home_visible = false;
+    app.toggle_pin_lock(1, &ctx);
+    let mut old = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    old.textures_delta.clear();
+    app.sender.send(Event::UnlockHint(1)).unwrap();
+    let logic = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(
+        logic.viewport_commands[&ViewportId::ROOT]
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    assert!(
+        !logic
+            .viewport_commands
+            .get(&layer_id(0))
+            .is_some_and(|commands| commands.contains(&ViewportCommand::RequestPaintWhileHidden))
+    );
+    let size = egui::Vec2::from(app.layers[&0].display.logical_size());
+    let paint = |callback: &Arc<egui::DeferredViewportUiCallback>| {
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut input = egui::RawInput {
+            viewport_id: layer_id(0),
+            screen_rect: Some(bounds),
+            ..Default::default()
+        };
+        input.viewports.insert(
+            layer_id(0),
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(1.0),
+                inner_rect: Some(bounds),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(input, |ui| callback(ui));
+        output.textures_delta.clear();
+        output
+    };
+    let _ = paint(
+        old.viewport_output[&layer_id(0)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap(),
+    );
+    assert!(
+        app.events
+            .try_iter()
+            .all(|event| !matches!(event, Event::LayerFrameDrawn { .. }))
+    );
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    full.textures_delta.clear();
+    assert!(
+        full.viewport_output[&layer_id(0)]
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    assert!(!app.layers[&0].paint_pending);
+    let frame = paint(
+        full.viewport_output[&layer_id(0)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap(),
+    );
+    let text = ui::screen_hint::unlock_text(&ctx);
+    assert!(frame.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
+    )));
+    let shown = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
+    });
+    assert!(
+        shown.viewport_commands[&ViewportId::ROOT]
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until.is_some(),
+        !cfg!(target_os = "windows")
+    );
+    assert!(!app.home_visible);
+    assert!(
+        app.layers[&0].paint_pending,
+        "revealing needs a presented frame"
+    );
+    assert!(
+        !shown
+            .viewport_commands
+            .get(&layer_id(0))
+            .is_some_and(|commands| commands.contains(&ViewportCommand::RequestPaintWhileHidden)),
+        "publish the visible callback before requesting its paint"
+    );
+    let mut revealed = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    revealed.textures_delta.clear();
+    let viewport = &revealed.viewport_output[&layer_id(0)];
+    assert_eq!(viewport.builder.visible, Some(true));
+    assert!(
+        viewport
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    let frame = paint(viewport.viewport_ui_cb.as_ref().unwrap());
+    assert!(frame.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
+    )));
+    assert!(!app.layers[&0].paint_pending);
+    let visible_frames: Vec<_> = app.events.try_iter().collect();
+    assert!(
+        visible_frames
+            .iter()
+            .all(|event| !matches!(event, Event::LayerFrameDrawn { .. }))
+    );
+    assert_eq!(
+        visible_frames
+            .iter()
+            .filter(|event| matches!(event, Event::LayerVisibleFrameDrawn { .. }))
+            .count(),
+        usize::from(cfg!(target_os = "windows"))
+    );
+    for event in visible_frames {
+        app.handle_event(event, &ctx);
+    }
+    assert!(app.layer_presentation.as_ref().unwrap().until.is_some());
+    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.handle_event(
+        Event::LayerFrameDrawn {
+            hint,
+            display: 0,
+            bounds: test_hint_bounds(),
+        },
+        &ctx,
+    );
+    assert!(
+        !app.layers[&0].paint_pending,
+        "duplicate acknowledgements do not repaint"
+    );
+    app.clear_layer_presentation(&ctx);
+    let mut cleared = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    cleared.textures_delta.clear();
+    assert!(
+        cleared.viewport_output[&layer_id(0)]
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    let frame = paint(
+        cleared.viewport_output[&layer_id(0)]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap(),
+    );
+    assert!(!frame.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text_shape) if text_shape.galley.text() == text
+    )));
+    assert!(!app.layers[&0].paint_pending);
+}
+
+#[test]
+fn notice_errors_only_terminate_their_own_generation() {
+    let ctx = egui::Context::default();
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let stale = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.clear_layer_presentation(&ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let current = app.layer_presentation.as_ref().unwrap().raised.clone();
+    app.handle_event(
+        Event::LayerError {
+            hint: stale,
+            error: "prepare failed".into(),
+        },
+        &ctx,
+    );
+    assert!(Arc::ptr_eq(
+        &app.layer_presentation.as_ref().unwrap().raised,
+        &current
+    ));
+    app.handle_event(
+        Event::LayerError {
+            hint: current.clone(),
+            error: "prepare failed".into(),
+        },
+        &ctx,
+    );
+    assert!(app.layer_presentation.is_none());
+    app.handle_event(
+        Event::LayerFrameDrawn {
+            hint: current.clone(),
+            display: 0,
+            bounds: test_hint_bounds(),
+        },
+        &ctx,
+    );
+    app.handle_event(
+        Event::LayerVisibleFrameDrawn {
+            hint: current,
+            display: 0,
+        },
+        &ctx,
+    );
+    assert!(app.layer_presentation.is_none());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn notice_reveals_only_after_every_visible_display_frame() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.toggle_pin_lock(1, &ctx);
+    app.show_unlock_hint(1, None, &ctx);
+    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
+    let area = app.layer_presentation.as_ref().unwrap().areas[&0];
+    app.layer_presentation
+        .as_mut()
+        .unwrap()
+        .areas
+        .insert(1, area);
+    let visible = |display| Event::LayerVisibleFrameDrawn {
+        hint: hint.clone(),
+        display,
+    };
+    app.handle_event(visible(0), &ctx);
+    assert!(
+        app.layer_presentation
+            .as_ref()
+            .unwrap()
+            .visible_ready
+            .is_empty()
+    );
+    for display in [0, 1] {
+        app.handle_event(
+            Event::LayerFrameDrawn {
+                hint: hint.clone(),
+                display,
+                bounds: test_hint_bounds(),
+            },
+            &ctx,
+        );
+    }
+    for display in [u32::MAX, 0, 0] {
+        app.handle_event(visible(display), &ctx);
+        assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
+    }
+    app.handle_event(visible(1), &ctx);
+    let deadline = app.layer_presentation.as_ref().unwrap().until.unwrap();
+    app.handle_event(visible(1), &ctx);
+    assert_eq!(
+        app.layer_presentation.as_ref().unwrap().until,
+        Some(deadline)
+    );
+    app.show_unlock_hint(1, None, &ctx);
+    app.handle_event(visible(0), &ctx);
+    assert!(
+        app.layer_presentation
+            .as_ref()
+            .unwrap()
+            .visible_ready
+            .is_empty()
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn passive_notice_maps_only_its_measured_panel_and_hides_without_expanding() {
+    for zoom in [1.0, 1.5, 2.0] {
+        for native_scale in [1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            ctx.set_zoom_factor(zoom);
+            let mut app = tiny_pin_app(&ctx);
+            app.layers.get_mut(&0).unwrap().display.origin = [-800.0, 0.0];
+            app.toggle_pin_lock(1, &ctx);
+            app.show_unlock_hint(1, None, &ctx);
+            let work =
+                egui::Rect::from_min_size(egui::pos2(-728.0, 40.0), egui::vec2(700.0, 480.0));
+            *app.layer_presentation
+                .as_mut()
+                .unwrap()
+                .areas
+                .get_mut(&0)
+                .unwrap() = work;
+            let input = || {
+                let mut input = egui::RawInput::default();
+                input.viewports.insert(
+                    layer_id(0),
+                    egui::ViewportInfo {
+                        native_pixels_per_point: Some(native_scale),
+                        ..Default::default()
+                    },
+                );
+                input
+            };
+            let mut pending = ctx.run_ui(input(), |ui| {
+                app.show_layers(ui.ctx());
+                app.paint_pending_layers(ui.ctx());
+            });
+            pending.textures_delta.clear();
+            let viewport = &pending.viewport_output[&layer_id(0)];
+            let ratio = app.layers[&0].display.scale / (native_scale * ctx.zoom_factor());
+            assert!(viewport.builder.position.is_none());
+            assert!(viewport.builder.inner_size.is_none());
+            let expected_size = egui::Vec2::from(app.layers[&0].display.logical_size()) * ratio;
+            let tolerance = expected_size.max_elem() * f32::EPSILON * 4.0;
+            assert_eq!(viewport.builder.visible, Some(false));
+            assert!(
+                viewport
+                    .commands
+                    .contains(&ViewportCommand::RequestPaintWhileHidden)
+            );
+            let mut native_builder = viewport.builder.clone();
+            let paint = |callback: &Arc<egui::DeferredViewportUiCallback>, size| {
+                let mut child = input();
+                child.viewport_id = layer_id(0);
+                child.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
+                let mut output = ctx.run_ui(child, |ui| callback(ui));
+                output.textures_delta.clear();
+                output
+            };
+            let measured = paint(viewport.viewport_ui_cb.as_ref().unwrap(), expected_size);
+            for event in app.events.try_iter().collect::<Vec<_>>() {
+                app.handle_event(event, &ctx);
+            }
+            let panel = app.layer_presentation.as_ref().unwrap().ready[&0];
+            assert!(work.contains_rect(panel));
+            assert!(panel.height() < work.height() / 2.0);
+            let mut ready = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            ready.textures_delta.clear();
+            let ready_viewport = &ready.viewport_output[&layer_id(0)];
+            assert_eq!(ready_viewport.builder.position, Some(panel.min * ratio));
+            let panel_size = panel.size() * ratio;
+            assert!(
+                (ready_viewport.builder.inner_size.unwrap() - panel_size).length() <= tolerance
+            );
+            let (commands, recreate) = native_builder.patch(ready_viewport.builder.clone());
+            assert!(!recreate);
+            assert!(commands.contains(&ViewportCommand::Visible(true)));
+            let presented = paint(ready_viewport.viewport_ui_cb.as_ref().unwrap(), panel_size);
+            let text_rows = |output: &egui::FullOutput| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            Some(text.galley.rows.len())
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("complete notice")
+            };
+            assert_eq!(text_rows(&measured), text_rows(&presented));
+            let client = egui::Rect::from_min_size(egui::Pos2::ZERO, panel_size);
+            for shape in &presented.shapes {
+                assert!(
+                    client
+                        .expand(0.001)
+                        .contains_rect(shape.shape.visual_bounding_rect())
+                );
+            }
+            let generation = app.layer_presentation.as_ref().unwrap().raised.clone();
+            app.show_unlock_hint(1, None, &ctx);
+            let mut refreshed = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            refreshed.textures_delta.clear();
+            assert!(Arc::ptr_eq(
+                &generation,
+                &app.layer_presentation.as_ref().unwrap().raised
+            ));
+            let (commands, recreate) =
+                native_builder.patch(refreshed.viewport_output[&layer_id(0)].builder.clone());
+            assert!(!recreate);
+            assert!(
+                commands.is_empty(),
+                "refresh keeps the visible panel mapped"
+            );
+
+            // A genuinely new notice still prepares while hidden, preserving
+            // the previous panel bounds until its own measurement is ready.
+            app.clear_layer_presentation(&ctx);
+            app.show_unlock_hint(1, None, &ctx);
+            *app.layer_presentation
+                .as_mut()
+                .unwrap()
+                .areas
+                .get_mut(&0)
+                .unwrap() = work;
+            let mut repeated = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            repeated.textures_delta.clear();
+            let repeated_viewport = &repeated.viewport_output[&layer_id(0)];
+            let (commands, recreate) = native_builder.patch(repeated_viewport.builder.clone());
+            assert!(!recreate);
+            assert_eq!(
+                commands,
+                [ViewportCommand::Visible(false)],
+                "hide without expanding the previous visible panel"
+            );
+            paint(
+                repeated_viewport.viewport_ui_cb.as_ref().unwrap(),
+                panel_size,
+            );
+            for event in app.events.try_iter().collect::<Vec<_>>() {
+                app.handle_event(event, &ctx);
+            }
+            assert_eq!(app.layer_presentation.as_ref().unwrap().ready[&0], panel);
+            let mut ready_again = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            ready_again.textures_delta.clear();
+            let (commands, recreate) =
+                native_builder.patch(ready_again.viewport_output[&layer_id(0)].builder.clone());
+            assert!(!recreate);
+            assert_eq!(commands, [ViewportCommand::Visible(true)]);
+            app.clear_layer_presentation(&ctx);
+            let mut idle = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            idle.textures_delta.clear();
+            let (commands, recreate) =
+                native_builder.patch(idle.viewport_output[&layer_id(0)].builder.clone());
+            assert!(!recreate);
+            assert_eq!(commands, [ViewportCommand::Visible(false)]);
+            assert_eq!(native_builder.position, Some(panel.min * ratio));
+            assert!((native_builder.inner_size.unwrap() - panel_size).length() <= tolerance);
+            let request = app.gate.begin().expect("capture after passive notice");
+            app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+            let mut capture = ctx.run_ui(input(), |ui| app.show_layers(ui.ctx()));
+            capture.textures_delta.clear();
+            let bounds = egui::Rect::from_min_size(
+                app.layers[&0].display.position().into(),
+                app.layers[&0].display.logical_size().into(),
+            );
+            let builder = &capture.viewport_output[&layer_id(0)].builder;
+            assert_eq!(builder.position, Some(bounds.min * ratio));
+            assert!((builder.inner_size.unwrap() - bounds.size() * ratio).length() <= tolerance);
+            assert!(
+                !native_builder.patch(builder.clone()).1,
+                "reuse the capture HWND"
+            );
+        }
+    }
 }
 
 fn add_second_test_pin(app: &mut Snip2Pin) {
@@ -2138,7 +3034,7 @@ fn add_second_test_pin(app: &mut Snip2Pin) {
         screen_areas: pin.screen_areas.clone(),
         session: pin.session,
         first_frame_drawn: Arc::new(AtomicBool::new(true)),
-        locked: false,
+        locked: Arc::new(AtomicBool::new(false)),
         #[cfg(target_os = "macos")]
         lock_limits: None,
         #[cfg(target_os = "macos")]
@@ -2165,7 +3061,7 @@ fn unlock_all_is_idempotent_and_preserves_images_and_geometry() {
         app.tray_action(crate::tray::Action::UnlockPins, ctx);
     });
     assert_eq!(app.pins.len(), 2);
-    assert!(app.pins.values().all(|pin| !pin.locked));
+    assert!(app.pins.values().all(|pin| !pin.locked()));
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     assert_eq!(initial, app.pins[&1].initial);
     for commands in output.viewport_commands.values() {
@@ -2216,7 +3112,7 @@ fn recovery_key_in_a_legacy_capture_binding_never_starts_capture() {
     });
     output.textures_delta.clear();
     assert!(matches!(app.phase, Phase::Idle));
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
 }
 
 #[test]
@@ -2233,7 +3129,7 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
     let locked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         app.toggle_pin_lock(1, ctx)
     });
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     #[cfg(not(target_os = "macos"))]
     assert!(locked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(false)));
     #[cfg(target_os = "macos")]
@@ -2270,7 +3166,7 @@ fn lock_state_guards_queued_close_events_and_close_all_until_explicit_unlock() {
     let unlocked = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         app.toggle_pin_lock(1, ctx)
     });
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
     #[cfg(not(target_os = "macos"))]
     assert!(unlocked.viewport_commands[&pin_id(1)].contains(&ViewportCommand::Resizable(true)));
     #[cfg(target_os = "macos")]
@@ -2297,7 +3193,7 @@ fn locating_a_locked_pin_preserves_original_and_geometry() {
     let initial = app.pins[&1].initial;
     let texture = app.pins[&1].texture.id();
     let selected = ctx.run_logic(&egui::RawInput::default(), |ctx| app.select_pin(1, ctx));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(Arc::ptr_eq(&original, &app.pins[&1].pixels));
     assert_eq!(app.pins[&1].initial, initial);
     assert_eq!(app.pins[&1].texture.id(), texture);
@@ -2437,7 +3333,11 @@ fn explicit_zoom_uses_observed_dpi_and_preserves_source_and_initial_geometry() {
         !absent.viewport_commands.contains_key(&pin_id(1)),
         "missing observed size must not fall back to initial geometry"
     );
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.sender
         .send(Event::ZoomPin {
             pin_id: 1,
@@ -2576,7 +3476,11 @@ fn keyboard_movement_uses_observed_outer_origin_and_respects_locks() {
             }),
         })
         .expect("queued before lock");
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     let locked = ctx.run_logic(&input, |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest())
     });
@@ -2643,7 +3547,11 @@ fn home_zoom_hint_uses_current_native_content_size_instead_of_source_or_initial_
         (Some(egui::Vec2::splat(1.0)), false, false, false),
         (Some(egui::Vec2::splat(1.0)), true, true, false),
     ] {
-        app.pins.get_mut(&1).expect("pin").locked = locked;
+        app.pins
+            .get_mut(&1)
+            .expect("pin")
+            .locked
+            .store(locked, Ordering::Release);
         for _ in 0..2 {
             let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -2791,7 +3699,7 @@ fn queued_recording_shortcuts_cannot_act_after_escape_cancels_recording() {
             matches!(app.phase, Phase::Idle),
             "cancelled recording must not capture"
         );
-        assert!(app.pins[&1].locked, "cancelled recording must not unlock");
+        assert!(app.pins[&1].locked(), "cancelled recording must not unlock");
         app.reset_capture(&ctx);
     }
 }
@@ -2890,13 +3798,13 @@ fn global_shortcuts_outside_recording_capture_and_unlock_but_ignore_obsolete_ids
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
     assert!(matches!(app.phase, Phase::Idle));
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     queue_shortcut(Binding::unlock_all().0.id(), &app.sender, &ctx);
     queue_shortcut(id, &app.sender, &ctx);
     let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
-    assert!(!app.pins[&1].locked);
+    assert!(!app.pins[&1].locked());
     assert!(!matches!(app.phase, Phase::Idle));
     assert!(app.gate.active().is_some());
     app.reset_capture(&ctx);
@@ -2933,7 +3841,7 @@ fn registered_recovery_shortcut_reports_reserved_input_even_without_its_key_even
         app.recording.feedback(),
         Some(&Text::ReservedUnlockShortcut.into())
     );
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(matches!(app.phase, Phase::Idle));
 }
 
@@ -3111,7 +4019,11 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     let mut app = tiny_pin_app(&ctx);
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.recording.start();
     let modifiers = if cfg!(target_os = "macos") {
         egui::Modifiers::MAC_CMD | egui::Modifiers::ALT | egui::Modifiers::SHIFT
@@ -3140,7 +4052,7 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
         },
     );
     output.textures_delta.clear();
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert_eq!(
         app.recording.feedback(),
         Some(&Text::ReservedUnlockShortcut.into())
@@ -3157,7 +4069,7 @@ fn recording_the_reserved_shortcut_cannot_unlock_pins_through_native_logic() {
     );
     output.textures_delta.clear();
     assert!(
-        !app.pins[&1].locked,
+        !app.pins[&1].locked(),
         "normal recovery still works after recording"
     );
 }
@@ -3241,7 +4153,7 @@ fn editing_pin_names_preserves_identity_originals_and_geometry_when_other_rows_c
     app.close_pin(2, &ctx);
     let _ = home_frame(&mut app, &ctx, vec![egui::Event::Text(" 2".into())]);
     assert_eq!(app.pins[&1].name, "参考 Reference 2");
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
     assert!(Arc::ptr_eq(&pixels, &app.pins[&1].pixels));
     assert_eq!(app.pins[&1].initial, initial);
     assert_eq!(app.pins[&1].texture.id(), texture);
@@ -3358,7 +4270,7 @@ fn quitting_with_locked_pins_requires_confirmation_and_cancel_preserves_every_pi
             }
         } else {
             assert_eq!(app.pins.len(), 2);
-            assert!(app.pins[&1].locked);
+            assert!(app.pins[&1].locked());
             assert!(original.upgrade().is_some());
             assert!(
                 clicked.viewport_output[&ViewportId::ROOT]
@@ -3385,7 +4297,7 @@ fn closing_home_without_a_tray_or_locked_pins_quits_and_releases_images() {
     add_second_test_pin(&mut app);
     let original = Arc::downgrade(&app.pins[&1].pixels);
     assert!(app.tray.is_none());
-    assert!(app.pins.values().all(|pin| !pin.locked));
+    assert!(app.pins.values().all(|pin| !pin.locked()));
     let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
     assert!(app.exiting);
     assert!(app.quit_confirmation.is_none());
@@ -3448,7 +4360,7 @@ fn asynchronous_quit_results_confirm_or_cancel_only_the_current_request() {
             }
         } else {
             assert_eq!(app.pins.len(), 2);
-            assert!(app.pins[&1].locked);
+            assert!(app.pins[&1].locked());
             assert_eq!(app.pins[&1].initial, initial);
             assert!(Arc::ptr_eq(
                 &original.upgrade().expect("retained original"),
@@ -3555,7 +4467,7 @@ fn pending_quit_keeps_its_host_after_the_last_pin_is_unlocked() {
         });
         let id = app.quit_confirmation.as_ref().expect("pending quit").id;
         assert!(app.tray.is_none());
-        assert!(!app.pins[&1].locked);
+        assert!(!app.pins[&1].locked());
         let output = ctx.run_logic(&egui::RawInput::default(), |ctx| app.close_home(ctx));
         assert!(
             output
@@ -3677,7 +4589,11 @@ fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
     let mut app = tiny_pin_app(&ctx);
     // Set state before opting into the native presentation path. No native pin
     // adapter is called, and the test frame never owns a real host window.
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.demo = false;
     let frame = eframe::Frame::_new_kittest();
     assert!(
@@ -3723,7 +4639,11 @@ fn native_quit_without_a_host_handle_waits_one_step_then_uses_gui_fallback() {
 fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
     let ctx = egui::Context::default();
     let mut app = tiny_pin_app(&ctx);
-    app.pins.get_mut(&1).expect("pin").locked = true;
+    app.pins
+        .get_mut(&1)
+        .expect("pin")
+        .locked
+        .store(true, Ordering::Release);
     app.demo = false;
     let frame = eframe::Frame::_new_kittest();
     assert!(frame.window_handle().is_err());
@@ -3759,7 +4679,7 @@ fn native_quit_waits_for_a_new_host_frame_after_a_discarded_ui_pass() {
         QuitPresentation::Fallback
     ));
     assert!(!app.exiting);
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
 }
 
 #[test]
@@ -3790,7 +4710,7 @@ fn failed_native_quit_presentation_falls_back_without_losing_pins() {
     );
     app.quit_decision(id, Ok(false), &ctx);
     assert!(app.quit_confirmation.is_none());
-    assert!(app.pins[&1].locked);
+    assert!(app.pins[&1].locked());
 }
 
 #[test]
@@ -3968,7 +4888,7 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
         let menu = &opened.viewport_output[&pin_menu_id()].builder;
         assert_eq!(menu.inner_size, Some(ui::pin::MENU_SIZE));
         assert_eq!(menu.resizable, Some(false));
-        assert_eq!(menu.active, Some(true));
+        assert_eq!(menu.active, Some(!cfg!(target_os = "linux")));
         let menu_rect =
             egui::Rect::from_min_size(menu.position.expect("anchored menu"), ui::pin::MENU_SIZE);
         let visible = egui::Rect::from_min_max(area.min / zoom, area.max / zoom);
@@ -3979,7 +4899,7 @@ fn tiny_pin_opens_an_independent_menu_only_on_request_without_resizing_the_image
         );
         assert_eq!(app.pins[&1].initial, initial);
         assert_eq!(app.pins[&1].pixels.as_ref(), original.as_ref());
-        assert_eq!(original.size, [3, 5]);
+        assert_eq!(original.resolution(), [3, 5]);
     }
 }
 
@@ -4073,8 +4993,114 @@ fn right_click_menu_preserves_current_viewport_coordinates_after_dpi_changes() {
                 opened.viewport_output[&pin_menu_id()].builder.position,
                 Some(expected)
             );
+            assert_eq!(
+                opened.viewport_output[&pin_menu_id()].builder.window_type,
+                Some(egui::X11WindowType::PopupMenu),
+                "the real right-click path must request a menu layer above pinned images"
+            );
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn capture_completion_and_cancellation_do_not_request_home_activation() {
+    for home_visible in [false, true] {
+        for completed in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let mut warmup = ctx.run_ui(egui::RawInput::default(), |_| {});
+            warmup.textures_delta.clear();
+            let mut app = app();
+            app.home_visible = home_visible;
+            let session = app.gate.begin().expect("capture");
+            app.accept_capture(session, Ok(vec![capture::demo()]), None, &ctx);
+            app.demo = false;
+            if completed {
+                app.selection_action(
+                    session,
+                    0,
+                    overlay::Action::Select(geometry::PixelRect {
+                        x: 12,
+                        y: 18,
+                        width: 3,
+                        height: 5,
+                    }),
+                    &ctx,
+                );
+                app.sender
+                    .send(Event::PinFrameDrawn { session, pin_id: 1 })
+                    .expect("pin painted");
+            }
+            let input = egui::RawInput {
+                events: if completed {
+                    Vec::new()
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                },
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                eframe::App::logic(&mut app, ui.ctx(), &mut eframe::Frame::_new_kittest());
+            });
+            output.textures_delta.clear();
+            assert!(matches!(app.phase, Phase::Idle));
+            assert_eq!(app.pins.contains_key(&1), completed);
+            assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+            assert!(
+                output
+                    .viewport_output
+                    .values()
+                    .flat_map(|viewport| &viewport.commands)
+                    .all(|command| *command != ViewportCommand::Focus),
+                "finishing capture must let the WM restore focus without a Home attention request"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fallback_popup_keeps_owner_focus_and_remains_managed() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = tiny_pin_app(&ctx);
+    app.open_pin_menu(1, None, &ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pin_menu(ui.ctx()));
+    setup.textures_delta.clear();
+    let menu = &setup.viewport_output[&pin_menu_id()];
+    assert_ne!(menu.builder.override_redirect, Some(true));
+    assert_eq!(menu.builder.active, Some(false));
+    let paint = menu.viewport_ui_cb.as_ref().expect("menu callback");
+    for _ in 0..2 {
+        let mut input = egui::RawInput {
+            viewport_id: pin_menu_id(),
+            focused: false,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                ui::pin::MENU_SIZE,
+            )),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(pin_menu_id(), egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| paint(ui));
+        output.textures_delta.clear();
+        let requests = output.viewport_output[&pin_menu_id()]
+            .commands
+            .iter()
+            .filter(|command| **command == ViewportCommand::Focus)
+            .count();
+        assert_eq!(requests, 0);
+    }
+    assert!(app.pin_menu.is_some());
 }
 
 #[test]
@@ -4138,7 +5164,7 @@ fn independent_menu_closes_on_escape_focus_loss_or_native_close_without_closing_
 
 #[test]
 fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
-    for close in [false, true] {
+    for (close, focused) in [(false, true), (false, false), (true, true), (true, false)] {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let mut app = tiny_pin_app(&ctx);
@@ -4153,6 +5179,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
             .expect("menu callback");
         let mut layout_input = egui::RawInput {
             viewport_id: pin_menu_id(),
+            focused,
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 ui::pin::MENU_SIZE,
@@ -4192,7 +5219,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
         ] {
             let mut input = egui::RawInput {
                 viewport_id: pin_menu_id(),
-                focused: true,
+                focused,
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     ui::pin::MENU_SIZE,
@@ -4203,7 +5230,7 @@ fn independent_menu_actions_copy_original_or_close_pin_and_release_the_menu() {
             input.viewports.insert(
                 pin_menu_id(),
                 egui::ViewportInfo {
-                    focused: Some(true),
+                    focused: Some(focused),
                     ..Default::default()
                 },
             );
@@ -4263,6 +5290,7 @@ fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
             display: capture::demo().display,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
+            paint_pending: false,
         },
     );
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
@@ -4348,7 +5376,7 @@ fn native_menu_commands_keep_queue_order_and_share_copy_cleanup() {
         eframe::App::logic(&mut app, ctx, &mut eframe::Frame::_new_kittest());
     });
     assert!(
-        app.pins[&1].locked,
+        app.pins[&1].locked(),
         "the native lock must precede the queued close"
     );
     assert!(

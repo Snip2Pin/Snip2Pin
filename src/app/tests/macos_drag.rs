@@ -44,7 +44,7 @@ impl Fixture {
             screen_areas: pin.screen_areas.clone(),
             session: pin.session,
             first_frame_drawn: Arc::new(AtomicBool::new(false)),
-            locked: false,
+            locked: Arc::new(AtomicBool::new(false)),
             show_requested: Cell::new(false),
         };
         app.pins.insert(2, second);

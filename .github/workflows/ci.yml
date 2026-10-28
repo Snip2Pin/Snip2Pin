@@ -4,6 +4,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      validation_artifacts:
+        description: Keep unsigned packages for isolated native interaction tests (1 day)
+        type: boolean
+        default: false
+      validation_profile:
+        description: Build profile for retained test packages
+        type: choice
+        options: [debug, release]
+        default: debug
 permissions:
   contents: read
 concurrency:
@@ -54,6 +64,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '13.0'
       CARGO_BUILD_TARGET: ${{ matrix.target }}
       CARGO_TERM_COLOR: always
+      PACKAGE_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_artifacts && inputs.validation_profile == 'release' && 'release' || 'debug' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -79,8 +90,9 @@ jobs:
           if ($imports -match '(?i)^\s*Name:\s*(vcruntime|msvcp|msvcr|concrt|vcomp)[^\r\n]*\.dll\s*$') {
             throw 'Windows packages must not require a separately installed Visual C++ runtime'
           }
+          ./packaging/windows/check-resources.ps1 -Executable "target/$env:CARGO_BUILD_TARGET/release/snip2pin.exe"
       - name: Package structure and CLI smoke check (no credentials/upload)
-        run: cargo xtask package ${{ matrix.target }} debug
+        run: cargo xtask package ${{ matrix.target }} ${{ env.PACKAGE_PROFILE }}
       - name: macOS packaging storage
         if: runner.os == 'macOS'
         shell: bash
@@ -90,8 +102,20 @@ jobs:
       - name: Check unverified package integrity without credentials or upload
         shell: bash
         run: |
-          cargo xtask prepare-unverified .build/packages/debug/${{ matrix.target }} .build/unverified-final/${{ matrix.target }} ${{ matrix.target }}
+          cargo xtask prepare-unverified .build/packages/${{ env.PACKAGE_PROFILE }}/${{ matrix.target }} .build/unverified-final/${{ matrix.target }} ${{ matrix.target }}
           cargo xtask verify-native .build/unverified-final/${{ matrix.target }} ${{ matrix.target }} unverified
+      - name: Keep explicitly requested native test builds
+        if: github.event_name == 'workflow_dispatch' && inputs.validation_artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-validation-${{ env.PACKAGE_PROFILE }}-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            .build/packages/${{ env.PACKAGE_PROFILE }}/${{ matrix.target }}/*.tar.gz
+            .build/packages/${{ env.PACKAGE_PROFILE }}/${{ matrix.target }}/*.zip
+            .build/packages/${{ env.PACKAGE_PROFILE }}/${{ matrix.target }}/*.json
+            .build/unverified-final/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 1
       - name: Minimum supported Rust
         run: cargo xtask check-msrv
       - name: Windows installer fixture and uninstall checks
@@ -138,6 +162,8 @@ jobs:
           lfs: true
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          desktop: 'false'
       - name: Check shared Rust UI for WebAssembly (no desktop or system services)
         run: |
           rustup target add wasm32-unknown-unknown

@@ -11,6 +11,8 @@ mod sizes;
 // rebuild the normal executable, which Windows locks while `xtask check` runs.
 #[cfg(test)]
 mod ci_signing_tests;
+#[cfg(test)]
+mod root_tests;
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -26,7 +28,7 @@ fn main() {
 }
 
 fn run() -> Result {
-    std::env::set_current_dir(root())?;
+    std::env::set_current_dir(root()?)?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["check"] => check(),
@@ -71,11 +73,35 @@ fn run() -> Result {
     }
 }
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+fn root() -> Result<PathBuf> {
+    // Cargo supplies this at runtime, including when a shared target directory
+    // reuses an executable compiled in another worktree. Direct invocations use
+    // their current directory instead. Never fall back to the build directory.
+    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command.args(["locate-project", "--workspace", "--message-format", "plain"]);
+    if let Some(directory) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        command
+            .arg("--manifest-path")
+            .arg(Path::new(&directory).join("Cargo.toml"));
+    }
+    let manifest = PathBuf::from(output(&mut command)?);
+    let data: toml::Value = toml::from_str(&std::fs::read_to_string(&manifest)?)?;
+    if !data.get("workspace").is_some_and(toml::Value::is_table)
+        || data
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str)
+            != Some("snip2pin")
+    {
+        return Err("xtask must run in the Snip2Pin Cargo workspace".into());
+    }
+    // Cargo already returns an absolute workspace manifest. Preserve its native
+    // spelling: canonicalize adds a Windows verbatim prefix that external tools
+    // such as PowerShell cannot consistently resolve as a local script path.
+    Ok(manifest
         .parent()
-        .expect("workspace root")
-        .to_owned()
+        .ok_or("Cargo workspace manifest has no parent directory")?
+        .to_owned())
 }
 
 fn output(command: &mut Command) -> Result<String> {
@@ -163,4 +189,36 @@ fn lint() -> Result {
         execute(Command::new("rustfmt").args(["--check", "packaging/macos/tests/signing.rs"]))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod desktop_features_tests {
+    #[test]
+    fn hyperlink_commands_have_a_native_browser_backend() {
+        let graph = crate::output(
+            std::process::Command::new("cargo")
+                .current_dir(crate::root().expect("workspace"))
+                .args([
+                    "tree",
+                    "--locked",
+                    "--package",
+                    "snip2pin",
+                    "--edges",
+                    "features",
+                    "--invert",
+                    "egui-winit",
+                    "--prefix",
+                    "none",
+                ]),
+        )
+        .expect("resolved application features");
+        for feature in ["links", "webbrowser"] {
+            assert!(
+                graph
+                    .lines()
+                    .any(|line| line == format!("egui-winit feature {feature:?}")),
+                "OpenUrl output needs the native {feature} adapter enabled"
+            );
+        }
+    }
 }

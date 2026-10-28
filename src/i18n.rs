@@ -93,6 +93,7 @@ macro_rules! catalogue {
 catalogue! {
     DragToReorder => ("Drag to reorder", "拖动调整列表顺序"),
     WindowTitle => ("Snip2Pin", "Snip2Pin · 截图置顶"),
+    StartupFailed => ("Snip2Pin couldn't start", "无法启动 Snip2Pin"),
     System => ("Follow system", "跟随系统"),
     Light => ("Light", "浅色"),
     Dark => ("Dark", "深色"),

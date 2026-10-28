@@ -3,9 +3,7 @@
 #[test]
 fn macos_packaging_rejects_wrong_source_before_signing() {
     use std::{fs, os::unix::fs::PermissionsExt, process::Command};
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
+    let repository = crate::root().expect("runtime workspace");
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     for name in ["bin", "candidate", "final"] {
@@ -61,9 +59,7 @@ fn temporary_macos_credentials_are_cleaned_after_success_and_failure() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
+    let repository = crate::root().expect("runtime workspace");
     for failure in ["none", "import", "notarize", "distribute"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -152,9 +148,7 @@ test -f "$(dirname "$SNIP2PIN_SIGN_KEYCHAIN")/notary.p8"
 #[test]
 fn windows_signing_scripts_parse_and_refuse_local_use() {
     use std::process::Command;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
+    let root = crate::root().expect("runtime workspace");
     let result = Command::new("pwsh").args(["-NoProfile", "-Command", r#"
 $ErrorActionPreference = 'Stop'
 Get-ChildItem packaging/windows/*.ps1 | ForEach-Object {

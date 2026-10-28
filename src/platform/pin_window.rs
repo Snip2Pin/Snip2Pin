@@ -1,7 +1,91 @@
 //! Focus this process's pins while keeping the originating Home reachable.
 use snip2pin::i18n::{Message, Text};
 
+#[cfg(any(target_os = "windows", test))]
+#[path = "pin_window/taskbar.rs"]
+mod taskbar;
+
+#[cfg(target_os = "windows")]
+pub(crate) use taskbar::install as prepare_pin_order;
+
 const TITLE_PREFIX: &str = "Snip2Pin · 贴图 ";
+
+/// Event-triggered focus checks reuse one connection for a fallback menu's lifetime.
+#[derive(Default)]
+pub struct AppFocus {
+    #[cfg(target_os = "linux")]
+    x11: Option<(x11rb::rust_connection::RustConnection, u32)>,
+}
+
+impl AppFocus {
+    /// No focus query is made until a window explicitly reports losing focus.
+    /// Unsupported protocols, missing ownership data and query errors are unknown.
+    pub fn current(&mut self) -> Option<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+            std::env::var_os("DISPLAY")?;
+            if self.x11.is_none() {
+                let (connection, _) = x11rb::connect(None).ok()?;
+                let pid = connection
+                    .intern_atom(true, b"_NET_WM_PID")
+                    .ok()?
+                    .reply()
+                    .ok()?
+                    .atom;
+                if pid == 0 {
+                    return None;
+                }
+                self.x11 = Some((connection, pid));
+            }
+            let (connection, pid) = self.x11.as_ref()?;
+            let focus = connection.get_input_focus().ok()?.reply().ok()?.focus;
+            focus_owned_by(focus, std::process::id(), |window| {
+                let property = connection
+                    .get_property(false, window, *pid, AtomEnum::CARDINAL, 0, 1)
+                    .ok()?
+                    .reply()
+                    .ok()?;
+                let process = if property.format == 0 {
+                    None
+                } else if property.format == 32 && property.bytes_after == 0 {
+                    Some(property.value32()?.next()?)
+                } else {
+                    return None;
+                };
+                let parent = if process.is_some() {
+                    0
+                } else {
+                    connection.query_tree(window).ok()?.reply().ok()?.parent
+                };
+                Some((process, parent))
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn focus_owned_by(
+    mut window: u32,
+    process: u32,
+    mut inspect: impl FnMut(u32) -> Option<(Option<u32>, u32)>,
+) -> Option<bool> {
+    // None and PointerRoot are not concrete focus owners. A transient gap in
+    // focus transfer must not be mistaken for another application's window.
+    while window > 1 {
+        let (owner, parent) = inspect(window)?;
+        if let Some(owner) = owner.filter(|owner| *owner != 0) {
+            return Some(owner == process);
+        }
+        if parent == window {
+            return None;
+        }
+        window = parent;
+    }
+    None
+}
 
 pub(crate) fn title(id: u64) -> String {
     format!("{TITLE_PREFIX}{id}")
@@ -111,6 +195,7 @@ pub(super) fn raise_selection() -> Result<(), Message> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SetWindowPos,
     };
+    selection_opacity(0)?;
     for window in windows_named(snip2pin::SELECTION_WINDOW_TITLE)? {
         // SAFETY: Only this process's live selection windows are returned, used
         // synchronously on their UI thread. Preserve geometry and focus.
@@ -125,6 +210,26 @@ pub(super) fn raise_selection() -> Result<(), Message> {
                 SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER,
             )
         } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string().into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+pub(super) fn selection_opacity(alpha: u8) -> Result<(), Message> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongW, LWA_ALPHA, SetLayeredWindowAttributes, WS_EX_LAYERED,
+        WS_EX_TRANSPARENT,
+    };
+    for window in windows_named(snip2pin::SELECTION_WINDOW_TITLE)? {
+        let passthrough = WS_EX_LAYERED | WS_EX_TRANSPARENT;
+        // SAFETY: Enumeration returns only this process's live selection HWNDs.
+        if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32 & passthrough == passthrough
+            // SAFETY: Set only the opacity of the existing passive layered HWND.
+            && unsafe { SetLayeredWindowAttributes(window, 0, alpha, LWA_ALPHA) } == 0
         {
             return Err(std::io::Error::last_os_error().to_string().into());
         }
@@ -369,3 +474,7 @@ pub(super) fn raise_selection() -> Result<(), Message> {
     connection.flush().map_err(|error| error.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "pin_window_tests.rs"]
+mod focus_tests;

@@ -19,6 +19,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 运行时只读取预生成图标；SVG 渲染依赖仅放在开发工具中，用 `cargo xtask icons` 再生资源并校验像素一致性，避免把开发工具的代码带进应用。
 - 应用和安装包体积也是验收指标：分别报告可执行文件、解包内容及各发行格式的实际字节数，不用压缩包大小代替安装体积。按实测平台基线设置发版构建预算，变更预算须说明原因；调试包不套用发行包上限。不使用可执行压缩壳，不为缩小体积牺牲可访问性、画质、必要的平台能力或启动速度。
 - Windows MSVC 构建使用 Rust 内置的静态 C 运行库链接选项，避免要求用户另装 Visual C++ 运行库；CI 核对实际发行优化 EXE 的导入表并计入体积预算，不能只以带开发工具的 runner 上能启动作为依赖验收。
+- Windows EXE 在编译时嵌入版本元数据和从同一 SVG 生成的多尺寸 ICO；ICO 使用 Git LFS，资源工具仅作构建依赖。运行时窗口图标不能代替资源管理器和快捷方式的文件图标，不在签名后修改 EXE。安装版使用当前用户目录，提供开始菜单入口和可选桌面快捷方式；卸载清理应用创建的快捷方式与指向本安装目录的自启入口，保留设置、无关文件及其他便携副本的自启入口。便携 ZIP 解压即用，保留许可证与第三方声明。CI 检查实际 EXE 图标资源、快捷方式目标及安装／升级／卸载边界，原生交互验收单独记录。
 - 只有用户明确、显式要求发版时，才进行发版操作。日常修改不自动升版本、打标签、创建或发布 GitHub Release、发布 crate 或上传分发包。
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
@@ -36,6 +37,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 全局解锁全部贴图使用 macOS Command+Option+Shift+L、Windows/Linux X11 Ctrl+Alt+Shift+L；同一快捷键管理器分派截图与恢复命令，截图配置不能覆盖恢复组合键，注册失败须明确提示。菜单保留解锁入口；Wayland 保留窗口内回退，不宣称全局可用。恢复只解锁，不关闭图片、移动、缩放或抢焦点，重复操作幂等；锁定图尝试拖动时提示组合键。
 - 快捷键录制实时显示当前按下的组合，纯修饰键不提交、不报错；校验、注册及保存反馈紧邻快捷键控件，不依赖长列表后的通用消息。重新录入当前快捷键也按成功处理，不重复注册或写设置。原生全局回调与普通按键共用录制完成路径；回调入队时保留录制输入归属，取消或完成后延迟消费不得触发截图或解锁。取消或失败保留旧快捷键，原生版和网页版共用录制状态与视图规则，覆盖真实按键顺序和按住修饰键的中间态；录制输入不得触发截图或透传贴图操作。
 - 解锁提醒复用截图的屏幕提示绘制与已准备的透明屏幕层，显示在鼠标所在屏幕可用区域的中上方，显示 1 秒；提示框按文字和屏幕可用宽度自适应，宽度足够时单行，仅空间不足才换行。不画在图片窗口里，不改变图片大小，不抢焦点或拦截鼠标，不增加独立提示窗口。必要时只调整本进程透明层的前后顺序，每次提示只执行一次，不反复争夺层级。只在触发时读取指针位置，不监听全局鼠标或轮询；位置不可用时在已知屏幕均显示，不猜测旧截图所在屏幕。解锁、开始截图或到期后清除提示，并以单次重绘清空屏幕层。
+- 锁定图片的有效按下和随后实际拖动均触发解锁提醒；持续移动刷新已显示提醒的 1 秒期限，同一贴图和目标屏幕复用准备中的提示。无输入不续期，复制和解锁控件不触发提醒；松手、失焦、锁定变化、菜单或快捷键录制中断后，旧按压不得恢复提醒。
+- 隐藏提示层先通过框架的隐藏绘制请求准备内容，再显示并开始计时；根窗口的完整 UI pass 必须先发布新子窗口回调，不能让 logic-only pass 请求旧回调绘制。首帧确认绑定当前提示和显示器，过期或重复确认不能重启计时。Windows 被动提示复用同一原生窗口，按目标显示器实际 DPI 在隐藏帧中测量提示框，显示时窗口仅占提示框边界；可用工作区只用于排版，不能用整块透明工作区窗口承载提示。收缩后仍按原工作区宽度排版，避免再次换行或增加顶部间距；隐藏时保留小窗几何，截图模式才恢复完整屏幕。验证首次、重复提示及截图模式切换的实际可见帧，并比较系统栏亮度，不能只检查是否消失。
+- Windows 提示层准备时原生透明度设为 0；映射后等待所有目标屏幕完成可见帧绘制，再一次性恢复透明度并开始 1 秒计时，避免隐藏缓冲区未保留时闪出窗口背景。macOS/Linux 保留首个准备帧确认后计时的行为。准备或显示失败只清除对应代际。
 - 普通滚轮在指向未锁定贴图且未按鼠标按钮时按比例缩放，无须先聚焦；捏合按后端倍率等比缩放。不实现触摸板双指滚动平移窗口，普通 Point 精细滚动不移动或缩放贴图，不能改用全局监听、透明覆盖层或抢占其他应用的滚动事件续传。复用框架原生 Zoom 事件，兼容 Ctrl+滚轮模拟的捏合；同帧存在原生 Zoom 时忽略模拟滚动，避免重复处理。精细滚动与普通滚轮的区分以输入单位为准，不猜测设备；仅模拟普通滚轮的触摸板保留滚轮行为。操作按钮、弹出菜单、文本编辑和 Command/Alt 组合不触发滚动调整。键盘方向键默认微调，Shift 快速移动；`=`/`-` 默认约 1% 缩放，Shift 约 25% 放大或其倒数缩小，`+` 同样可放大，`0` 恢复原始尺寸。滚轮按输入单位、UI 缩放统一归一化，同帧缩放增量合并；锁定检查仍在事件消费处执行，不影响原图或原生拖缩行为。触屏单指沿用框架的指针映射与系统拖动；取消触摸只清除当前框选，不生成截图或复制。
 - 滚轮及捏合缩放只在开始时命中贴图；系统实际送达本应用的续传保持原目标，每个输入只处理一次，不承诺收到指针移出应用后的事件。原生开始／结束／取消优先；无阶段信号时沿用框架滚动回退的 150 毫秒静默间隔，仅在下一次输入时判断，不启动计时器或轮询。锁定、菜单、文本编辑、失焦、截图和关闭释放手势状态。缩放锚点保留原图比例及起始屏幕坐标，先按原生网格取整尺寸再计算位置，避免逐帧累积取整误差。原生句柄和 X11 连接按贴图生命周期复用，几何始终读取实际值，不缓存预测位置。
 - 退出等确认对话框优先使用系统原生界面；macOS 用异步 NSAlert sheet，Windows 原生消息框在专用线程等待，通过带请求标识的事件回传结果，不在绘制或主事件循环借用期间同步嵌套模态循环。默认取消，过期结果不得影响新请求；等待 Windows 消息框时保留其所有者窗口。无通用原生接口的平台、演示和自动测试保留轻量应用内回退，不引入第二套 GUI 运行时。
@@ -61,6 +65,10 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 未使用的代码、注释、文档和旧实现要及时清理，不保留备用代码或过时说明。
 - 已有 Git commit 历史的内容可以直接清理，不用担心误删；需要时从历史恢复。
 - 代码使用 Rust，统一支持 Windows、macOS 和 Linux，平台差异集中在适配层。
+- Windows 贴图的贴边行为在本窗口能力内处理，不修改用户的系统贴靠配置，不通过重建窗口或反复恢复尺寸规避平铺。鼠标边缘贴靠、键盘平铺与手动边缘缩放是不同交互，必须分别实际验收；窗口样式断言或键盘移动不能替代鼠标拖动验证。
+- Windows 贴图从创建起关闭最大化能力，取消鼠标贴边平铺，保留原生拖动、边缘缩放及系统键盘平铺。此能力不随锁定或拖动切换；主页和其他平台保持原有窗口行为。不引入自定义贴边布局或移动中的样式钩子。
+- Windows 贴图保持在任务栏之下，仅由原生窗口适配器约束 Z 顺序请求；不改变几何、焦点或系统设置，不重试或轮询。
+- Windows 托盘截图项先结束自有原生菜单再分派截图，避免系统选中项淡出进入源图。输入过滤只限当前 UI 线程、当前自有菜单跟踪期间；依据系统命中、高亮和启用状态确认截图意图，返回并释放过滤器后最多分派一次，其他菜单项、取消和输入保持原生行为。不修改系统动画设置，不靠等待、重试或轮询菜单窗口规避残影。
 - 桌面与网页共用 `ui::pin::show` 完成图片、焦点框、悬停按钮及命中排除的绘制，不在宿主重复编排。宿主明确提供输入原点和比例；焦点参数只表示焦点，不能据此推断宿主或坐标来源。
 - `pin_zoom::PinZoom` 按贴图生命周期管理原生绑定，应用层不持有原生缩放句柄或传递缓存槽；保留各平台原子缩放及仅尺寸调整回退。单张关闭和确认退出复用 `Pin::release` 清理贴图资源，是否允许关闭仍由入口检查锁定。
 - macOS 本机开发构建安装（`build.sh --install`）必须复用固定的代码签名证书，不能用每次随构建变化的 ad-hoc 签名；GitHub 分发包按明确选择的分发模式处理。
@@ -69,6 +77,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 正式发行凭据可保存在受审批保护的 GitHub `release` Environment Secrets；只允许手动、main 来源的签名任务读取。私钥、钥匙串、密码和令牌不得进入 Git、日志、缓存或 CI 产物；提交前检查暂存内容，不能只依赖 `.gitignore`。Secrets 并非不可导出的硬件密钥，授权任务可以读取明文，需审阅工作流和依赖并及时轮换泄露凭据。
 - 更新 Finder／启动台图标时，更新应用自身的资源引用并刷新注册信息，不重启 Finder／Dock 或清空全局缓存。
 - Linux 有 X11 显示服务时优先使用 X11/XWayland 窗口后端，保留置顶能力。
+- X11 截图层使用框架提供的 Dock 窗口类型覆盖整个显示器，包括系统面板；不保留工作区空间，不使用普通或 Utility 窗口后再补偿位置。Windows/Linux 空闲时隐藏已准备的截图层，仅截图或解锁提醒期间显示，避免遮挡桌面或影响任务栏／面板层级；macOS 保留已验证的原生层级预热流程。按实际桌面与双屏合成结果验证。
 - 没有请求时，不增加 OCR、标注、录屏、账号、云同步、历史记录或开机启动。
 - 只有用户主动操作时才截图，不在启动或后台自动截图。
 - macOS 截屏授权由主线程在用户截图时检查和申请，截图工作线程只读取权限，不能弹授权框。未授权时保留空闲状态，在主页提供打开授权设置、授权后继续和重新打开应用；不后台轮询权限，不反复弹请求，不要求用户猜应用路径或手动修复数据库。
@@ -95,6 +104,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - macOS 原生拖动使用所属窗口的原始鼠标按下事件，不能在延迟重绘后用 `NSApplication.currentEvent` 代替。应用内监听仅保留一次有效按下，松开或消费后释放；请求匹配原始按下点并绑定该次按下的代际和目标窗口，过期请求不能消费后来的点击。不安装全局监听，不吞掉事件，不自行求解拖动位置。
 - 窗口与渲染时序按实际后端验证，包括 egui 多 pass 重绘和连续原生事件。图片绘制不能产生主窗口几何副作用，不能依赖某个可能被丢弃的 UI pass 提交 drawable 补丁。不得用巨大透明窗口、手动更新 GL context 或定位重试掩盖问题。
 - 原生状态查询也要验证是否会改变窗口；macOS 贴图先在隐藏状态完成后端初始化，再显示，不能依赖隐藏窗口一定会绘制首帧。依赖优先使用官方发布包，不将第三方库源码整包复制到仓库，不修改本机依赖缓存或用构建脚本注入补丁；需要依赖修复时优先采用上游修复，不通过坐标补偿掩盖后端副作用。
+- Windows 持续输入会饿死其他窗口的重绘，当前固定上游 egui PR #8650 的完整提交修复调度。所有 egui 类型保持同一来源，只允许规范中明确的 Git 仓库并要求固定 rev；不能跟随浮动分支。此开发依赖还包含图像 API 与字体依赖变更，更新时须检查三平台、网页、原图复制、许可证与体积。正式发布包包含该修复且通过原生持续输入回归后，撤销 Git 覆盖并恢复注册表依赖。
 - 截图线程使用有界队列，取消立即恢复 UI、丢弃晚到结果并阻止尚未开始的后续屏幕采集，不承诺强停正在执行的系统调用。像素转换在工作线程完成，截图数据与纹理上传共享不可变图片；上传前验证 GPU 纹理边长上限。多屏并行不跨线程搬运非 Send 原生句柄，Linux Portal 不并发请求。
 - GUI 沙箱复用实际 Rust 视图和几何，不复制一套 HTML 产品界面；仅使用生成图片，禁止真实截图、系统剪贴板、权限、自启和全局快捷键操作。多 agent 评审使用各自独立的 headless 浏览器上下文；浏览器交互和隐藏原生几何验证都不能替代合成器视觉验收。
 - 原生版和网页演示共用交互规则，不只共用绘制：快捷键录制与校验统一在 `src/ui/shortcut.rs`，截图请求复用 `CaptureGate`，选区映射复用 `geometry::pin_placement`，关闭贴图统一调用 `ui::pin::forget` 清理列表、编辑和输入状态。Esc 只关闭持有键盘焦点的贴图；菜单和快捷键录制不得透传输入到背后的贴图，文本编辑按键不得操纵贴图。网页只模拟窗口、焦点和平台能力，不另写排序、快捷键或坐标规则。网页宿主的生成数据回归纳入工作区测试，覆盖完整输入到动作的路径；确需平台差异时在适配层说明原因，不为统一系统窗口行为引入补偿。
@@ -141,6 +151,11 @@ Do not bypass protections or push directly to `main`. Single-maintainer PRs do
 not require a second reviewer. Describe user-visible acceptance criteria before
 implementation; separate automatic coverage from actual native interaction.
 Keep repository rules in `.github/rulesets/` consistent with GitHub settings.
+After work is merged or superseded, promptly remove its unused local/remote
+branches and worktrees after checking for uncommitted changes, active work and
+retained build artifacts. Verify squash/cherry-pick replacements before deleting
+old branches; preserve ongoing validation and release inputs. Keep machine-local
+workspace paths out of the repository.
 
 PR titles and every branch commit subject must use `type(scope)!: description`;
 scope and `!` are optional. Types: feat, fix, docs, refactor, perf, test, build,
@@ -196,7 +211,14 @@ tagging or creating Releases. Installation checks use only disposable hosted
 runners or containers and temporary destinations; never install on a developer's
 machine or alter an existing installation. macOS debug bundle integrity checks
 may use an ad-hoc seal; never use the local development identity in CI.
-Only explicit manual candidate builds upload unsigned release-profile artifacts.
+For explicitly requested isolated native interaction tests, manual CI may retain
+unsigned archives, their prepared installers and source manifests for one day via
+`validation_artifacts`. The `validation_profile` choice defaults to debug; an
+explicit manual test may select release optimization to distinguish runtime
+performance from functional failures. Ordinary push/PR checks always use debug
+packages. Compiler optimization is not publication; these test artifacts are not
+formal release candidates. Keep retention disabled on push/PR events, without
+signing, tags, Releases or release Environment access; never publish these builds.
 Formal publication requires a complete set of four native targets, matching
 version/source SHA, checksums, native checks for the explicitly selected
 distribution mode, recorded

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -108,6 +108,31 @@ fn dispatch_pin(
     ctx.request_repaint_of(ViewportId::ROOT);
 }
 
+fn route_pin_menu_input(ctx: &egui::Context, events: &Sender<Event>) {
+    if ctx.viewport_id() != pin_menu_id()
+        && ui::pin::MenuInput::open(ctx)
+        && ctx.current_pass_index() == 0
+    {
+        let dismiss =
+            ctx.input(|input| input.key_pressed(egui::Key::Escape) || input.pointer.any_pressed());
+        let blur = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+        });
+        if dismiss || blur {
+            ui::pin::MenuInput::consume(ctx);
+            let _ = events.send(if dismiss {
+                Event::ClosePinMenu
+            } else {
+                Event::PinMenuFocusLost
+            });
+            ctx.request_repaint_of(ViewportId::ROOT);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ObservedSize {
     /// Content size in native window points.
@@ -124,7 +149,19 @@ pub struct ObservedPosition {
 
 pub enum Event {
     UnlockHint(u64),
-    HintError(Message),
+    LayerFrameDrawn {
+        hint: Arc<AtomicBool>,
+        display: u32,
+        bounds: egui::Rect,
+    },
+    LayerVisibleFrameDrawn {
+        hint: Arc<AtomicBool>,
+        display: u32,
+    },
+    LayerError {
+        hint: Arc<AtomicBool>,
+        error: Message,
+    },
     Shortcut {
         id: u32,
         recording: bool,
@@ -166,6 +203,7 @@ pub enum Event {
         position: Option<egui::Pos2>,
     },
     ClosePinMenu,
+    PinMenuFocusLost,
     Tray(crate::tray::Action),
     QuitDecision {
         request_id: u64,
@@ -187,12 +225,20 @@ struct Layer {
     display: Display,
     selection: Option<Arc<Mutex<overlay::Selection>>>,
     positioned: Arc<AtomicBool>,
+    paint_pending: bool,
 }
 
-struct UnlockHint {
-    pin: u64,
+enum LayerPurpose {
+    Hint { pin: u64 },
+    Capture,
+}
+
+struct LayerPresentation {
+    purpose: LayerPurpose,
     areas: BTreeMap<u32, egui::Rect>,
-    until: Instant,
+    until: Option<Instant>,
+    ready: BTreeMap<u32, egui::Rect>,
+    visible_ready: BTreeSet<u32>,
     raised: Arc<AtomicBool>,
 }
 
@@ -208,7 +254,7 @@ struct Pin {
     session: u64,
     // The UI callback has drawn the image; compositor presentation is not observed.
     first_frame_drawn: Arc<AtomicBool>,
-    locked: bool,
+    locked: Arc<AtomicBool>,
     #[cfg(target_os = "macos")]
     lock_limits: Option<platform::PinLock>,
     #[cfg(target_os = "macos")]
@@ -217,6 +263,10 @@ struct Pin {
 }
 
 impl Pin {
+    fn locked(&self) -> bool {
+        self.locked.load(Ordering::Acquire)
+    }
+
     fn release(self, id: u64, ctx: &egui::Context) {
         ui::pin::forget(ctx, id);
         ctx.data_mut(|data| data.remove::<bool>(pin_hint_state_id(id)));
@@ -230,6 +280,7 @@ struct PinMenu {
     pin_id: u64,
     position: Option<egui::Pos2>,
     focused: Arc<AtomicBool>,
+    native_focus: platform::pin_window::AppFocus,
 }
 
 struct QuitConfirmation {
@@ -254,7 +305,7 @@ pub struct Snip2Pin {
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
     pin_menu: Option<PinMenu>,
-    unlock_hint: Option<UnlockHint>,
+    layer_presentation: Option<LayerPresentation>,
     quit_confirmation: Option<QuitConfirmation>,
     next_quit_request: u64,
     #[cfg(target_os = "macos")]
@@ -347,6 +398,7 @@ impl Snip2Pin {
                         display,
                         selection: None,
                         positioned: Arc::new(AtomicBool::new(false)),
+                        paint_pending: false,
                     },
                 )
             })
@@ -432,7 +484,7 @@ impl Snip2Pin {
             active_display: None,
             pins: BTreeMap::new(),
             pin_menu: None,
-            unlock_hint: None,
+            layer_presentation: None,
             quit_confirmation: None,
             next_quit_request: 0,
             #[cfg(target_os = "macos")]
@@ -480,7 +532,7 @@ impl Snip2Pin {
         if !matches!(self.phase, Phase::Idle) || self.recording.blocks_input(ctx) {
             return;
         }
-        self.clear_unlock_hint(ctx);
+        self.clear_layer_presentation(ctx);
         if !self.check_capture_permission(
             ctx,
             platform::capture_permission,
@@ -591,7 +643,102 @@ impl Snip2Pin {
             return;
         }
         match event {
-            Event::HintError(error) => self.message = Some(Text::ScreenHintError.context(error)),
+            Event::LayerFrameDrawn {
+                hint,
+                display,
+                bounds,
+            } => {
+                if let Some(current) = &mut self.layer_presentation
+                    && Arc::ptr_eq(&current.raised, &hint)
+                    && current.areas.contains_key(&display)
+                    && !current.ready.contains_key(&display)
+                    && bounds.is_finite()
+                    && bounds.is_positive()
+                {
+                    current.ready.insert(display, bounds);
+                    if !cfg!(target_os = "windows")
+                        && matches!(current.purpose, LayerPurpose::Hint { .. })
+                    {
+                        let until = *current.until.get_or_insert_with(|| {
+                            Instant::now() + ui::screen_hint::UNLOCK_DURATION
+                        });
+                        ctx.request_repaint_after_for(
+                            until.saturating_duration_since(Instant::now()),
+                            ViewportId::ROOT,
+                        );
+                    }
+                    // Hidden GL drawing need not survive showing the window.
+                    // Publish visibility before requesting the visible child frame.
+                    if let Some(layer) = self.layers.get_mut(&display) {
+                        layer.paint_pending = true;
+                    }
+                    ctx.send_viewport_cmd_to(
+                        ViewportId::ROOT,
+                        ViewportCommand::RequestPaintWhileHidden,
+                    );
+                    ctx.request_repaint_of(ViewportId::ROOT);
+                }
+            }
+            Event::LayerVisibleFrameDrawn { hint, display } => {
+                if cfg!(target_os = "windows")
+                    && let Some(current) = &mut self.layer_presentation
+                    && Arc::ptr_eq(&current.raised, &hint)
+                    && current.ready.contains_key(&display)
+                    && current.visible_ready.insert(display)
+                    && current.visible_ready.len() == current.areas.len()
+                    && current.until.is_none()
+                {
+                    // Root consumes this only after the visible child's renderer
+                    // has returned. Keep every target transparent until then.
+                    match if self.demo {
+                        Ok(())
+                    } else {
+                        platform::reveal_screen_layers()
+                    } {
+                        Ok(()) => {
+                            if matches!(current.purpose, LayerPurpose::Hint { .. }) {
+                                current.until =
+                                    Some(Instant::now() + ui::screen_hint::UNLOCK_DURATION);
+                                ctx.request_repaint_after_for(
+                                    ui::screen_hint::UNLOCK_DURATION,
+                                    ViewportId::ROOT,
+                                );
+                            } else {
+                                let displays = current.areas.keys().copied().collect::<Vec<_>>();
+                                self.queue_layer_paints(displays, ctx);
+                            }
+                        }
+                        Err(error) => {
+                            if matches!(current.purpose, LayerPurpose::Capture) {
+                                self.reset_capture(ctx);
+                                self.message = Some(error);
+                            } else {
+                                self.clear_layer_presentation(ctx);
+                                self.message = Some(Text::ScreenHintError.context(error));
+                            }
+                        }
+                    }
+                }
+            }
+            Event::LayerError { hint, error } => {
+                if self
+                    .layer_presentation
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(&current.raised, &hint))
+                {
+                    if self
+                        .layer_presentation
+                        .as_ref()
+                        .is_some_and(|current| matches!(current.purpose, LayerPurpose::Capture))
+                    {
+                        self.reset_capture(ctx);
+                        self.message = Some(error);
+                    } else {
+                        self.clear_layer_presentation(ctx);
+                        self.message = Some(Text::ScreenHintError.context(error));
+                    }
+                }
+            }
             Event::UnlockHint(id) => {
                 let point = if self.demo {
                     None
@@ -634,6 +781,16 @@ impl Snip2Pin {
                 session,
                 pin_id: pin,
             } => {
+                #[cfg(target_os = "windows")]
+                if !self.demo
+                    && self
+                        .pins
+                        .get(&pin)
+                        .is_some_and(|current| current.session == session)
+                    && let Err(error) = platform::pin_window::prepare_pin_order(pin)
+                {
+                    self.message = Some(error);
+                }
                 if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
                 {
                     self.reset_capture(ctx);
@@ -642,7 +799,7 @@ impl Snip2Pin {
             #[cfg(target_os = "macos")]
             Event::BeginPinDrag { pin_id: id, press } => {
                 if !self.recording.blocks_input(ctx)
-                    && self.pins.get(&id).is_some_and(|pin| !pin.locked)
+                    && self.pins.get(&id).is_some_and(|pin| !pin.locked())
                 {
                     self.pin_drag.begin(id, press);
                 }
@@ -668,6 +825,16 @@ impl Snip2Pin {
                 observed,
             } => self.move_pin(id, steps, observed, ctx),
             Event::ClosePinMenu => self.close_pin_menu(ctx),
+            Event::PinMenuFocusLost => {
+                let demo = self.demo;
+                self.check_pin_menu_focus(ctx, |menu| {
+                    if demo {
+                        None
+                    } else {
+                        menu.native_focus.current()
+                    }
+                });
+            }
             Event::Tray(action) => self.tray_action(action, ctx),
             Event::QuitDecision {
                 request_id: id,
@@ -709,6 +876,18 @@ impl Snip2Pin {
             }
             Action::Capture => self.capture_command(ctx),
             Action::Help => ctx.open_url(egui::OpenUrl::new_tab(snip2pin::HELP_URL)),
+            #[cfg(target_os = "windows")]
+            Action::ShowMenu => {
+                let state = self.menu_state();
+                if let Some(tray) = &mut self.tray {
+                    tray.update(state);
+                    match tray.show_menu() {
+                        Ok(true) => self.capture_command(ctx),
+                        Ok(false) => {}
+                        Err(error) => self.message = Some(error),
+                    }
+                }
+            }
             Action::UnlockPins => self.unlock_pins(ctx),
             Action::Pin { id, command } => {
                 self.handle_event(
@@ -741,7 +920,7 @@ impl Snip2Pin {
                 }
                 self.recording.cancel();
                 self.reset_capture(ctx);
-                if self.pins.values().any(|pin| pin.locked) {
+                if self.pins.values().any(|pin| pin.locked()) {
                     self.next_quit_request = self.next_quit_request.wrapping_add(1);
                     self.quit_confirmation = Some(QuitConfirmation {
                         id: self.next_quit_request,
@@ -802,6 +981,7 @@ impl Snip2Pin {
     }
 
     fn reset_capture(&mut self, ctx: &egui::Context) {
+        self.clear_layer_presentation(ctx);
         ctx.set_cursor_icon(egui::CursorIcon::Default);
         self.gate.cancel();
         if let Some(worker) = &self.capture_worker {
@@ -832,10 +1012,13 @@ impl Snip2Pin {
         }
         let result = result.and_then(|snapshots| {
             let limit = ctx.input(|input| input.max_texture_side);
-            if snapshots
-                .iter()
-                .any(|snapshot| snapshot.pixels.size.iter().any(|side| *side > limit))
-            {
+            if snapshots.iter().any(|snapshot| {
+                snapshot
+                    .pixels
+                    .resolution()
+                    .iter()
+                    .any(|side| *side > limit)
+            }) {
                 Err(Text::TextureLimit.with(limit))
             } else {
                 Ok(snapshots)
@@ -873,6 +1056,7 @@ impl Snip2Pin {
                                 display,
                                 selection: Some(Arc::new(Mutex::new(selection))),
                                 positioned: Arc::new(AtomicBool::new(false)),
+                                paint_pending: false,
                             },
                         )
                     })
@@ -882,6 +1066,29 @@ impl Snip2Pin {
                     snapshots,
                     pending_pin: None,
                 };
+                if cfg!(target_os = "windows") {
+                    self.layer_presentation = Some(LayerPresentation {
+                        purpose: LayerPurpose::Capture,
+                        areas: self
+                            .layers
+                            .iter()
+                            .map(|(&id, layer)| {
+                                (
+                                    id,
+                                    egui::Rect::from_min_size(
+                                        layer.display.position().into(),
+                                        layer.display.logical_size().into(),
+                                    ),
+                                )
+                            })
+                            .collect(),
+                        until: None,
+                        ready: BTreeMap::new(),
+                        visible_ready: BTreeSet::new(),
+                        raised: Arc::new(AtomicBool::new(false)),
+                    });
+                    self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
+                }
                 for &display_id in self.layers.keys() {
                     ctx.request_repaint_of(layer_id(display_id));
                 }
@@ -1002,7 +1209,7 @@ impl Snip2Pin {
                     screen_areas,
                     session: id,
                     first_frame_drawn: Arc::new(AtomicBool::new(false)),
-                    locked: false,
+                    locked: Arc::new(AtomicBool::new(false)),
                     #[cfg(target_os = "macos")]
                     lock_limits: None,
                     #[cfg(target_os = "macos")]
@@ -1032,7 +1239,7 @@ impl Snip2Pin {
             match platform::pin_menu::show(
                 id,
                 self.preferences.language.resolve(self.system_locale),
-                pin.locked,
+                pin.locked(),
             ) {
                 Ok(true) => return,
                 Ok(false) => {}
@@ -1047,18 +1254,33 @@ impl Snip2Pin {
             pin_id: id,
             position,
             focused: Arc::new(AtomicBool::new(false)),
+            native_focus: platform::pin_window::AppFocus::default(),
         });
+        ui::pin::MenuInput::sync(ctx, true);
         ctx.request_repaint_of(pin_menu_id());
     }
 
     fn close_pin_menu(&mut self, ctx: &egui::Context) {
         if self.pin_menu.take().is_some() {
+            ui::pin::MenuInput::sync(ctx, false);
             ctx.send_viewport_cmd_to(pin_menu_id(), ViewportCommand::Close);
         }
     }
 
+    fn check_pin_menu_focus(
+        &mut self,
+        ctx: &egui::Context,
+        current: impl FnOnce(&mut PinMenu) -> Option<bool>,
+    ) {
+        // Per-viewport focus caches can temporarily all be false during a
+        // transfer. Close only when the platform confirms an external owner.
+        if self.pin_menu.as_mut().and_then(current) == Some(false) {
+            self.close_pin_menu(ctx);
+        }
+    }
+
     fn close_pin(&mut self, id: u64, ctx: &egui::Context) {
-        if self.pins.get(&id).is_some_and(|pin| pin.locked) {
+        if self.pins.get(&id).is_some_and(|pin| pin.locked()) {
             return;
         }
         if self.pin_menu.as_ref().is_some_and(|menu| menu.pin_id == id) {
@@ -1082,7 +1304,7 @@ impl Snip2Pin {
 
     fn toggle_pin_lock(&mut self, id: u64, ctx: &egui::Context) {
         if let Some(pin) = self.pins.get(&id) {
-            self.set_pin_locked(id, !pin.locked, ctx);
+            self.set_pin_locked(id, !pin.locked(), ctx);
         }
     }
 
@@ -1090,26 +1312,56 @@ impl Snip2Pin {
         let ids: Vec<_> = self
             .pins
             .iter()
-            .filter_map(|(&id, pin)| pin.locked.then_some(id))
+            .filter_map(|(&id, pin)| pin.locked().then_some(id))
             .collect();
         for id in ids {
             self.set_pin_locked(id, false, ctx);
         }
     }
 
-    fn clear_unlock_hint(&mut self, ctx: &egui::Context) {
-        if let Some(hint) = self.unlock_hint.take() {
-            for &display in hint.areas.keys() {
+    fn clear_layer_presentation(&mut self, ctx: &egui::Context) {
+        if let Some(hint) = self.layer_presentation.take() {
+            // Hide a passive layered HWND before a subsequent builder can
+            // expand the same window from a notice panel to the desktop.
+            if !self.demo {
+                let _ = platform::conceal_screen_layers();
+            }
+            // A retained old callback must not prepare native opacity after
+            // cancellation or after a newer generation has already appeared.
+            hint.raised.store(true, Ordering::Release);
+            self.queue_layer_paints(hint.areas.into_keys(), ctx);
+        }
+    }
+
+    fn queue_layer_paints(&mut self, displays: impl IntoIterator<Item = u32>, ctx: &egui::Context) {
+        for display in displays {
+            if let Some(layer) = self.layers.get_mut(&display) {
+                layer.paint_pending = true;
+            }
+        }
+        // Logic-only passes cannot publish deferred viewport callbacks. Force a
+        // root UI pass before asking children to paint the new presentation.
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::RequestPaintWhileHidden);
+        ctx.request_repaint_of(ViewportId::ROOT);
+    }
+
+    fn paint_pending_layers(&mut self, ctx: &egui::Context) {
+        for (&display, layer) in &mut self.layers {
+            if std::mem::take(&mut layer.paint_pending) {
+                ctx.send_viewport_cmd_to(
+                    layer_id(display),
+                    ViewportCommand::RequestPaintWhileHidden,
+                );
                 ctx.request_repaint_of(layer_id(display));
             }
         }
     }
 
     fn show_unlock_hint(&mut self, id: u64, point: Option<[f32; 2]>, ctx: &egui::Context) {
-        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked) {
+        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked())
+        {
             return;
         }
-        self.clear_unlock_hint(ctx);
         // Missing desktop coordinates (for example Wayland) must not make a
         // recovery notice unreachable. Use all known display layers there.
         let display = point.and_then(|point| {
@@ -1124,21 +1376,40 @@ impl Snip2Pin {
             .filter(|layer| display.is_none_or(|id| layer.display.id == id))
             .map(|layer| layer.display.clone())
             .collect();
-        let areas = display_areas(&displays, self.demo);
-        for display in &displays {
-            ctx.request_repaint_of(layer_id(display.id));
+        if displays.is_empty() {
+            return;
         }
-        self.unlock_hint = Some(UnlockHint {
-            pin: id,
+        if let Some(current) = &mut self.layer_presentation
+            && matches!(current.purpose, LayerPurpose::Hint { pin } if pin == id)
+            && current
+                .areas
+                .keys()
+                .copied()
+                .eq(displays.iter().map(|display| display.id))
+        {
+            // Movement may arrive while the first frame is still preparing.
+            // Reuse it, or extend an already presented notice without hiding it.
+            if let Some(until) = &mut current.until {
+                *until = Instant::now() + ui::screen_hint::UNLOCK_DURATION;
+                ctx.request_repaint_after_for(ui::screen_hint::UNLOCK_DURATION, ViewportId::ROOT);
+            }
+            return;
+        }
+        self.clear_layer_presentation(ctx);
+        let areas = display_areas(&displays, self.demo);
+        self.layer_presentation = Some(LayerPresentation {
+            purpose: LayerPurpose::Hint { pin: id },
             areas: displays
                 .iter()
                 .map(|display| display.id)
                 .zip(areas)
                 .collect(),
-            until: Instant::now() + ui::screen_hint::UNLOCK_DURATION,
+            until: None,
+            ready: BTreeMap::new(),
+            visible_ready: BTreeSet::new(),
             raised: Arc::new(AtomicBool::new(false)),
         });
-        ctx.request_repaint_after_for(ui::screen_hint::UNLOCK_DURATION, ViewportId::ROOT);
+        self.queue_layer_paints(displays.iter().map(|display| display.id), ctx);
     }
 
     fn set_pin_locked(&mut self, id: u64, locked: bool, ctx: &egui::Context) {
@@ -1153,11 +1424,11 @@ impl Snip2Pin {
             self.message = Some(error);
             return;
         }
-        pin.locked = locked;
+        pin.locked.store(locked, Ordering::Release);
         #[cfg(not(target_os = "macos"))]
         ctx.send_viewport_cmd_to(pin_id(id), ViewportCommand::Resizable(!locked));
-        if !locked && self.unlock_hint.as_ref().is_some_and(|hint| hint.pin == id) {
-            self.clear_unlock_hint(ctx);
+        if !locked && self.layer_presentation.as_ref().is_some_and(|presentation| matches!(presentation.purpose, LayerPurpose::Hint { pin } if pin == id)) {
+            self.clear_layer_presentation(ctx);
         }
         self.close_pin_menu(ctx);
         ctx.request_repaint_of(pin_id(id));
@@ -1186,11 +1457,11 @@ impl Snip2Pin {
         let Some(pin) = self
             .pins
             .get(&id)
-            .filter(|pin| !pin.locked && !commands.is_empty())
+            .filter(|pin| !pin.locked() && !commands.is_empty())
         else {
             return;
         };
-        let pixels = pin.pixels.size;
+        let pixels = pin.pixels.resolution();
         let zoom = ctx.zoom_factor();
         let geometry = observed.or_else(|| {
             ctx.input(|input| {
@@ -1276,7 +1547,7 @@ impl Snip2Pin {
         observed: Option<ObservedPosition>,
         ctx: &egui::Context,
     ) {
-        if !self.pins.get(&id).is_some_and(|pin| !pin.locked) {
+        if !self.pins.get(&id).is_some_and(|pin| !pin.locked()) {
             return;
         }
         let zoom = ctx.zoom_factor();
@@ -1341,8 +1612,8 @@ impl Snip2Pin {
             capture_enabled: matches!(self.phase, Phase::Idle | Phase::Capturing)
                 && !self.recording.active()
                 && self.quit_confirmation.is_none(),
-            has_unlocked_pins: self.pins.values().any(|pin| !pin.locked),
-            has_locked_pins: self.pins.values().any(|pin| pin.locked),
+            has_unlocked_pins: self.pins.values().any(|pin| !pin.locked()),
+            has_locked_pins: self.pins.values().any(|pin| pin.locked()),
             capturing: matches!(self.phase, Phase::Capturing),
         }
     }
@@ -1361,7 +1632,7 @@ impl Snip2Pin {
             self.cancel_quit(ctx);
             self.hide_home(ctx);
         } else {
-            if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked) {
+            if self.quit_confirmation.is_some() || self.pins.values().any(|pin| pin.locked()) {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             }
             self.tray_action(crate::tray::Action::Quit, ctx);
@@ -1574,7 +1845,7 @@ impl Snip2Pin {
         if self.pin_menu.is_some() {
             ctx.request_repaint_of(pin_menu_id());
         }
-        if self.unlock_hint.is_some() {
+        if self.layer_presentation.is_some() {
             for &display in self.layers.keys() {
                 ctx.request_repaint_of(layer_id(display));
             }
@@ -1637,31 +1908,89 @@ impl Snip2Pin {
         for (&display_id, layer) in &self.layers {
             let selection = layer.selection.clone();
             let positioned = layer.positioned.clone();
-            let hint_raised = self.unlock_hint.as_ref().map(|hint| hint.raised.clone());
+            let hint_raised = self
+                .layer_presentation
+                .as_ref()
+                .map(|hint| hint.raised.clone());
             let events = self.sender.clone();
             let active = selection.is_some();
+            let preparing_capture = active
+                && cfg!(target_os = "windows")
+                && self
+                    .layer_presentation
+                    .as_ref()
+                    .is_some_and(|presentation| {
+                        matches!(presentation.purpose, LayerPurpose::Capture)
+                            && presentation.visible_ready.len() != presentation.areas.len()
+                    });
             let pointer_display = self.active_display == Some(display_id);
             let display = layer.display.clone();
             let hint_area = self
-                .unlock_hint
+                .layer_presentation
                 .as_ref()
                 .and_then(|hint| hint.areas.get(&display_id).copied());
-            let position = display.position();
-            let size = display.logical_size();
+            let hint_panel = self
+                .layer_presentation
+                .as_ref()
+                .and_then(|hint| hint.ready.get(&display_id).copied());
+            let hint_ready = hint_panel.is_some();
+            let hint_visible_ready = self
+                .layer_presentation
+                .as_ref()
+                .is_some_and(|hint| hint.visible_ready.contains(&display_id));
+            let display_bounds =
+                egui::Rect::from_min_size(display.position().into(), display.logical_size().into());
+            // Only the painted notice is mapped on Windows. The work area is
+            // used for hidden measurement, not as a screen-sized passive window.
+            let bounds = if cfg!(target_os = "windows") && !active {
+                hint_panel
+            } else {
+                Some(display_bounds)
+            };
+            let position = bounds.unwrap_or(display_bounds).min;
+            let size = bounds.unwrap_or(display_bounds).size();
+            let mut builder = self
+                .window_icon(egui::ViewportBuilder::default())
+                .with_title(snip2pin::SELECTION_WINDOW_TITLE)
+                .with_decorations(false)
+                .with_transparent(true)
+                .with_has_shadow(false)
+                .with_resizable(false)
+                .with_always_on_top()
+                .with_active(false)
+                .with_taskbar(false)
+                // Dock overlays cover X11 panels without reserving work space.
+                .with_window_type(egui::X11WindowType::Dock)
+                .with_visible(
+                    cfg!(target_os = "macos") || (active && !preparing_capture) || hint_ready,
+                );
+            if let Some(bounds) = bounds {
+                let bounds = if cfg!(target_os = "windows") {
+                    let native_scale = ctx
+                        .input(|input| {
+                            input
+                                .raw
+                                .viewports
+                                .get(&layer_id(display_id))
+                                .and_then(|viewport| viewport.native_pixels_per_point)
+                        })
+                        .unwrap_or(display.scale);
+                    let ratio = pin::coordinate_ratio(
+                        display.scale,
+                        ctx.zoom_factor(),
+                        native_scale * ctx.zoom_factor(),
+                    );
+                    egui::Rect::from_min_max(bounds.min * ratio, bounds.max * ratio)
+                } else {
+                    bounds
+                };
+                builder = builder
+                    .with_position(bounds.min)
+                    .with_inner_size(bounds.size());
+            }
             ctx.show_viewport_deferred(
                 layer_id(display_id),
-                self.window_icon(egui::ViewportBuilder::default())
-                    .with_title(snip2pin::SELECTION_WINDOW_TITLE)
-                    .with_decorations(false)
-                    .with_transparent(true)
-                    .with_has_shadow(false)
-                    .with_position(position)
-                    .with_inner_size(size)
-                    .with_resizable(false)
-                    .with_always_on_top()
-                    .with_active(false)
-                    .with_taskbar(false)
-                    .with_mouse_passthrough(!active),
+                builder.with_mouse_passthrough(!active || preparing_capture),
                 move |ui, _| {
                     // Root logic reports any pin-adapter failure.
                     let _ = platform::prepare_floating_windows();
@@ -1682,53 +2011,121 @@ impl Snip2Pin {
                     // its actual monitor/DPI (especially mixed-DPI Windows).
                     if !cfg!(target_os = "macos") && !positioned.swap(true, Ordering::AcqRel) {
                         let scale = ui.ctx().pixels_per_point();
-                        let target =
-                            egui::pos2(display.origin[0] / scale, display.origin[1] / scale);
+                        let target = position * (display.scale / scale);
                         ui.ctx()
                             .send_viewport_cmd(ViewportCommand::OuterPosition(target));
                     }
                     if !active {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                         if let Some(area) = hint_area {
-                            if !demo
-                                && hint_raised
-                                    .as_ref()
-                                    .is_some_and(|raised| !raised.swap(true, Ordering::AcqRel))
-                            {
-                                let result = platform::raise_screen_hint();
-                                if let Err(error) = result {
-                                    let _ = events.send(Event::HintError(error));
-                                    ui.ctx().request_repaint_of(ViewportId::ROOT);
-                                }
-                            }
                             let ratio = pin::coordinate_ratio(
                                 display.scale,
                                 ui.ctx().zoom_factor(),
                                 ui.ctx().pixels_per_point(),
                             );
-                            let origin = egui::Vec2::from(display.position());
+                            let origin = position.to_vec2();
                             let local = egui::Rect::from_min_max(
                                 (area.min - origin) * ratio,
                                 (area.max - origin) * ratio,
-                            )
-                            .intersect(ui.max_rect());
-                            ui::screen_hint::show(
+                            );
+                            // Keep the original available width and top offset
+                            // when the same HWND shrinks to the measured panel.
+                            let local = if cfg!(target_os = "windows") {
+                                local
+                            } else {
+                                local.intersect(ui.max_rect())
+                            };
+                            let panel = ui::screen_hint::show(
                                 ui,
                                 local,
                                 &ui::screen_hint::unlock_text(ui.ctx()),
                             );
+                            if (!hint_ready || (cfg!(target_os = "windows") && !hint_visible_ready))
+                                && !ui.ctx().will_discard()
+                                && let Some(hint) = &hint_raised
+                            {
+                                if !demo
+                                    && !hint.swap(true, Ordering::AcqRel)
+                                    && let Err(error) = platform::prepare_screen_layers()
+                                {
+                                    let _ = events.send(Event::LayerError {
+                                        hint: hint.clone(),
+                                        error,
+                                    });
+                                    ui.ctx().request_repaint_of(ViewportId::ROOT);
+                                    return;
+                                }
+                                let event = if hint_ready {
+                                    Event::LayerVisibleFrameDrawn {
+                                        hint: hint.clone(),
+                                        display: display_id,
+                                    }
+                                } else {
+                                    Event::LayerFrameDrawn {
+                                        hint: hint.clone(),
+                                        display: display_id,
+                                        bounds: egui::Rect::from_min_max(
+                                            ((origin + panel.min.to_vec2() / ratio)
+                                                * display.scale)
+                                                .floor()
+                                                .to_pos2()
+                                                / display.scale,
+                                            ((origin + panel.max.to_vec2() / ratio)
+                                                * display.scale)
+                                                .ceil()
+                                                .to_pos2()
+                                                / display.scale,
+                                        ),
+                                    }
+                                };
+                                let _ = events.send(event);
+                                ui.ctx().request_repaint_of(ViewportId::ROOT);
+                            }
                         }
                     }
                     if let (Some(selection), Some(id)) = (&selection, session)
                         && let Ok(mut selection) = selection.lock()
-                        && let Some(action) = overlay::show(ui, &mut selection, pointer_display)
                     {
-                        let _ = events.send(Event::Selection {
-                            request_id: id,
-                            display_id,
-                            action,
-                        });
-                        ui.ctx().request_repaint_of(ViewportId::ROOT);
+                        if preparing_capture {
+                            overlay::prepare(ui, &selection, pointer_display);
+                            if !ui.ctx().will_discard()
+                                && let Some(hint) = &hint_raised
+                            {
+                                if !demo
+                                    && !hint.swap(true, Ordering::AcqRel)
+                                    && let Err(error) = platform::prepare_screen_layers()
+                                {
+                                    let _ = events.send(Event::LayerError {
+                                        hint: hint.clone(),
+                                        error,
+                                    });
+                                } else {
+                                    let event = if hint_ready {
+                                        Event::LayerVisibleFrameDrawn {
+                                            hint: hint.clone(),
+                                            display: display_id,
+                                        }
+                                    } else {
+                                        Event::LayerFrameDrawn {
+                                            hint: hint.clone(),
+                                            display: display_id,
+                                            bounds: display_bounds,
+                                        }
+                                    };
+                                    let _ = events.send(event);
+                                }
+                                ui.ctx().request_repaint_of(ViewportId::ROOT);
+                            }
+                        } else if let Some(action) =
+                            overlay::show(ui, &mut selection, pointer_display)
+                        {
+                            let _ = events.send(Event::Selection {
+                                request_id: id,
+                                display_id,
+                                action,
+                            });
+                            ui.ctx().request_repaint_of(ViewportId::ROOT);
+                        }
                     }
                 },
             );
@@ -1738,6 +2135,7 @@ impl Snip2Pin {
     fn show_pins(&self, ctx: &egui::Context) {
         let fallback_menu = self.demo || cfg!(target_os = "linux");
         self.recording.sync_input(ctx);
+        ui::pin::MenuInput::sync(ctx, self.pin_menu.is_some());
         for (&id, pin) in &self.pins {
             let texture = pin.texture.clone();
             let events = self.sender.clone();
@@ -1747,7 +2145,7 @@ impl Snip2Pin {
             let screen = pin.screen;
             let areas = pin.screen_areas.clone();
             let initial = pin.initial;
-            let locked = pin.locked;
+            let locked = pin.locked.clone();
             let demo = self.demo;
             #[cfg(target_os = "macos")]
             let native_drag = (!self.demo).then(|| self.pin_drag.requests());
@@ -1759,10 +2157,12 @@ impl Snip2Pin {
                 .with_has_shadow(true)
                 .with_position(initial.min)
                 .with_inner_size(initial.size())
-                .with_resizable(cfg!(target_os = "macos") || !locked)
+                .with_resizable(cfg!(target_os = "macos") || !pin.locked())
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false);
+            #[cfg(target_os = "windows")]
+            let builder = builder.with_maximize_button(false);
             #[cfg(target_os = "macos")]
             let builder = {
                 // Querying maximized state moves an ordered borderless AppKit window.
@@ -1781,7 +2181,18 @@ impl Snip2Pin {
                 builder.with_visible(false)
             };
             ctx.show_viewport_deferred(pin_id(id), builder, move |ui, _| {
+                // A child may receive input while the root is occluded and its
+                // previous deferred callback is still installed.
+                let locked = locked.load(Ordering::Acquire);
                 let recording = ui::shortcut::Recorder::input_blocked(ui.ctx());
+                route_pin_menu_input(ui.ctx(), &events);
+                let blocked = recording || ui::pin::MenuInput::blocks_input(ui.ctx());
+                if blocked {
+                    ui.disable();
+                    if ui.input(|input| input.viewport().close_requested()) {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::CancelClose);
+                    }
+                }
                 let ratio = pin::coordinate_ratio(
                     display_scale,
                     ui.ctx().zoom_factor(),
@@ -1822,11 +2233,11 @@ impl Snip2Pin {
                     })
                     .flatten();
                 let dispatch = |action| {
-                    if !recording {
+                    if !blocked {
                         dispatch_pin(action, &events, &ctx, menu_position);
                     }
                 };
-                if recording {
+                if blocked {
                     ui::pin::forget_input(&ctx, id);
                 }
                 ui::pin::route_gesture(ui, &dispatch);
@@ -1840,12 +2251,12 @@ impl Snip2Pin {
                         native_edges: cfg!(target_os = "macos"),
                         locked,
                         toolbar: controls,
-                        keyboard_focus: recording.then_some(false),
+                        keyboard_focus: blocked.then_some(false),
                         space: platform::pin_input_space(ui),
                     },
                     &dispatch,
                     |command| {
-                        if recording {
+                        if blocked {
                             return;
                         }
                         #[cfg(target_os = "macos")]
@@ -1899,7 +2310,7 @@ impl Snip2Pin {
             return;
         };
         let id = menu.pin_id;
-        let locked = self.pins.get(&id).is_some_and(|pin| pin.locked);
+        let locked = self.pins.get(&id).is_some_and(|pin| pin.locked());
         let focused = menu.focused.clone();
         let events = self.sender.clone();
         let mut builder = self
@@ -1911,8 +2322,13 @@ impl Snip2Pin {
             .with_resizable(false)
             .with_has_shadow(true)
             .with_always_on_top()
+            // X11 compositors stack popup menus above always-on-top images.
+            // Keep WM management for focus and dismissal; no override-redirect.
+            .with_window_type(egui::X11WindowType::PopupMenu)
             .with_taskbar(false)
-            .with_active(true);
+            // Linux popup windows may keep keyboard focus on their owner.
+            // Shared menu ownership routes its input without forcing activation.
+            .with_active(!cfg!(target_os = "linux"));
         if let Some(position) = menu.position {
             builder = builder.with_position(position);
         }
@@ -1925,12 +2341,14 @@ impl Snip2Pin {
                 input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
             }) || (!has_focus && focused.load(Ordering::Acquire))
             {
+                ui::pin::MenuInput::consume(ui.ctx());
                 let _ = events.send(Event::ClosePinMenu);
                 ui.ctx().request_repaint_of(ViewportId::ROOT);
                 return;
             }
             let ctx = ui.ctx().clone();
             ui::pin::menu(ui, id, locked, &|action| {
+                ui::pin::MenuInput::consume(&ctx);
                 dispatch_pin(action, &events, &ctx, None);
                 let _ = events.send(Event::ClosePinMenu);
             });
@@ -1945,14 +2363,6 @@ impl eframe::App for Snip2Pin {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         i18n::set_locale(ctx, self.preferences.language.resolve(self.system_locale));
-        if let Some(hint) = &self.unlock_hint {
-            let remaining = hint.until.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                self.clear_unlock_hint(ctx);
-            } else {
-                ctx.request_repaint_after_for(remaining, ViewportId::ROOT);
-            }
-        }
         if ctx.current_pass_index() == 0
             && !self.recording.blocks_input(ctx)
             && ctx.input(|input| {
@@ -1976,6 +2386,14 @@ impl eframe::App for Snip2Pin {
         while let Ok(event) = self.events.try_recv() {
             self.handle_event(event, ctx);
         }
+        if let Some(until) = self.layer_presentation.as_ref().and_then(|hint| hint.until) {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.clear_layer_presentation(ctx);
+            } else {
+                ctx.request_repaint_after_for(remaining, ViewportId::ROOT);
+            }
+        }
         let menu_state = self.menu_state();
         if let Some(tray) = &mut self.tray {
             tray.update(menu_state);
@@ -1998,11 +2416,16 @@ impl eframe::App for Snip2Pin {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        if !self.recording.blocks_input(&ctx) {
+        route_pin_menu_input(&ctx, &self.sender);
+        self.paint_pending_layers(&ctx);
+        if !self.recording.blocks_input(&ctx) && !ui::pin::MenuInput::blocks_input(&ctx) {
             ui::pin::route_gesture(ui, &|action| dispatch_pin(action, &self.sender, &ctx, None));
         }
         if !self.prepare_home(&ctx) {
             return;
+        }
+        if ui::pin::MenuInput::blocks_input(&ctx) {
+            ui.disable();
         }
         self.update_icon(&ctx);
         if self.recording.active() && self.quit_confirmation.is_none() {
@@ -2020,7 +2443,7 @@ impl eframe::App for Snip2Pin {
                 id,
                 name: &pin.name,
                 texture: &pin.texture,
-                size: pin.pixels.size,
+                size: pin.pixels.resolution(),
                 display_size: ctx.input(|input| {
                     input
                         .raw
@@ -2029,7 +2452,7 @@ impl eframe::App for Snip2Pin {
                         .inner_rect
                         .map(|rect| rect.size())
                 }),
-                locked: pin.locked,
+                locked: pin.locked(),
                 selected: pin_focused(&ctx, id),
             })
             .collect::<Vec<_>>();

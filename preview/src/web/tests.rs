@@ -373,7 +373,7 @@ fn frozen_pixels_are_released_on_cancel_or_pin_creation_and_placement_matches_th
             let pin = sandbox.pins.last().expect("new pin");
             assert_eq!(pin.image, Rect::from_min_size(end, egui::vec2(40.0, 40.0)));
             assert_eq!(
-                pin.texture.size(),
+                pin.texture.resolution(),
                 [8, 8],
                 "display units cannot overwrite source pixels"
             );
