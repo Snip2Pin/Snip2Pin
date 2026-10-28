@@ -3,6 +3,11 @@ use crate::package::{self, Distribution, Format, Manifest};
 use crate::{Result, execute, output};
 use std::{fs, path::Path, process::Command};
 
+fn linux_icon_directory() -> String {
+    let size = package::LINUX_ICON_SIZE;
+    format!("usr/share/icons/hicolor/{size}x{size}/apps")
+}
+
 pub fn debian(
     payload: &Path,
     destination: &Path,
@@ -10,11 +15,12 @@ pub fn debian(
     distribution: Distribution,
 ) -> Result {
     let root = payload.join("deb-root");
+    let icon_directory = linux_icon_directory();
     for directory in [
         "DEBIAN",
         "usr/bin",
         "usr/share/applications",
-        "usr/share/icons/hicolor/1024x1024/apps",
+        &icon_directory,
         "usr/share/doc/snip2pin",
     ] {
         fs::create_dir_all(root.join(directory))?;
@@ -26,7 +32,8 @@ pub fn debian(
     )?;
     fs::copy(
         payload.join("io.github.Snip2Pin.Snip2Pin.png"),
-        root.join("usr/share/icons/hicolor/1024x1024/apps/io.github.Snip2Pin.Snip2Pin.png"),
+        root.join(&icon_directory)
+            .join("io.github.Snip2Pin.Snip2Pin.png"),
     )?;
     for file in ["LICENSE", "README.txt", "THIRD_PARTY_NOTICES.txt"] {
         fs::copy(
@@ -107,16 +114,14 @@ pub fn verify_debian(directory: &Path, unpacked: &Path, data: &Manifest) -> Resu
             .arg(deb)
             .arg(&extracted),
     )?;
+    let installed_icon = format!("{}/io.github.Snip2Pin.Snip2Pin.png", linux_icon_directory());
     for (portable, installed) in [
         ("snip2pin", "usr/bin/snip2pin"),
         (
             "io.github.Snip2Pin.Snip2Pin.desktop",
             "usr/share/applications/io.github.Snip2Pin.Snip2Pin.desktop",
         ),
-        (
-            "io.github.Snip2Pin.Snip2Pin.png",
-            "usr/share/icons/hicolor/1024x1024/apps/io.github.Snip2Pin.Snip2Pin.png",
-        ),
+        ("io.github.Snip2Pin.Snip2Pin.png", installed_icon.as_str()),
         ("LICENSE", "usr/share/doc/snip2pin/LICENSE"),
         ("README.txt", "usr/share/doc/snip2pin/README.txt"),
         (
@@ -149,6 +154,7 @@ pub fn aur(destination: &Path, version: &str, url: &str, checksum: &str) -> Resu
 }
 
 fn aur_build(version: &str, url: &str, checksum: &str) -> String {
+    let icon_directory = linux_icon_directory();
     format!(
         r#"# Maintainer: Snip2Pin contributors
 pkgname=snip2pin-bin
@@ -169,7 +175,7 @@ sha256sums=('{checksum}')
 package() {{
   install -Dm755 "$srcdir/snip2pin" "$pkgdir/usr/bin/snip2pin"
   install -Dm644 "$srcdir/io.github.Snip2Pin.Snip2Pin.desktop" "$pkgdir/usr/share/applications/io.github.Snip2Pin.Snip2Pin.desktop"
-  install -Dm644 "$srcdir/io.github.Snip2Pin.Snip2Pin.png" "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/io.github.Snip2Pin.Snip2Pin.png"
+  install -Dm644 "$srcdir/io.github.Snip2Pin.Snip2Pin.png" "$pkgdir/{icon_directory}/io.github.Snip2Pin.Snip2Pin.png"
   install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "$srcdir/THIRD_PARTY_NOTICES.txt" "$pkgdir/usr/share/doc/$pkgname/THIRD_PARTY_NOTICES.txt"
 }}

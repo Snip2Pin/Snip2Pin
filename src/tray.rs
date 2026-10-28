@@ -1,17 +1,27 @@
 use snip2pin::i18n::{Locale, Message, Text};
 use snip2pin::pin::MenuCommand;
+use std::sync::{Arc, Mutex};
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
+#[cfg(target_os = "windows")]
+#[path = "tray/windows.rs"]
+mod windows;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    #[cfg(target_os = "windows")]
+    ShowMenu,
     Home,
     Capture,
     ClosePins,
     UnlockPins,
-    Pin { id: u64, command: MenuCommand },
+    Pin {
+        id: u64,
+        command: MenuCommand,
+    },
     Quit,
 }
 
@@ -32,6 +42,20 @@ pub struct Tray {
     unlock_pins: MenuItem,
     quit: MenuItem,
     state: Option<MenuState>,
+    callback: CallbackSlot,
+    #[cfg(target_os = "windows")]
+    menu: Menu,
+}
+
+type Callback = Arc<dyn Fn(Action) + Send + Sync>;
+type CallbackSlot = Arc<Mutex<Option<Callback>>>;
+
+fn emit(callback: &CallbackSlot, action: Action) {
+    // Release the lock before invoking application code, including reentrant teardown.
+    let callback = callback.lock().ok().and_then(|callback| callback.clone());
+    if let Some(callback) = callback {
+        callback(action);
+    }
 }
 
 impl Tray {
@@ -39,10 +63,12 @@ impl Tray {
         locale: Locale,
         callback: impl Fn(Action) + Send + Sync + 'static,
     ) -> Result<Self, Message> {
+        let callback: CallbackSlot = Arc::new(Mutex::new(Some(Arc::new(callback))));
+        let menu_callback = callback.clone();
         // Pin menus share this route even when the desktop has no tray host.
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if let Some(action) = action(event.id.as_ref()) {
-                callback(action);
+                emit(&menu_callback, action);
             }
         }));
         #[cfg(target_os = "linux")]
@@ -84,21 +110,28 @@ impl Tray {
             &quit,
         ])
         .map_err(|error| error.to_string())?;
-        let pixels = if cfg!(target_os = "macos") {
-            snip2pin::icon::status()?
-        } else {
-            snip2pin::icon::render(snip2pin::icon::Variant::Line, snip2pin::icon::STATUS_SIZE)?
-        };
-        let (width, height) = pixels.dimensions();
-        let icon = tray_icon::Icon::from_rgba(pixels.into_raw(), width, height)
-            .map_err(|error| error.to_string())?;
+        let icon = icon()?;
         let builder = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_tooltip("Snip2Pin");
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_templated(icon);
         #[cfg(not(target_os = "macos"))]
         let builder = builder.with_icon(icon);
+        #[cfg(target_os = "windows")]
+        let builder = builder
+            .with_menu_on_left_click(false)
+            .with_menu_on_right_click(false);
+        #[cfg(target_os = "windows")]
+        {
+            let id = builder.id().clone();
+            let callback = callback.clone();
+            tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
+                if windows::requests_menu(&id, &event) {
+                    emit(&callback, Action::ShowMenu);
+                }
+            }));
+        }
         let icon = builder.build().map_err(|error| error.to_string())?;
         Ok(Self {
             _icon: icon,
@@ -108,7 +141,16 @@ impl Tray {
             unlock_pins,
             quit,
             state: None,
+            callback,
+            #[cfg(target_os = "windows")]
+            menu,
         })
+    }
+
+    /// Capture is returned only after its native popup has been cancelled and unwound.
+    #[cfg(target_os = "windows")]
+    pub fn show_menu(&self) -> Result<bool, Message> {
+        windows::show_menu(&self._icon, &self.menu, self.capture.id())
     }
 
     pub fn update(&mut self, state: MenuState) {
@@ -132,9 +174,30 @@ impl Tray {
     }
 }
 
+fn icon() -> Result<tray_icon::Icon, Message> {
+    #[cfg(target_os = "windows")]
+    return windows::icon();
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pixels = if cfg!(target_os = "macos") {
+            snip2pin::icon::status()?
+        } else {
+            snip2pin::icon::render(snip2pin::icon::Variant::Line, snip2pin::icon::STATUS_SIZE)?
+        };
+        let (width, height) = pixels.dimensions();
+        tray_icon::Icon::from_rgba(pixels.into_raw(), width, height)
+            .map_err(|error| error.to_string().into())
+    }
+}
+
 impl Drop for Tray {
     fn drop(&mut self) {
-        MenuEvent::set_event_handler(None::<fn(MenuEvent)>);
+        // Both libraries keep their handler in an immutable OnceCell. Revoke the
+        // shared application callback instead of pretending set(None) removes it.
+        if let Ok(mut callback) = self.callback.lock() {
+            callback.take();
+        }
     }
 }
 
@@ -164,6 +227,23 @@ fn pin_action(id: &str) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callback_can_revoke_both_routes_without_holding_the_dispatch_lock() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let slot: CallbackSlot = Arc::new(Mutex::new(None));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let revoke = slot.clone();
+        let counted = calls.clone();
+        *slot.lock().expect("callback slot") = Some(Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            revoke.lock().expect("dispatch releases lock").take();
+        }));
+        emit(&slot, action("capture").expect("menu event route"));
+        emit(&slot, Action::Home);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(slot.lock().expect("revoked slot").is_none());
+    }
     #[test]
     fn menu_dispatches_only_known_application_commands() {
         for (id, expected) in [

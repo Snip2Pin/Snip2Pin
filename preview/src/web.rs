@@ -209,9 +209,9 @@ impl Sandbox {
         self.selection = Some(FrozenCapture {
             selection: overlay::Selection {
                 texture: ctx.load_texture("generated-desktop", source.clone(), Default::default()),
-                pixels: source.size.map(|n| n as u32),
+                pixels: source.resolution().map(|n| n as u32),
                 pixel_step: [1, 1],
-                windows: desktop::pixel_regions(self.desktop_bounds, source.size, &windows),
+                windows: desktop::pixel_regions(self.desktop_bounds, source.resolution(), &windows),
                 press: None,
                 start: None,
                 // A browser simulation must not request native window activation.
@@ -289,7 +289,7 @@ impl Sandbox {
                             pin.image.min * ui.ctx().zoom_factor(),
                             pin.image.size() * ui.ctx().zoom_factor(),
                         ),
-                        pin.texture.size(),
+                        pin.texture.resolution(),
                         ui.ctx().native_pixels_per_point().unwrap_or(1.0),
                         &commands,
                     )
@@ -344,9 +344,11 @@ impl Sandbox {
 
 impl Sandbox {
     fn show(&mut self, ui: &mut egui::Ui) {
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
         // A virtual window shares the root event stream. Preserve modal ownership
         // through this frame even when Escape just finished recording or a menu.
-        let input_was_blocked = self.recording.blocks_input(ui.ctx()) || self.menu.is_some();
+        let input_was_blocked =
+            self.recording.blocks_input(ui.ctx()) || pin_view::MenuInput::blocks_input(ui.ctx());
         let locale = self.preferences.language.resolve(self.system_locale);
         i18n::set_locale(ui.ctx(), locale);
         self.update_icon(ui.ctx());
@@ -395,7 +397,7 @@ impl Sandbox {
                         let layout = pin::frame_geometry(
                             geometry::pin_placement(
                                 rect,
-                                capture.pixels.size.map(|n| n as u32),
+                                capture.pixels.resolution().map(|n| n as u32),
                                 bounds.min.into(),
                                 bounds.size().into(),
                             ),
@@ -434,7 +436,7 @@ impl Sandbox {
                 id: pin.id,
                 name: &pin.name,
                 texture: &pin.texture,
-                size: pin.texture.size(),
+                size: pin.texture.resolution(),
                 display_size: Some(pin.image.size()),
                 locked: pin.locked,
                 selected: self.focused_pin == Some(pin.id),
@@ -517,8 +519,10 @@ impl Sandbox {
             self.menu = None;
         }
         let events = RefCell::new(Vec::new());
-        let pins_interactive =
-            !input_was_blocked && !self.recording.blocks_input(ui.ctx()) && self.menu.is_none();
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
+        let pins_interactive = !input_was_blocked
+            && !self.recording.blocks_input(ui.ctx())
+            && !pin_view::MenuInput::blocks_input(ui.ctx());
         for pin in &mut self.pins {
             let pointer = ui.ctx().pointer_latest_pos();
             if let Some(gesture) = &pin.gesture
@@ -637,6 +641,7 @@ impl Sandbox {
                 }
             }
         }
+        pin_view::MenuInput::sync(ui.ctx(), self.menu.is_some());
     }
 }
 

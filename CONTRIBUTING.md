@@ -74,8 +74,11 @@ Preferences live in `~/Library/Application Support/Snip2Pin` on macOS,
 uses `--install --migrate-identity`; ordinary updates use `--install`.
 
 Regenerate all icon PNGs from their editable SVG sources with `cargo xtask icons`.
-Runtime icon loading uses the committed PNGs; SVG rendering belongs to the
-developer tool. Commit binary resources through Git LFS.
+Runtime icon loading uses committed PNGs and embedded Windows ICOs; SVG rendering
+belongs to the developer tool. Commit binary resources through Git LFS.
+Windows tray artwork reuses `status.svg` with a fixed green stroke applied by
+the generator. Its multi-size `status-windows.ico` is embedded separately from
+the application's `line.ico`; macOS keeps the original template artwork.
 
 `cargo run --locked -- --demo` uses generated images without reading the desktop.
 For isolated browser validation, use the [shared UI sandbox](docs/workflow.md#本地-gui-沙箱).

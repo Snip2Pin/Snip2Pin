@@ -10,7 +10,9 @@ use super::{
 
 mod input;
 mod keyboard;
+mod menu_input;
 mod session;
+pub use menu_input::MenuInput;
 
 /// Release every shared UI state owned by a closed pin, in any host.
 pub fn forget(ctx: &egui::Context, id: u64) {
@@ -19,6 +21,16 @@ pub fn forget(ctx: &egui::Context, id: u64) {
 }
 
 pub fn forget_input(ctx: &egui::Context, id: u64) {
+    ctx.data_mut(|data| data.remove::<bool>(locked_press_key(id)));
+    forget_adjustments(ctx, id);
+}
+
+fn locked_press_key(id: u64) -> egui::Id {
+    // Only eligibility belongs to us; egui owns the press and drag episode.
+    egui::Id::unique(("pin-locked-press", id))
+}
+
+fn forget_adjustments(ctx: &egui::Context, id: u64) {
     keyboard::forget(ctx, id);
     ctx.data_mut(|data| {
         data.remove::<session::Session>(session::key(id));
@@ -199,20 +211,36 @@ fn image_with_host(
     // Native drag/resize APIs need the initiating button press, before an egui
     // drag threshold turns it into a later mouse-move event.
     let pressed = ui.input(|input| {
-        input
-            .pointer
-            .primary_pressed()
-            .then(|| input.pointer.press_origin())
-            .flatten()
+        input.events.iter().rev().find_map(|event| match event {
+            // press_origin is cleared when release arrives in the same frame.
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => Some(*pos),
+            _ => None,
+        })
     });
     let pressed_on_image = ui.is_enabled()
         && pressed.is_some_and(|point| {
             bounds.contains(point)
                 && ui.clip_rect().contains(point)
                 && ui.ctx().layer_id_at(point) == Some(ui.layer_id())
-                && !excluded.is_some_and(|rect| rect.contains(point))
+                && !toolbar.is_some_and(|toolbar| {
+                    if locked {
+                        // Preserve egui's hit tolerance for copy and unlock.
+                        // Disabled close remains a blocked interaction attempt.
+                        let radius = ui.ctx().global_style().interaction.interact_radius;
+                        toolbar.controls().any(|(control, rect)| {
+                            control != Control::Close && rect.expand(radius).contains(point)
+                        })
+                    } else {
+                        toolbar.bounds.contains(point)
+                    }
+                })
         });
-    if !locked && pressed_on_image {
+    if !locked && pressed_on_image && ui.input(|input| input.pointer.primary_down()) {
         let pressed_edge = (!native_edges)
             .then_some(pressed)
             .flatten()
@@ -228,9 +256,37 @@ fn image_with_host(
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
-    if locked && ui.ctx().current_pass_index() == 0 && pressed_on_image {
-        events(Action::UnlockHint(id));
-        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    if ui.ctx().current_pass_index() == 0 {
+        let key = locked_press_key(id);
+        let enabled = ui.is_enabled();
+        let lost_focus = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+        });
+        let primary_down = ui.input(|input| input.pointer.primary_down());
+        let eligible = ui.ctx().data_mut(|data| {
+            if !locked || !enabled || lost_focus {
+                data.remove::<bool>(key);
+                return false;
+            }
+            if pressed.is_some() {
+                data.insert_temp(key, pressed_on_image);
+            }
+            let eligible = data.get_temp::<bool>(key).unwrap_or(false);
+            if !primary_down {
+                data.remove::<bool>(key);
+            }
+            eligible
+        });
+        let moved = primary_down
+            && response.dragged_by(egui::PointerButton::Primary)
+            && ui.input(|input| input.pointer.delta() != egui::Vec2::ZERO);
+        if locked && !lost_focus && (pressed_on_image || (eligible && moved)) {
+            events(Action::UnlockHint(id));
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
     if ui.ctx().current_pass_index() == 0 && !locked && close_requested(ui, focused) {
         events(Action::ClosePin(id));
@@ -243,21 +299,12 @@ fn image_with_host(
 
 fn controls(ui: &mut egui::Ui, id: u64, locked: bool, toolbar: Toolbar, events: &dyn Fn(Action)) {
     let locale = crate::i18n::locale(ui.ctx());
-    let step = METRICS.button + METRICS.button_gap;
-    for (index, control) in Control::ALL
-        .into_iter()
-        .skip(Control::ALL.len().saturating_sub(toolbar.count))
-        .enumerate()
-    {
+    for (control, rect) in toolbar.controls() {
         let command = match control {
             Control::Copy => MenuCommand::Copy,
             Control::Lock => MenuCommand::ToggleLock,
             Control::Close => MenuCommand::Close,
         };
-        let rect = Rect::from_min_size(
-            toolbar.bounds.min + egui::vec2(index as f32 * step, 0.0),
-            egui::Vec2::splat(METRICS.button),
-        );
         let enabled = command.enabled(locked);
         let response = ui
             .push_id(("pin-control", id, control), |ui| {

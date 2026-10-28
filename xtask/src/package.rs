@@ -12,6 +12,8 @@ pub const TARGETS: [&str; 4] = [
     "x86_64-unknown-linux-gnu",
 ];
 
+pub const LINUX_ICON_SIZE: u32 = 256;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Distribution {
@@ -288,16 +290,25 @@ pub fn prepare_payload(binary: &Path, target: &str, payload: &Path) -> Result {
             fs::copy("LICENSE", payload.join("LICENSE"))?;
         }
         if target.contains("linux") {
-            fs::copy(
-                "packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop",
-                payload.join("io.github.Snip2Pin.Snip2Pin.desktop"),
-            )?;
-            fs::copy(
-                "assets/icons/line.png",
-                payload.join("io.github.Snip2Pin.Snip2Pin.png"),
-            )?;
+            linux_resources(payload)?;
         }
     }
+    Ok(())
+}
+
+fn linux_resources(payload: &Path) -> Result {
+    fs::copy(
+        crate::root()?.join("packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop"),
+        payload.join("io.github.Snip2Pin.Snip2Pin.desktop"),
+    )?;
+    // Export at a standard hicolor size; 1024x1024 is not registered by the theme.
+    image::open(crate::root()?.join("assets/icons/line.png"))?
+        .resize_exact(
+            LINUX_ICON_SIZE,
+            LINUX_ICON_SIZE,
+            image::imageops::FilterType::Lanczos3,
+        )
+        .save(payload.join("io.github.Snip2Pin.Snip2Pin.png"))?;
     Ok(())
 }
 
@@ -830,6 +841,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linux_desktop_resources_export_the_icon_at_its_installed_theme_size() {
+        let directory = tempfile::tempdir().expect("Linux resource fixture");
+        linux_resources(directory.path()).expect("export Linux desktop resources");
+        let pixels = image::open(directory.path().join("io.github.Snip2Pin.Snip2Pin.png"))
+            .expect("valid PNG");
+        assert_eq!(
+            (pixels.width(), pixels.height()),
+            (LINUX_ICON_SIZE, LINUX_ICON_SIZE)
+        );
+        let desktop =
+            fs::read_to_string(directory.path().join("io.github.Snip2Pin.Snip2Pin.desktop"))
+                .expect("desktop entry");
+        assert!(
+            desktop
+                .lines()
+                .any(|line| line == "Icon=io.github.Snip2Pin.Snip2Pin")
+        );
+    }
+
+    #[test]
     fn cargo_metadata_resolves_custom_target_directories_without_global_env_changes() {
         let directory = tempfile::tempdir().expect("temporary Cargo target");
         let custom = directory
@@ -839,7 +870,7 @@ mod tests {
             .join("custom target with spaces");
         let metadata = output(
             Command::new("cargo")
-                .current_dir(crate::root())
+                .current_dir(crate::root().expect("runtime workspace"))
                 .env("CARGO_TARGET_DIR", &custom)
                 .args(["metadata", "--locked", "--no-deps", "--format-version", "1"]),
         )

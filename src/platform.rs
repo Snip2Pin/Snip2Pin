@@ -305,10 +305,24 @@ pub fn prepare_floating_windows() -> Result<(), Message> {
 }
 
 /// Raise this process's existing transparent layers without focus or geometry changes.
-pub fn raise_screen_hint() -> Result<(), Message> {
+pub fn prepare_screen_layers() -> Result<(), Message> {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pin_window::raise_selection()?;
     // macOS selection layers already have a higher native level than pins.
+    Ok(())
+}
+
+/// Reveal prepared passive Windows layers without changing geometry or focus.
+pub fn reveal_screen_layers() -> Result<(), Message> {
+    #[cfg(target_os = "windows")]
+    pin_window::selection_opacity(u8::MAX)?;
+    Ok(())
+}
+
+/// Conceal existing passive Windows layers before changing their bounds.
+pub fn conceal_screen_layers() -> Result<(), Message> {
+    #[cfg(target_os = "windows")]
+    pin_window::selection_opacity(0)?;
     Ok(())
 }
 
@@ -329,8 +343,43 @@ pub fn finish_capture(ctx: &egui::Context) {
             application.deactivate();
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    // Hiding the Linux selection layer lets the WM restore the previous focus.
+    // Activating Home here can instead produce a GNOME "window is ready" notice
+    // when focus-stealing prevention rejects that unsolicited activation.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = ctx;
+}
+
+/// A GUI-subsystem executable has no visible stderr when opened from Explorer.
+#[cfg(target_os = "windows")]
+pub fn show_startup_error(error: &str) {
+    use snip2pin::{i18n::Text, settings::Preferences};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let language = snip2pin::settings::path()
+        .and_then(|path| Preferences::load(&path).ok())
+        .unwrap_or_default()
+        .language;
+    let locale = language.resolve(snip2pin::i18n::Locale::system());
+    let title: Vec<u16> = locale
+        .text(Text::StartupFailed)
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    let body: Vec<u16> = error.encode_utf16().chain([0]).collect();
+    // SAFETY: This ownerless native dialog can run even when graphics setup
+    // failed. Both null-terminated buffers remain owned until it returns.
+    #[allow(unsafe_code)]
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }
 
 pub fn window_options(options: eframe::NativeOptions) -> eframe::NativeOptions {

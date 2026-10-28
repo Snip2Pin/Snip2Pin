@@ -204,7 +204,7 @@ fn cropped_pixels_are_the_exact_selected_region() {
         },
     )
     .expect("valid crop");
-    assert_eq!(cropped.size, [4, 2]);
+    assert_eq!(cropped.resolution(), [4, 2]);
     assert_eq!(cropped[(0, 0)], Color32::from_rgb(2, 3, 0));
     assert_eq!(cropped[(3, 1)], Color32::from_rgb(5, 4, 0));
 }

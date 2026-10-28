@@ -43,7 +43,7 @@ impl Snapshot {
         }
     }
     pub fn pixel_size(&self) -> [u32; 2] {
-        self.pixels.size.map(|length| length as u32)
+        self.pixels.resolution().map(|length| length as u32)
     }
 
     pub fn window_regions(&self, pixel_step: [u32; 2]) -> Vec<PixelRect> {
@@ -234,15 +234,15 @@ pub fn crop(image: &ColorImage, rect: PixelRect) -> Option<ColorImage> {
     let bottom = rect.y.checked_add(rect.height)?;
     if rect.width == 0
         || rect.height == 0
-        || right as usize > image.size[0]
-        || bottom as usize > image.size[1]
+        || right as usize > image.resolution()[0]
+        || bottom as usize > image.resolution()[1]
     {
         return None;
     }
     let mut pixels = Vec::with_capacity(rect.width as usize * rect.height as usize);
     for y in rect.y..bottom {
-        let start = y as usize * image.size[0] + rect.x as usize;
-        pixels.extend_from_slice(&image.pixels[start..start + rect.width as usize]);
+        let start = y as usize * image.resolution()[0] + rect.x as usize;
+        pixels.extend_from_slice(&image.pixels()[start..start + rect.width as usize]);
     }
     Some(ColorImage::new(
         [rect.width as usize, rect.height as usize],

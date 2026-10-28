@@ -13,8 +13,15 @@ members = ["xtask", "preview"]
 default-members = ["."]
 resolver = "3"
 
+# Windows deferred-viewport paint fairness: https://github.com/emilk/egui/pull/8650.
+# Keep direct and transitive egui types on the same immutable upstream source.
+[patch.crates-io]
+eframe = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+egui = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+egui-winit = { git = "https://github.com/emilk/egui", rev = "5cab9d0818da12a3fca6f7b2e6adbeabda33461f" }
+
 [dependencies]
-eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
 # Keep the bundled emoji fallback that was included by default before egui 0.37.
 egui = { version = "0.37.0", default-features = false, features = ["monochrome_emoji_fonts"] }
 global-hotkey = "0.9.0"
@@ -51,7 +58,13 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.100"
 windows-result = "0.100"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_LibraryLoader"] }
+
+[build-dependencies]
+winresource = "0.1.34"
 
 [profile.release]
 lto = "thin"

@@ -14,6 +14,8 @@ use snip2pin::ui;
 fn main() {
     if let Err(error) = run() {
         eprintln!("Snip2Pin: {error}");
+        #[cfg(target_os = "windows")]
+        platform::show_startup_error(&error.to_string());
         std::process::exit(1);
     }
 }

@@ -109,7 +109,7 @@ pub(super) fn adjust(
         || ui.ctx().current_pass_index() != 0
     {
         if ui.ctx().current_pass_index() == 0 {
-            super::forget_input(ui.ctx(), id);
+            super::forget_adjustments(ui.ctx(), id);
         }
         return;
     }

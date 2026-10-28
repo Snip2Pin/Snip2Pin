@@ -1122,7 +1122,7 @@ fn lightweight_rows_keep_extreme_previews_padded_and_names_clear_of_controls() {
                     assert!(image.height() * output.pixels_per_point >= 1.0 - f32::EPSILON);
                     assert!((image.center() - well.rect.center()).abs().max_elem() <= pixel);
                     assert_eq!(
-                        texture.size(),
+                        texture.resolution(),
                         pixels,
                         "only the preview may change its short axis"
                     );
