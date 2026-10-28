@@ -122,10 +122,9 @@ impl Tray {
         let builder = builder
             .with_menu_on_left_click(false)
             .with_menu_on_right_click(false);
-        let icon = builder.build().map_err(|error| error.to_string())?;
         #[cfg(target_os = "windows")]
         {
-            let id = icon.id().clone();
+            let id = builder.id().clone();
             let callback = callback.clone();
             tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
                 if windows::requests_menu(&id, &event) {
@@ -133,6 +132,7 @@ impl Tray {
                 }
             }));
         }
+        let icon = builder.build().map_err(|error| error.to_string())?;
         Ok(Self {
             _icon: icon,
             capture,
