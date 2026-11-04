@@ -1994,6 +1994,17 @@ impl Snip2Pin {
                 move |ui, _| {
                     // Root logic reports any pin-adapter failure.
                     let _ = platform::prepare_floating_windows();
+                    if cfg!(target_os = "macos") && !positioned.swap(true, Ordering::AcqRel) {
+                        // AppKit can relocate a retained layer when a display is
+                        // disconnected. An unchanged builder does not restore it
+                        // after reconnection. Apply this capture's topology once,
+                        // before waiting for native resize input.
+                        let zoom = ui.ctx().zoom_factor();
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::InnerSize(size / zoom));
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::OuterPosition(position / zoom));
+                    }
                     if cfg!(target_os = "macos") && !demo {
                         // Native bounds can change after this frame's input was
                         // collected. Wait for the resize event instead of squeezing
@@ -2003,7 +2014,6 @@ impl Snip2Pin {
                         if (actual.x - expected.x).abs() > OVERLAY_SIZE_TOLERANCE
                             || (actual.y - expected.y).abs() > OVERLAY_SIZE_TOLERANCE
                         {
-                            ui.ctx().request_repaint();
                             return;
                         }
                     }

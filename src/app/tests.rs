@@ -681,7 +681,7 @@ fn selection_layer_does_not_retry_native_position_changes() {
             .iter()
             .filter(|command| matches!(command, ViewportCommand::OuterPosition(_)))
             .count();
-        assert_eq!(count, usize::from(!cfg!(target_os = "macos") && index == 0));
+        assert_eq!(count, usize::from(index == 0));
     }
 }
 
@@ -705,6 +705,143 @@ fn capture_initially_highlights_the_display_under_the_cursor() {
         Some(9),
         "the pointer chooses the screen, not display ordering or the launcher"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reconnected_display_refreshes_reused_layer_before_accepting_pointer_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let viewport = layer_id(9);
+    // AppKit can move a prepared layer onto the remaining screen while its
+    // display is unplugged. Reconnecting with the same layout leaves the
+    // framework's cached builder unchanged, even though the native frame moved.
+    for _ in 0..2 {
+        app.demo = false;
+        let mut external = capture::demo();
+        external.display.id = 9;
+        external.display.origin = [-680.0, 0.0];
+        let display = external.display.clone();
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![capture::demo(), external]), None, &ctx);
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        root.textures_delta.clear();
+        let callback = root.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("production selection callback");
+        let stale_bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(stale_bounds),
+            events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| callback(ui));
+        output.textures_delta.clear();
+        let commands = &output.viewport_output[&viewport].commands;
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                ViewportCommand::OuterPosition(position)
+                    if *position == egui::Pos2::from(display.position())
+            )),
+            "reused capture layer must return to its source display"
+        );
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                ViewportCommand::InnerSize(size)
+                    if *size == egui::Vec2::from(display.logical_size())
+            )),
+            "stale native size must be refreshed before the size guard"
+        );
+        assert!(
+            app.events.try_recv().is_err(),
+            "stale input must be ignored"
+        );
+        // A second stale frame cannot retry placement or consume input.
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(stale_bounds),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| callback(ui));
+        output.textures_delta.clear();
+        assert!(
+            !output.viewport_output[&viewport]
+                .commands
+                .iter()
+                .any(|command| {
+                    matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    )
+                })
+        );
+        // Deliver the actual post-resize bounds, then move and click on the
+        // external screen through the production callback and event dispatcher.
+        app.demo = true;
+        for pressed in [None, Some(true), Some(false)] {
+            let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+            root.textures_delta.clear();
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, display.logical_size().into());
+            let point = egui::pos2(40.0, 40.0);
+            let mut events = vec![egui::Event::PointerMoved(point)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                screen_rect: Some(bounds),
+                events,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                viewport,
+                egui::ViewportInfo {
+                    inner_rect: Some(bounds),
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                root.viewport_output[&viewport]
+                    .viewport_ui_cb
+                    .as_ref()
+                    .unwrap()(ui);
+                while let Ok(event) = app.events.try_recv() {
+                    app.handle_event(event, ui.ctx());
+                }
+            });
+            output.textures_delta.clear();
+            assert_eq!(
+                app.active_display,
+                Some(9),
+                "hover must activate the external display"
+            );
+        }
+        let pin = app
+            .pins
+            .values()
+            .next_back()
+            .expect("external screen captured");
+        assert_eq!(pin.pixels.resolution(), capture::demo().pixels.resolution());
+        assert_eq!(pin.initial.min, egui::Pos2::from(display.position()));
+        app.reset_capture(&ctx);
+    }
 }
 
 #[test]
