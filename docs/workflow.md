@@ -108,7 +108,15 @@ Rust 视图，使用生成图片，不提供真实截图、系统剪贴板、自
 网页宿主也在 `cargo test --workspace` 中运行：直接驱动同一 Rust 界面，验证焦点、菜单、
 快捷键录制、晚到截图结果、锁定与主题变化。跨端修改同时检查共享规则和宿主事件流，
 不能仅以共用绘制函数或 WASM 编译通过作为行为一致的证据。
-本地 `packaging/macos/build.sh --install` 使用优化构建；这属于开发安装，不是发版。
+本地 `packaging/macos/build.sh --install` 使用优化构建，固定安装到
+`/Applications/Snip2Pin Dev.app`，应用标识为 `io.github.Snip2Pin.Snip2Pin.dev`。
+开发版启用 `local-dev` Cargo feature，构建资源放在 `target/local-dev`，设置独立放在
+`~/Library/Application Support/Snip2Pin/dev`，自启入口使用开发标识且默认关闭。
+正式版仍为 `/Applications/Snip2Pin.app`，使用原有标识、设置和分发签名。
+两者分别申请截屏授权；测试时退出另一份，避免占用相同全局快捷键。
+后续修改继续运行同一安装命令，复用固定路径和本机证书，再打开开发版验证；
+不保证 macOS 永远不再询问权限，不清理或迁移正式版授权。这属于开发安装，不是发版。
+正式打包不启用 `local-dev`；macOS 打包工具核对可执行文件的 `--version --app-id`，拒绝混用身份。
 
 ### 本地 macOS 菜单资源
 

@@ -20,19 +20,22 @@ PROFILE=release
 CARGO_BUILD_TARGET="$(rustc -vV | awk '/^host:/ {print $2}')"
 export CARGO_BUILD_TARGET
 TARGET_DIR="$(cargo metadata --locked --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)"
-BINARY="$TARGET_DIR/$CARGO_BUILD_TARGET/$PROFILE/snip2pin"
 OUTPUT_DIR="$PROJECT_DIR/.build/macos"
-cargo build --locked --release
-APP_DIR="$OUTPUT_DIR/Snip2Pin.app"
+# Keep local feature artifacts separate from production builds.
+TARGET_DIR="$TARGET_DIR/local-dev"
+BINARY="$TARGET_DIR/$CARGO_BUILD_TARGET/$PROFILE/snip2pin"
+cargo build --locked --release --package snip2pin --features local-dev --target-dir "$TARGET_DIR"
+APP_BUNDLE="Snip2Pin Dev.app"
+APP_DIR="$OUTPUT_DIR/$APP_BUNDLE"
 rm -rf "$APP_DIR"
 ICON_VARIANT=line
 if "$INSTALL"; then
     ICON_VARIANT="$("$BINARY" --selected-icon)"
 fi
-cargo xtask bundle-macos "$BINARY" "$APP_DIR" "$ICON_VARIANT"
+cargo xtask bundle-macos-dev "$BINARY" "$APP_DIR" "$ICON_VARIANT"
 bash packaging/macos/signing.sh --sign "$APP_DIR"
 if "$INSTALL"; then
-    DESTINATION=/Applications/Snip2Pin.app
+    DESTINATION="/Applications/$APP_BUNDLE"
     MIGRATING=false
     LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
     if [[ -d "$DESTINATION" ]]; then
@@ -49,16 +52,16 @@ if "$INSTALL"; then
         fi
     fi
     INSTALL_DIR="$(mktemp -d /Applications/.snip2pin-install.XXXXXX)"
-    ditto "$APP_DIR" "$INSTALL_DIR/Snip2Pin.app"
+    ditto "$APP_DIR" "$INSTALL_DIR/$APP_BUNDLE"
     if [[ -d "$DESTINATION" ]]; then
         BACKUP_DIR="$(mktemp -d /private/tmp/snip2pin-previous.XXXXXX)"
-        BACKUP_APP="$BACKUP_DIR/Snip2Pin.backup"
+        BACKUP_APP="$BACKUP_DIR/Snip2Pin-Dev.backup"
         if "$MIGRATING"; then
             "$LSREGISTER" -u "$DESTINATION"
         fi
         mv "$DESTINATION" "$BACKUP_APP"
     fi
-    if ! mv "$INSTALL_DIR/Snip2Pin.app" "$DESTINATION"; then
+    if ! mv "$INSTALL_DIR/$APP_BUNDLE" "$DESTINATION"; then
         if [[ -n "${BACKUP_APP:-}" ]]; then
             mv "$BACKUP_APP" "$DESTINATION"
             "$LSREGISTER" -f "$DESTINATION"
@@ -83,7 +86,8 @@ if "$INSTALL"; then
     # Update only this app's metadata and notify Finder; do not restart Dock or Finder.
     touch "$DESTINATION"
     osascript -l JavaScript -e \
-        'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.noteFileSystemChanged("/Applications/Snip2Pin.app");'
+        'function run(argv) { ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.noteFileSystemChanged(argv[0]); }' \
+        "$DESTINATION"
     printf 'Installed: %s\n' "$DESTINATION"
 fi
 printf 'Built: %s\n' "$APP_DIR"

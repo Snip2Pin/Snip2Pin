@@ -74,7 +74,7 @@ pub fn locale(ctx: &egui::Context) -> Locale {
 }
 
 macro_rules! catalogue {
-    ($($key:ident => ($en:literal, $zh:literal)),+ $(,)?) => {
+    ($($key:ident => ($en:expr, $zh:expr)),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Text { $($key),+ }
         impl Locale {
@@ -92,8 +92,8 @@ macro_rules! catalogue {
 
 catalogue! {
     DragToReorder => ("Drag to reorder", "拖动调整列表顺序"),
-    WindowTitle => ("Snip2Pin", "Snip2Pin · 截图置顶"),
-    StartupFailed => ("Snip2Pin couldn't start", "无法启动 Snip2Pin"),
+    WindowTitle => (crate::APP_NAME, if crate::LOCAL_DEV { "Snip2Pin Dev · 截图置顶" } else { "Snip2Pin · 截图置顶" }),
+    StartupFailed => (if crate::LOCAL_DEV { "Snip2Pin Dev couldn't start" } else { "Snip2Pin couldn't start" }, if crate::LOCAL_DEV { "无法启动 Snip2Pin Dev" } else { "无法启动 Snip2Pin" }),
     System => ("Follow system", "跟随系统"),
     Light => ("Light", "浅色"),
     Dark => ("Dark", "深色"),
@@ -113,7 +113,7 @@ catalogue! {
     RecordShortcut => ("Press a new shortcut. Esc cancels.", "按下新的组合键，Esc 取消。"),
     ShortcutWaiting => ("Press keys…", "请按组合键…"),
     PermissionTitle => ("Screen recording access needed", "需要屏幕录制权限"),
-    PermissionHelp => ("Allow Snip2Pin in system settings, then return here to continue.", "打开系统设置，允许 Snip2Pin 后返回这里继续。"),
+    PermissionHelp => (if crate::LOCAL_DEV { "Allow Snip2Pin Dev in system settings, then return here to continue." } else { "Allow Snip2Pin in system settings, then return here to continue." }, if crate::LOCAL_DEV { "打开系统设置，允许 Snip2Pin Dev 后返回这里继续。" } else { "打开系统设置，允许 Snip2Pin 后返回这里继续。" }),
     OpenSettings => ("Open permission settings", "打开授权设置"),
     RestartHelp => ("If access is allowed but capture still fails, reopen the app.", "已允许但仍不可用时，请重新打开应用。"),
     Restart => ("Reopen app", "重新打开应用"),
@@ -135,7 +135,7 @@ catalogue! {
     ReservedUnlockShortcut => ("This combination is reserved for unlocking all pins.", "此组合键用于解锁全部贴图，请选择其他截图快捷键。"),
     UnlockShortcutError => ("Could not register the unlock shortcut: {value}", "无法注册全局解锁快捷键：{value}"),
     PinZoomHint => ("Pin too small? Press + to enlarge.", "贴图太小？按 + 放大"),
-    Quit => ("Quit Snip2Pin", "退出 Snip2Pin"),
+    Quit => (if crate::LOCAL_DEV { "Quit Snip2Pin Dev" } else { "Quit Snip2Pin" }, if crate::LOCAL_DEV { "退出 Snip2Pin Dev" } else { "退出 Snip2Pin" }),
     Copy => ("Copy", "复制"),
     RestoreSize => ("Restore original size", "恢复原始尺寸"),
     Close => ("Close", "关闭"),

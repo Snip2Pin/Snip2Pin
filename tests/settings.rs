@@ -7,22 +7,46 @@ use snip2pin::{
 #[test]
 fn app_identity_and_config_directory_are_independent_of_repository_owner() {
     let dirs = directories::BaseDirs::new().expect("configuration root");
+    let root = dirs.config_dir().join("Snip2Pin");
+    let root = if snip2pin::LOCAL_DEV {
+        root.join("dev")
+    } else {
+        root
+    };
     assert_eq!(
         snip2pin::settings::path(),
-        Some(dirs.config_dir().join("Snip2Pin").join("preferences.toml"))
+        Some(root.join("preferences.toml"))
     );
     let plist = include_str!("../packaging/macos/Info.plist");
     assert!(plist.contains(&format!(
         "<key>CFBundleIdentifier</key><string>{}</string>",
-        snip2pin::APP_ID
+        "io.github.Snip2Pin.Snip2Pin"
     )));
     let desktop = include_str!("../packaging/linux/io.github.Snip2Pin.Snip2Pin.desktop");
     assert!(
         desktop
             .lines()
-            .any(|line| line == format!("StartupWMClass={}", snip2pin::APP_ID))
+            .any(|line| line == "StartupWMClass=io.github.Snip2Pin.Snip2Pin")
     );
-    assert_eq!(snip2pin::APP_NAME, "Snip2Pin");
+    if snip2pin::LOCAL_DEV {
+        assert_eq!(snip2pin::APP_NAME, "Snip2Pin Dev");
+        assert_eq!(snip2pin::APP_ID, "io.github.Snip2Pin.Snip2Pin.dev");
+        for locale in [
+            snip2pin::i18n::Locale::English,
+            snip2pin::i18n::Locale::Chinese,
+        ] {
+            for text in [
+                snip2pin::i18n::Text::WindowTitle,
+                snip2pin::i18n::Text::PermissionHelp,
+                snip2pin::i18n::Text::Quit,
+            ] {
+                assert!(locale.text(text).contains("Snip2Pin Dev"));
+            }
+        }
+    } else {
+        assert_eq!(snip2pin::APP_NAME, "Snip2Pin");
+        assert_eq!(snip2pin::APP_ID, "io.github.Snip2Pin.Snip2Pin");
+    }
 }
 
 #[test]

@@ -117,7 +117,7 @@ impl Tray {
         let icon = icon()?;
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
-            .with_tooltip("Snip2Pin");
+            .with_tooltip(snip2pin::APP_NAME);
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_templated(icon);
         #[cfg(not(target_os = "macos"))]

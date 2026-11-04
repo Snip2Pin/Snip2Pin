@@ -13,7 +13,7 @@ use snip2pin::ui;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Snip2Pin: {error}");
+        eprintln!("{}: {error}", snip2pin::APP_NAME);
         #[cfg(target_os = "windows")]
         platform::show_startup_error(&error.to_string());
         std::process::exit(1);
@@ -24,7 +24,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
     let action = arguments.next();
     if action.as_deref() == Some("--version") {
-        println!("Snip2Pin {}", env!("CARGO_PKG_VERSION"));
+        if arguments.next().as_deref() == Some("--app-id") {
+            println!("{}", snip2pin::APP_ID);
+        } else {
+            println!("{} {}", snip2pin::APP_NAME, env!("CARGO_PKG_VERSION"));
+        }
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -60,7 +64,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let relaunch = Arc::new(Mutex::new(None));
     let relaunch_request = relaunch.clone();
     eframe::run_native(
-        "Snip2Pin",
+        snip2pin::APP_NAME,
         platform::window_options(options),
         Box::new(|cc| Ok(Box::new(app::Snip2Pin::new(cc, relaunch_request)))),
     )?;

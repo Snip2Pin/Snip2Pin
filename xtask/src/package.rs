@@ -379,9 +379,23 @@ pub fn build(target: &str, profile: &str) -> Result {
 }
 
 pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result {
+    macos_bundle_for(binary, destination, variant, false)
+}
+
+pub fn macos_dev_bundle(binary: &Path, destination: &Path, variant: &str) -> Result {
+    macos_bundle_for(binary, destination, variant, true)
+}
+
+fn macos_bundle_for(binary: &Path, destination: &Path, variant: &str, local_dev: bool) -> Result {
     if !["line", "metal"].contains(&variant) {
         return Err("unknown icon".into());
     }
+    let (name, id) = macos_identity(local_dev);
+    // The executable and bundle must agree. In particular, release packaging
+    // must never wrap a local development binary in the production identity.
+    // Start with --version so older binaries also exit without opening a GUI.
+    let binary_id = output(Command::new(binary).args(["--version", "--app-id"]))?;
+    verify_macos_identity(&binary_id, local_dev)?;
     let resources = destination.join("Contents/Resources");
     fs::create_dir_all(&resources)?;
     execute(
@@ -405,6 +419,9 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
             format!("packaging/macos/{locale}.lproj/InfoPlist.strings"),
             directory.join("InfoPlist.strings"),
         )?;
+        if local_dev {
+            macos_dev_localization(&directory.join("InfoPlist.strings"), locale)?;
+        }
     }
     let icon = if variant == "line" {
         "AppIcon-Line"
@@ -413,6 +430,9 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     };
     let build = output(Command::new("git").args(["rev-list", "--count", "HEAD"]))?;
     for (key, value) in [
+        ("CFBundleName", name.into()),
+        ("CFBundleDisplayName", name.into()),
+        ("CFBundleIdentifier", id.into()),
         ("CFBundleShortVersionString", version()?),
         ("CFBundleVersion", build),
         ("CFBundleIconFile", icon.into()),
@@ -445,6 +465,44 @@ pub fn macos_bundle(binary: &Path, destination: &Path, variant: &str) -> Result 
     )?;
     fs::remove_dir_all(iconset)?;
     execute(Command::new("plutil").arg("-lint").arg(plist))?;
+    Ok(())
+}
+
+fn macos_identity(local_dev: bool) -> (&'static str, &'static str) {
+    if local_dev {
+        ("Snip2Pin Dev", "io.github.Snip2Pin.Snip2Pin.dev")
+    } else {
+        ("Snip2Pin", "io.github.Snip2Pin.Snip2Pin")
+    }
+}
+
+fn macos_dev_localization(path: &Path, locale: &str) -> Result {
+    let display_name = match locale {
+        "zh-Hans" => "Snip2Pin Dev · 截图置顶",
+        _ => "Snip2Pin Dev",
+    };
+    // plutil cannot write the source OpenStep format. Convert the generated
+    // copy to a supported bundle-resource format before changing the name.
+    execute(
+        Command::new("plutil")
+            .args(["-convert", "binary1"])
+            .arg(path),
+    )?;
+    execute(
+        Command::new("plutil")
+            .args(["-replace", "CFBundleDisplayName", "-string", display_name])
+            .arg(path),
+    )
+}
+
+fn verify_macos_identity(binary_id: &str, local_dev: bool) -> Result {
+    let (_, expected) = macos_identity(local_dev);
+    if binary_id != expected {
+        return Err(format!(
+            "binary identity {binary_id:?} does not match bundle identity {expected}"
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -838,6 +896,49 @@ fn verify_version(binary: &Path, version: &str) -> Result {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn development_localizations_accept_source_strings_and_preserve_permission_text() {
+        let directory = tempfile::tempdir().expect("isolated localized resources");
+        for (locale, name) in [
+            ("en", "Snip2Pin Dev"),
+            ("zh-Hans", "Snip2Pin Dev · 截图置顶"),
+        ] {
+            let source = crate::root()
+                .unwrap()
+                .join(format!("packaging/macos/{locale}.lproj/InfoPlist.strings"));
+            let resource = directory.path().join(format!("{locale}.strings"));
+            std::fs::copy(&source, &resource).unwrap();
+            let read = |path: &std::path::Path, key: &str| {
+                crate::output(
+                    std::process::Command::new("plutil")
+                        .args(["-extract", key, "raw", "-o", "-"])
+                        .arg(path),
+                )
+                .unwrap()
+            };
+            let description = read(&source, "NSScreenCaptureUsageDescription");
+            super::macos_dev_localization(&resource, locale)
+                .expect("convert and name generated resource");
+            assert_eq!(read(&resource, "CFBundleDisplayName"), name);
+            assert_eq!(
+                read(&resource, "NSScreenCaptureUsageDescription"),
+                description
+            );
+        }
+    }
+
+    #[test]
+    fn macos_packaging_rejects_crossed_development_and_production_identities() {
+        assert!(super::verify_macos_identity("io.github.Snip2Pin.Snip2Pin", false).is_ok());
+        assert!(super::verify_macos_identity("io.github.Snip2Pin.Snip2Pin.dev", true).is_ok());
+        assert!(super::verify_macos_identity("io.github.Snip2Pin.Snip2Pin.dev", false).is_err());
+        assert!(super::verify_macos_identity("io.github.Snip2Pin.Snip2Pin", true).is_err());
+        assert!(super::verify_macos_identity("", false).is_err());
+        assert!(super::verify_macos_identity("other.application", true).is_err());
+        assert!(super::verify_macos_identity("Snip2Pin 0.9.0", false).is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -8,7 +8,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
 - 主页采用紧凑直达布局，使用系统原生边缘拖拽调整窗口大小：一个截图主按钮，快捷键与主题、图标、开机自启直接可见；版本与 GitHub Releases 入口固定在底部。长快捷键可换行，小窗口内容可滚动，不把设置拆成多页，不增加常驻操作说明。
-- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
+- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置根目录只使用 `Snip2Pin`，发行应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持大小写）；产品身份与仓库所有者无关。本地 macOS 开发版是明确例外：显示名 `Snip2Pin Dev`（中文 `Snip2Pin Dev · 截图置顶`），标识 `io.github.Snip2Pin.Snip2Pin.dev`，固定安装到 `/Applications/Snip2Pin Dev.app`，设置放在 `Snip2Pin/dev`，使用独立自启入口；不覆盖正式版及其授权。
 - 网页交互演示使用 GitHub Pages，复用实际 Rust/WASM 界面；建立并验证页面之前，不添加尚不存在的演示链接。
 - 公开演示使用 `cargo xtask preview-site` 构建，只打包生成的网页资源、开源字体及许可声明，不上传本机系统字体、源码目录、配置或凭据。字体来源固定版本并校验 SHA-256，子集化后保留许可和版权、使用独立字体名称。网页字体不进入原生应用资源。
 - `pages.yml` 对 PR 只构建检查，仅从 `main` 部署到 `github-pages` 环境；网页资源可随主分支更新，不触发应用发版、签名、标签或 GitHub Release。网站部署权限仅授予部署任务，不使用 `release` 环境或本机身份。
@@ -323,15 +323,20 @@ Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 Do not commit private screenshots, credentials, toolchains, caches, or build output.
 Explicitly requested README illustrations may use generated public sample images
 from the shared UI sandbox; label their source and keep binary assets in Git LFS.
-Keep macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
+Keep the release macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
 Settings use the platform configuration root plus `Snip2Pin`; local macOS signing
 material uses `~/Library/Application Support/Snip2Pin/signing`, outside the repo.
 Reuse the existing certificate; do not regenerate credentials during a rename.
 An explicitly requested identifier change uses `--install --migrate-identity`,
 which preserves the certificate requirement; later updates use ordinary `--install`.
-`build.sh --install` performs a local development update. Formal distribution
-uses the manual workflows documented in docs/workflow.md, production signing
+`build.sh --install` enables `local-dev` and updates only `Snip2Pin Dev.app` with
+bundle ID `io.github.Snip2Pin.Snip2Pin.dev`, settings under `Snip2Pin/dev`, and
+build artifacts under `target/local-dev`. The runtime identity, localized names,
+bundle metadata, signing requirement, registration and login entry must agree.
+macOS packaging checks the binary identity and rejects a development executable
+in a release bundle. The release installation and its permissions stay intact.
+Formal distribution uses the manual workflows documented in docs/workflow.md, production signing
 and notarization only when `signed` is explicitly selected; default `unverified`
 packages are not Apple-notarized. Never use the local development certificate to release.
 
