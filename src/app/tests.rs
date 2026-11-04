@@ -14,6 +14,9 @@ fn app() -> Snip2Pin {
         phase: Phase::Idle,
         gate: CaptureGate::default(),
         capture_worker: None,
+        display_generation: Arc::new(AtomicU64::new(0)),
+        #[cfg(target_os = "macos")]
+        _display_observer: None,
         layers: BTreeMap::new(),
         active_display: None,
         pins: BTreeMap::new(),
@@ -709,6 +712,61 @@ fn capture_initially_highlights_the_display_under_the_cursor() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn display_resize_during_selection_cannot_block_escape_or_keep_intercepting_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let id = app.gate.begin().expect("capture starts");
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    app.demo = false;
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let viewport = layer_id(0);
+    let callback = root.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .unwrap();
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1440.0, 900.0),
+        )),
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut output = ctx.run_ui(input, |ui| callback(ui));
+    output.textures_delta.clear();
+    // Deliver child events as the root does, without invoking native focus or cursor APIs.
+    app.demo = true;
+    while let Ok(event) = app.events.try_recv() {
+        app.handle_event(event, &ctx);
+    }
+    assert!(
+        matches!(app.phase, Phase::Idle),
+        "changed display dimensions must not trap Escape behind the size guard"
+    );
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    assert_eq!(
+        root.viewport_output[&viewport].builder.mouse_passthrough,
+        Some(true),
+        "cancelled layers must release desktop input"
+    );
+    assert!(app.pins.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn reconnected_display_refreshes_reused_layer_before_accepting_pointer_input() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -842,6 +900,234 @@ fn reconnected_display_refreshes_reused_layer_before_accepting_pointer_input() {
         assert_eq!(pin.initial.min, egui::Pos2::from(display.position()));
         app.reset_capture(&ctx);
     }
+}
+
+#[test]
+fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins() {
+    for selecting in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        let mut fixture = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let id = app.gate.begin().unwrap();
+            app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
+            app.selection_action(
+                id,
+                0,
+                overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100,
+                }),
+                ui.ctx(),
+            );
+            app.pins[&1]
+                .first_frame_drawn
+                .store(true, Ordering::Release);
+            app.reset_capture(ui.ctx());
+            app.set_pin_locked(1, true, ui.ctx());
+        });
+        fixture.textures_delta.clear();
+        let preserved = app.pins[&1].pixels.clone();
+        let mut snapshot = capture::demo();
+        snapshot.display.id = 9;
+        snapshot.display.origin = [-680.0, 0.0];
+        let pixels = Arc::downgrade(&snapshot.pixels);
+        let id = app.gate.begin().unwrap();
+        app.phase = Phase::Capturing;
+        if selecting {
+            app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+        } else {
+            app.layers.insert(9, Layer::idle(snapshot.display.clone()));
+            app.sender.send(Event::DisplaysChanged).unwrap();
+            app.sender
+                .send(Event::Ready {
+                    request_id: id,
+                    result: Ok(vec![snapshot]),
+                    pointer: None,
+                })
+                .unwrap();
+        }
+        let mut old = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        old.textures_delta.clear();
+        if selecting {
+            // The notification may be queued after an old selection action,
+            // although it already invalidated the native display generation.
+            app.sender
+                .send(Event::Selection {
+                    request_id: id,
+                    display_id: 9,
+                    action: overlay::Action::Select(geometry::PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 20,
+                        height: 20,
+                    }),
+                })
+                .unwrap();
+            app.sender.send(Event::DisplaysChanged).unwrap();
+        }
+        app.sender
+            .send(Event::Selection {
+                request_id: id,
+                display_id: 9,
+                action: overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 20,
+                    height: 20,
+                }),
+            })
+            .unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+            eframe::App::ui(&mut app, ui, &mut frame);
+        });
+        output.textures_delta.clear();
+        assert!(matches!(app.phase, Phase::Idle));
+        assert_eq!(app.gate.active(), None);
+        assert_eq!(app.active_display, None);
+        assert!(
+            pixels.upgrade().is_none(),
+            "old capture pixels must be released"
+        );
+        assert_eq!(app.pins.len(), 1);
+        assert!(app.pins[&1].locked());
+        assert!(Arc::ptr_eq(&app.pins[&1].pixels, &preserved));
+        assert_eq!(app.layers.keys().copied().collect::<Vec<_>>(), vec![0]);
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+        assert!(
+            !output.viewport_output.contains_key(&layer_id(9)),
+            "the backend must retire the removed display viewport"
+        );
+        assert_eq!(
+            output.viewport_output[&layer_id(0)]
+                .builder
+                .mouse_passthrough,
+            Some(true)
+        );
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::OutputCommand::CopyImage(_)))
+        );
+        // The old native callback must not focus, reposition or revive a layer.
+        let viewport = layer_id(9);
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut stale = ctx.run_ui(input, |ui| {
+            old.viewport_output[&viewport]
+                .viewport_ui_cb
+                .as_ref()
+                .unwrap()(ui)
+        });
+        stale.textures_delta.clear();
+        assert!(
+            stale.viewport_output.get(&viewport).is_none_or(|viewport| {
+                !viewport.commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        ViewportCommand::Focus
+                            | ViewportCommand::OuterPosition(_)
+                            | ViewportCommand::InnerSize(_)
+                            | ViewportCommand::Visible(true)
+                            | ViewportCommand::MousePassthrough(false)
+                    )
+                })
+            }),
+            "a retired callback must not restore input, focus or geometry"
+        );
+        assert!(app.events.try_recv().is_err());
+    }
+}
+
+#[test]
+fn display_refresh_failure_releases_layers_and_new_topology_stays_idle() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    setup.textures_delta.clear();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.refresh_displays(ui.ctx(), || Err("display query fixture failure".into()));
+        app.show_layers(ui.ctx());
+    });
+    output.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layers.is_empty());
+    assert!(!output.viewport_output.contains_key(&layer_id(0)));
+    let mut added = capture::demo().display;
+    added.id = 9;
+    added.origin = [680.0, -420.0];
+    for _ in 0..2 {
+        app.refresh_displays(&ctx, || Ok(vec![added.clone(), capture::demo().display]));
+        assert!(matches!(app.phase, Phase::Idle));
+        assert_eq!(app.layers.len(), 2);
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+        assert!(
+            app.capture_worker.is_none(),
+            "display changes cannot trigger a screenshot"
+        );
+    }
+    let next = app
+        .gate
+        .begin()
+        .expect("capture remains available after topology changes");
+    let mut snapshot = capture::demo();
+    snapshot.display = added;
+    app.accept_capture(next, Ok(vec![snapshot]), None, &ctx);
+    assert_eq!(app.active_display, Some(9));
+}
+
+#[test]
+fn display_change_releases_input_even_when_home_only_runs_logic() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    app.home_visible = false;
+    let id = app.gate.begin().unwrap();
+    let mut snapshot = capture::demo();
+    snapshot.display.id = 9;
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    let mut published = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    published.textures_delta.clear();
+    app.sender.send(Event::DisplaysChanged).unwrap();
+    let mut frame = eframe::Frame::_new_kittest();
+    let logic = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut frame);
+    });
+    assert!(matches!(app.phase, Phase::Idle));
+    let retired = &logic.viewport_commands[&layer_id(9)];
+    assert!(retired.contains(&ViewportCommand::MousePassthrough(true)));
+    assert!(retired.contains(&ViewportCommand::Close));
+    assert!(
+        logic.viewport_commands[&ViewportId::ROOT]
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    let mut complete = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    complete.textures_delta.clear();
+    assert!(!complete.viewport_output.contains_key(&layer_id(9)));
+    assert_eq!(
+        complete.viewport_output[&layer_id(0)]
+            .builder
+            .mouse_passthrough,
+        Some(true)
+    );
+    assert!(!app.home_visible, "hot-plug must not activate Home");
 }
 
 #[test]

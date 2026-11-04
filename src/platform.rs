@@ -82,6 +82,10 @@ pub mod macos_icon;
 #[path = "platform/macos_access.rs"]
 pub mod macos_access;
 
+#[cfg(target_os = "macos")]
+#[path = "platform/macos_displays.rs"]
+pub mod macos_displays;
+
 /// macOS window content uses whole native points. Snap selection in source
 /// pixels when a point contains an integral number of pixels. Synthetic or
 /// non-integral capture densities retain the source-pixel grid instead.

@@ -104,6 +104,7 @@ catalogue! {
     Subtitle => ("Auto-copy. Pin right where you selected.", "自动复制，留在框选原位。"),
     Capture => ("Capture & pin", "截图并置顶"),
     Capturing => ("Capturing · Esc to cancel", "正在截图 · Esc 取消"),
+    DisplaysChanged => ("Display layout changed. Start a new capture.", "显示器布局已变化，请重新截图。"),
     CancelCapture => ("Cancel capture", "取消截图"),
     ContinueCapture => ("Allow access & continue", "授权后继续截图"),
     CaptureHelp => ("Drag to select; Esc cancels. Drag pins to move, resize at the edges. Hover to copy, lock or close.", "拖动框选，Esc 取消。拖动贴图移动，边缘缩放。悬停贴图可复制、锁定或关闭。"),
