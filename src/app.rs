@@ -224,19 +224,25 @@ enum Phase {
 
 struct Layer {
     display: Display,
+    generation: u64,
     selection: Option<Arc<Mutex<overlay::Selection>>>,
     positioned: Arc<AtomicBool>,
     paint_pending: bool,
 }
 
 impl Layer {
-    fn idle(display: Display) -> Self {
+    fn idle(display: Display, generation: u64) -> Self {
         Self {
             display,
+            generation,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
             paint_pending: false,
         }
+    }
+
+    fn viewport_id(&self) -> ViewportId {
+        ViewportId::from_hash_of(("selection", self.display.id, self.generation))
     }
 }
 
@@ -406,7 +412,7 @@ impl Snip2Pin {
         let layers: BTreeMap<_, _> = displays
             .unwrap_or_default()
             .into_iter()
-            .map(|display| (display.id, Layer::idle(display)))
+            .map(|display| (display.id, Layer::idle(display, 0)))
             .collect();
         let tray = if demo {
             None
@@ -1030,16 +1036,16 @@ impl Snip2Pin {
             worker.cancel();
         }
         let was_selecting = matches!(self.phase, Phase::Selecting { .. });
-        for (&display_id, layer) in &mut self.layers {
+        for layer in self.layers.values_mut() {
             layer.selection = None;
-            ctx.request_repaint_of(layer_id(display_id));
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::MousePassthrough(true));
         }
         self.phase = Phase::Idle;
         self.active_display = None;
         if was_selecting && !self.demo {
             platform::finish_capture(ctx);
         }
-        ctx.request_repaint_of(ViewportId::ROOT);
+        self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
     }
 
     fn refresh_displays(
@@ -1050,10 +1056,16 @@ impl Snip2Pin {
         // Frozen images and coordinates belong to the old topology. Release
         // input before querying the replacement; never capture automatically.
         let was_capturing = !matches!(self.phase, Phase::Idle);
-        self.display_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self
+            .display_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         self.cancel_capture(ctx);
-        for &display in self.layers.keys() {
-            ctx.send_viewport_cmd_to(layer_id(display), ViewportCommand::MousePassthrough(true));
+        for layer in self.layers.values() {
+            // Retire every old surface, including displays whose physical IDs
+            // survived. A pass-through window can still show an old blue frame.
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::MousePassthrough(true));
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::Close);
         }
         let displays = match read() {
             Ok(displays) => {
@@ -1069,15 +1081,8 @@ impl Snip2Pin {
         };
         let layers = displays
             .into_iter()
-            .map(|display| (display.id, Layer::idle(display)))
+            .map(|display| (display.id, Layer::idle(display, generation)))
             .collect::<BTreeMap<_, _>>();
-        for display in self
-            .layers
-            .keys()
-            .filter(|display| !layers.contains_key(display))
-        {
-            ctx.send_viewport_cmd_to(layer_id(*display), ViewportCommand::Close);
-        }
         self.layers = layers;
         self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
     }
@@ -1108,6 +1113,7 @@ impl Snip2Pin {
         });
         match result {
             Ok(snapshots) if !snapshots.is_empty() => {
+                let generation = self.display_generation.load(Ordering::Acquire);
                 self.active_display = pointer
                     .and_then(|point| snapshots.iter().find(|shot| shot.display.contains(point)))
                     .or_else(|| snapshots.first())
@@ -1136,6 +1142,7 @@ impl Snip2Pin {
                             display.id,
                             Layer {
                                 display,
+                                generation,
                                 selection: Some(Arc::new(Mutex::new(selection))),
                                 positioned: Arc::new(AtomicBool::new(false)),
                                 paint_pending: false,
@@ -1171,8 +1178,8 @@ impl Snip2Pin {
                     });
                     self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
                 }
-                for &display_id in self.layers.keys() {
-                    ctx.request_repaint_of(layer_id(display_id));
+                for layer in self.layers.values() {
+                    ctx.request_repaint_of(layer.viewport_id());
                 }
                 ctx.request_repaint_of(ViewportId::ROOT);
             }
@@ -1215,8 +1222,8 @@ impl Snip2Pin {
         if matches!(action, overlay::Action::Activate) {
             if self.layers.contains_key(&display_id) {
                 self.active_display = Some(display_id);
-                for &display in self.layers.keys() {
-                    ctx.request_repaint_of(layer_id(display));
+                for layer in self.layers.values() {
+                    ctx.request_repaint_of(layer.viewport_id());
                 }
             }
             return;
@@ -1428,13 +1435,13 @@ impl Snip2Pin {
     }
 
     fn paint_pending_layers(&mut self, ctx: &egui::Context) {
-        for (&display, layer) in &mut self.layers {
+        for layer in self.layers.values_mut() {
             if std::mem::take(&mut layer.paint_pending) {
                 ctx.send_viewport_cmd_to(
-                    layer_id(display),
+                    layer.viewport_id(),
                     ViewportCommand::RequestPaintWhileHidden,
                 );
-                ctx.request_repaint_of(layer_id(display));
+                ctx.request_repaint_of(layer.viewport_id());
             }
         }
     }
@@ -1928,8 +1935,8 @@ impl Snip2Pin {
             ctx.request_repaint_of(pin_menu_id());
         }
         if self.layer_presentation.is_some() {
-            for &display in self.layers.keys() {
-                ctx.request_repaint_of(layer_id(display));
+            for layer in self.layers.values() {
+                ctx.request_repaint_of(layer.viewport_id());
             }
         }
     }
@@ -1987,17 +1994,21 @@ impl Snip2Pin {
             _ => None,
         };
         let demo = self.demo;
-        let display_generation = self.display_generation.load(Ordering::Acquire);
         for (&display_id, layer) in &self.layers {
             let current_display_generation = self.display_generation.clone();
-            let selection = layer.selection.clone();
+            let display_generation = layer.generation;
+            let current = current_display_generation.load(Ordering::Acquire) == display_generation;
+            let viewport_id = layer.viewport_id();
+            // The layer owns the session. Retained framework callbacks must not
+            // keep a cancelled selection (and its highlight) alive.
+            let selection = layer.selection.as_ref().map(Arc::downgrade);
             let positioned = layer.positioned.clone();
             let hint_raised = self
                 .layer_presentation
                 .as_ref()
                 .map(|hint| hint.raised.clone());
             let events = self.sender.clone();
-            let active = selection.is_some();
+            let active = current && selection.is_some();
             let preparing_capture = active
                 && cfg!(target_os = "windows")
                 && self
@@ -2046,7 +2057,10 @@ impl Snip2Pin {
                 // Dock overlays cover X11 panels without reserving work space.
                 .with_window_type(egui::X11WindowType::Dock)
                 .with_visible(
-                    cfg!(target_os = "macos") || (active && !preparing_capture) || hint_ready,
+                    current
+                        && (cfg!(target_os = "macos")
+                            || (active && !preparing_capture)
+                            || hint_ready),
                 );
             if let Some(bounds) = bounds {
                 let bounds = if cfg!(target_os = "windows") {
@@ -2055,7 +2069,7 @@ impl Snip2Pin {
                             input
                                 .raw
                                 .viewports
-                                .get(&layer_id(display_id))
+                                .get(&viewport_id)
                                 .and_then(|viewport| viewport.native_pixels_per_point)
                         })
                         .unwrap_or(display.scale);
@@ -2073,10 +2087,15 @@ impl Snip2Pin {
                     .with_inner_size(bounds.size());
             }
             ctx.show_viewport_deferred(
-                layer_id(display_id),
+                viewport_id,
                 builder.with_mouse_passthrough(!active || preparing_capture),
                 move |ui, _| {
-                    if current_display_generation.load(Ordering::Acquire) != display_generation {
+                    if retire_stale_layer(ui.ctx(), display_generation, &current_display_generation)
+                    {
+                        return;
+                    }
+                    let selection = selection.as_ref().and_then(|selection| selection.upgrade());
+                    if active && selection.is_none() {
                         return;
                     }
                     // Cancellation remains reachable while native display
@@ -2097,6 +2116,12 @@ impl Snip2Pin {
                     }
                     // Root logic reports any pin-adapter failure.
                     let _ = platform::prepare_floating_windows();
+                    // AppKit preparation can synchronously deliver a display
+                    // notification. Recheck before any geometry or painting.
+                    if retire_stale_layer(ui.ctx(), display_generation, &current_display_generation)
+                    {
+                        return;
+                    }
                     if cfg!(target_os = "macos") && !positioned.swap(true, Ordering::AcqRel) {
                         // AppKit can relocate a retained layer when a display is
                         // disconnected. An unchanged builder does not restore it
@@ -2667,8 +2692,18 @@ impl eframe::App for Snip2Pin {
     }
 }
 
+#[cfg(test)]
 fn layer_id(display_id: u32) -> ViewportId {
-    ViewportId::from_hash_of(("selection", display_id))
+    ViewportId::from_hash_of(("selection", display_id, 0_u64))
+}
+
+fn retire_stale_layer(ctx: &egui::Context, generation: u64, current: &AtomicU64) -> bool {
+    if current.load(Ordering::Acquire) == generation {
+        return false;
+    }
+    ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(true));
+    ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+    true
 }
 
 fn register_shortcut(

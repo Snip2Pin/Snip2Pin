@@ -486,6 +486,7 @@ fn background_bootstrap_keeps_capture_layers_available_without_painting_home() {
         display_id,
         Layer {
             display,
+            generation: 0,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
             paint_pending: false,
@@ -939,7 +940,8 @@ fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins()
         if selecting {
             app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
         } else {
-            app.layers.insert(9, Layer::idle(snapshot.display.clone()));
+            app.layers
+                .insert(9, Layer::idle(snapshot.display.clone(), 0));
             app.sender.send(Event::DisplaysChanged).unwrap();
             app.sender
                 .send(Event::Ready {
@@ -1003,7 +1005,7 @@ fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins()
             "the backend must retire the removed display viewport"
         );
         assert_eq!(
-            output.viewport_output[&layer_id(0)]
+            output.viewport_output[&app.layers[&0].viewport_id()]
                 .builder
                 .mouse_passthrough,
             Some(true)
@@ -1051,6 +1053,90 @@ fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins()
 }
 
 #[test]
+fn display_notification_cannot_republish_a_highlight_from_the_old_capture() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let snapshot = capture::demo_windows(None);
+    let bounds =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
+    let viewport = layer_id(0);
+    let paint = |app: &Snip2Pin, viewport: ViewportId| {
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        root.textures_delta.clear();
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(bounds),
+            events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| {
+            root.viewport_output[&viewport]
+                .viewport_ui_cb
+                .as_ref()
+                .unwrap()(ui)
+        });
+        output.textures_delta.clear();
+        output
+    };
+    let highlighted = |output: &egui::FullOutput| {
+        output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == ui::style::OVERLAY.highlight
+    ))
+    };
+    assert!(
+        highlighted(&paint(&app, viewport)),
+        "the fixture must first draw a real capture highlight"
+    );
+    // Reconfiguration can be delivered during native window preparation, after
+    // root event draining but before that pass publishes deferred callbacks.
+    app.display_generation.fetch_add(1, Ordering::AcqRel);
+    app.sender.send(Event::DisplaysChanged).unwrap();
+    let invalid = paint(&app, viewport);
+    assert!(
+        !highlighted(&invalid),
+        "republishing must not attach the new display generation to old screenshot pixels and window regions"
+    );
+    assert!(
+        !invalid.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::Focus)
+    );
+    assert_eq!(
+        invalid.viewport_output[&viewport].builder.visible,
+        Some(false)
+    );
+    assert_eq!(
+        invalid.viewport_output[&viewport].builder.mouse_passthrough,
+        Some(true)
+    );
+    let mut cleared = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    cleared.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(
+        !cleared.viewport_output.contains_key(&viewport),
+        "the previously highlighted native surface must be retired even when its display remains connected"
+    );
+    let current = app.layers[&0].viewport_id();
+    assert_ne!(
+        current, viewport,
+        "the new idle layer must not reuse the old painted window"
+    );
+    assert!(!highlighted(&paint(&app, current)));
+}
+
+#[test]
 fn display_refresh_failure_releases_layers_and_new_topology_stays_idle() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -1091,6 +1177,61 @@ fn display_refresh_failure_releases_layers_and_new_topology_stays_idle() {
 }
 
 #[test]
+fn cancelled_capture_callback_cannot_keep_painting_window_highlights() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let snapshot = capture::demo_windows(None);
+    let bounds =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
+    let viewport = app.layers[&0].viewport_id();
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let callback = root.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .unwrap()
+        .clone();
+    app.reset_capture(&ctx);
+    // A hidden Home can leave this old deferred callback installed until the
+    // requested full pass publishes the idle callback. It must already be dead.
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        screen_rect: Some(bounds),
+        events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut output = ctx.run_ui(input, |ui| callback(ui));
+    output.textures_delta.clear();
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == ui::style::OVERLAY.highlight
+    )), "a cancelled callback must not highlight windows under the pointer");
+    assert!(
+        !output.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::Focus)
+    );
+    assert!(
+        output.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::MousePassthrough(true))
+    );
+    assert!(
+        output.viewport_output[&ViewportId::ROOT]
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    assert!(app.events.try_recv().is_err());
+}
+
+#[test]
 fn display_change_releases_input_even_when_home_only_runs_logic() {
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
@@ -1122,7 +1263,7 @@ fn display_change_releases_input_even_when_home_only_runs_logic() {
     complete.textures_delta.clear();
     assert!(!complete.viewport_output.contains_key(&layer_id(9)));
     assert_eq!(
-        complete.viewport_output[&layer_id(0)]
+        complete.viewport_output[&app.layers[&0].viewport_id()]
             .builder
             .mouse_passthrough,
         Some(true)
@@ -2699,6 +2840,7 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
             display.id,
             Layer {
                 display,
+                generation: 0,
                 selection: None,
                 positioned: Arc::new(AtomicBool::new(true)),
                 paint_pending: false,
@@ -5711,6 +5853,7 @@ fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
         0,
         Layer {
             display: capture::demo().display,
+            generation: 0,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
             paint_pending: false,
