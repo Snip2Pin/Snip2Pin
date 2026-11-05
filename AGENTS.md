@@ -4,7 +4,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 ## 项目原则
 
-- 中文显示名为 `Snip2Pin · 截图置顶`，英文显示名为 `Snip2Pin`；界面、打包本地化资源及文档保持一致。
+- 中文显示名为 `Snip2Pin · 截图置顶`，英文显示名为 `Snip2Pin`；界面、打包本地化资源及文档保持一致。运行时名称统一引用 `APP_NAME`，带名称的翻译通过模板填入，不在各使用处重复判断正式版或开发版。
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
 - 主页采用紧凑直达布局，使用系统原生边缘拖拽调整窗口大小：一个截图主按钮，快捷键与主题、图标、开机自启直接可见；版本与 GitHub Releases 入口固定在底部。长快捷键可换行，小窗口内容可滚动，不把设置拆成多页，不增加常驻操作说明。
@@ -165,8 +165,9 @@ and hyphens), a nonempty Chinese or English description, and at most 100 charact
 Examples: `fix(pin): 修复顶部按钮位置`, `ci: automate release signing`.
 Use `!` and a `BREAKING CHANGE:` body/footer when changing incompatible behavior.
 Explain why in the body when useful; avoid vague subjects such as `update` or `fix`.
-PR descriptions state the problem/result, scope, validation and unverified native
-coverage; link issues when applicable. `messages.yml` checks open PR titles on edits and
+Keep PR titles short and descriptions/progress comments to problem and fix lists;
+omit conversations and local debugging details. Link issues when applicable.
+`messages.yml` checks open PR titles on edits and
 all branch commits on updates; fix/reword invalid commits before merging.
 Squash commits use the validated PR title and PR body. Do not bypass the required
 `messages` check. Conventional formatting never authorizes a version bump/release.

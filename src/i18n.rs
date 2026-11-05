@@ -90,10 +90,20 @@ macro_rules! catalogue {
     };
 }
 
+// Brand-bearing translations share APP_NAME and keep the static text API.
+// Each translated template is expanded once, when first displayed.
+macro_rules! app_text {
+    ($template:literal) => {{
+        static TEXT: std::sync::LazyLock<String> =
+            std::sync::LazyLock::new(|| $template.replace("{app}", crate::APP_NAME));
+        TEXT.as_str()
+    }};
+}
+
 catalogue! {
     DragToReorder => ("Drag to reorder", "拖动调整列表顺序"),
-    WindowTitle => (crate::APP_NAME, if crate::LOCAL_DEV { "Snip2Pin Dev · 截图置顶" } else { "Snip2Pin · 截图置顶" }),
-    StartupFailed => (if crate::LOCAL_DEV { "Snip2Pin Dev couldn't start" } else { "Snip2Pin couldn't start" }, if crate::LOCAL_DEV { "无法启动 Snip2Pin Dev" } else { "无法启动 Snip2Pin" }),
+    WindowTitle => (crate::APP_NAME, app_text!("{app} · 截图置顶")),
+    StartupFailed => (app_text!("{app} couldn't start"), app_text!("无法启动 {app}")),
     System => ("Follow system", "跟随系统"),
     Light => ("Light", "浅色"),
     Dark => ("Dark", "深色"),
@@ -114,7 +124,7 @@ catalogue! {
     RecordShortcut => ("Press a new shortcut. Esc cancels.", "按下新的组合键，Esc 取消。"),
     ShortcutWaiting => ("Press keys…", "请按组合键…"),
     PermissionTitle => ("Screen recording access needed", "需要屏幕录制权限"),
-    PermissionHelp => (if crate::LOCAL_DEV { "Allow Snip2Pin Dev in system settings, then return here to continue." } else { "Allow Snip2Pin in system settings, then return here to continue." }, if crate::LOCAL_DEV { "打开系统设置，允许 Snip2Pin Dev 后返回这里继续。" } else { "打开系统设置，允许 Snip2Pin 后返回这里继续。" }),
+    PermissionHelp => (app_text!("Allow {app} in system settings, then return here to continue."), app_text!("打开系统设置，允许 {app} 后返回这里继续。")),
     OpenSettings => ("Open permission settings", "打开授权设置"),
     RestartHelp => ("If access is allowed but capture still fails, reopen the app.", "已允许但仍不可用时，请重新打开应用。"),
     Restart => ("Reopen app", "重新打开应用"),
@@ -136,7 +146,7 @@ catalogue! {
     ReservedUnlockShortcut => ("This combination is reserved for unlocking all pins.", "此组合键用于解锁全部贴图，请选择其他截图快捷键。"),
     UnlockShortcutError => ("Could not register the unlock shortcut: {value}", "无法注册全局解锁快捷键：{value}"),
     PinZoomHint => ("Pin too small? Press + to enlarge.", "贴图太小？按 + 放大"),
-    Quit => (if crate::LOCAL_DEV { "Quit Snip2Pin Dev" } else { "Quit Snip2Pin" }, if crate::LOCAL_DEV { "退出 Snip2Pin Dev" } else { "退出 Snip2Pin" }),
+    Quit => (app_text!("Quit {app}"), app_text!("退出 {app}")),
     Copy => ("Copy", "复制"),
     RestoreSize => ("Restore original size", "恢复原始尺寸"),
     Close => ("Close", "关闭"),
@@ -206,7 +216,7 @@ catalogue! {
     AppUnregistered => ("The system has not registered this application identifier.", "系统未登记当前应用标识。"),
     AppRegistration => ("System registration points to another app. Installation is incomplete.", "系统登记指向了另一份应用，安装未完成。"),
     QuitSettings => ("Quit System Settings before migrating the app identifier to avoid cached permissions. Routine updates do not require this.", "请先完全退出系统设置，再迁移应用标识，避免授权页缓存旧身份。日常更新不需要此步骤。"),
-    QuitApp => ("Quit Snip2Pin from the menu bar before migrating its identifier.", "请先从菜单栏退出 Snip2Pin，再迁移应用标识。"),
+    QuitApp => (app_text!("Quit {app} from the menu bar before migrating its identifier."), app_text!("请先从菜单栏退出 {app}，再迁移应用标识。")),
 }
 
 /// Keep our messages typed until presentation; backend diagnostics remain intact.
@@ -315,6 +325,18 @@ mod tests {
                 Locale::English.text(*key).matches("{value}").count(),
                 Locale::Chinese.text(*key).matches("{value}").count()
             );
+        }
+        for key in [
+            Text::WindowTitle,
+            Text::StartupFailed,
+            Text::PermissionHelp,
+            Text::Quit,
+            Text::QuitApp,
+        ] {
+            for locale in [Locale::English, Locale::Chinese] {
+                assert!(locale.text(key).contains(crate::APP_NAME), "{key:?}");
+                assert!(!locale.text(key).contains("{app}"), "{key:?}");
+            }
         }
         let message = Text::TextureLimit.with(128);
         assert!(message.render(Locale::Chinese).contains("128 像素"));

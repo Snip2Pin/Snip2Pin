@@ -477,9 +477,10 @@ fn macos_identity(local_dev: bool) -> (&'static str, &'static str) {
 }
 
 fn macos_dev_localization(path: &Path, locale: &str) -> Result {
+    let (name, _) = macos_identity(true);
     let display_name = match locale {
-        "zh-Hans" => "Snip2Pin Dev · 截图置顶",
-        _ => "Snip2Pin Dev",
+        "zh-Hans" => format!("{name} · 截图置顶"),
+        _ => name.into(),
     };
     // plutil cannot write the source OpenStep format. Convert the generated
     // copy to a supported bundle-resource format before changing the name.
@@ -490,7 +491,7 @@ fn macos_dev_localization(path: &Path, locale: &str) -> Result {
     )?;
     execute(
         Command::new("plutil")
-            .args(["-replace", "CFBundleDisplayName", "-string", display_name])
+            .args(["-replace", "CFBundleDisplayName", "-string", &display_name])
             .arg(path),
     )
 }
