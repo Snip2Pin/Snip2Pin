@@ -14,6 +14,10 @@ fn app() -> Snip2Pin {
         phase: Phase::Idle,
         gate: CaptureGate::default(),
         capture_worker: None,
+        display_generation: Arc::new(AtomicU64::new(0)),
+        applied_display_generation: 0,
+        #[cfg(target_os = "macos")]
+        _display_observer: None,
         layers: BTreeMap::new(),
         active_display: None,
         pins: BTreeMap::new(),
@@ -126,13 +130,21 @@ fn capture_paints_hidden_then_mapped_before_accepting_input() {
         let mut input = egui::RawInput {
             viewport_id: layer_id(0),
             screen_rect: Some(bounds),
-            events: vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
+            events: vec![
+                egui::Event::PointerMoved(bounds.center()),
+                egui::Event::PointerButton {
+                    pos: bounds.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: bounds.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
             ..Default::default()
         };
         input
@@ -183,6 +195,53 @@ fn capture_paints_hidden_then_mapped_before_accepting_input() {
     assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
     app.reset_capture(&ctx);
     assert!(app.layer_presentation.is_none());
+}
+
+#[test]
+fn escape_cancels_before_capture_layer_preparation() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let request = app.gate.begin().unwrap();
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    let viewport = app.layers[&0].viewport_id();
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut frame = ctx.run_ui(input, |ui| {
+        root.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap()(ui);
+    });
+    frame.textures_delta.clear();
+    assert!(frame.shapes.is_empty());
+    let events = app.events.try_iter().collect::<Vec<_>>();
+    assert!(
+        matches!(events.as_slice(), [Event::Selection {
+        request_id, action: overlay::Action::Cancel, ..
+    }] if *request_id == request),
+        "Escape must cancel instead of acknowledging a preparation frame"
+    );
+    for event in events {
+        app.handle_event(event, &ctx);
+    }
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layer_presentation.is_none());
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
 }
 
 #[test]
@@ -483,6 +542,7 @@ fn background_bootstrap_keeps_capture_layers_available_without_painting_home() {
         display_id,
         Layer {
             display,
+            generation: 0,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
             paint_pending: false,
@@ -681,7 +741,7 @@ fn selection_layer_does_not_retry_native_position_changes() {
             .iter()
             .filter(|command| matches!(command, ViewportCommand::OuterPosition(_)))
             .count();
-        assert_eq!(count, usize::from(!cfg!(target_os = "macos") && index == 0));
+        assert_eq!(count, usize::from(index == 0));
     }
 }
 
@@ -705,6 +765,927 @@ fn capture_initially_highlights_the_display_under_the_cursor() {
         Some(9),
         "the pointer chooses the screen, not display ordering or the launcher"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn display_resize_during_selection_cannot_block_escape_or_keep_intercepting_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let id = app.gate.begin().expect("capture starts");
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    app.demo = false;
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let viewport = layer_id(0);
+    let callback = root.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .unwrap();
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1440.0, 900.0),
+        )),
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut output = ctx.run_ui(input, |ui| callback(ui));
+    output.textures_delta.clear();
+    // Deliver child events as the root does, without invoking native focus or cursor APIs.
+    app.demo = true;
+    while let Ok(event) = app.events.try_recv() {
+        app.handle_event(event, &ctx);
+    }
+    assert!(
+        matches!(app.phase, Phase::Idle),
+        "changed display dimensions must not trap Escape behind the size guard"
+    );
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    assert_eq!(
+        root.viewport_output[&viewport].builder.mouse_passthrough,
+        Some(true),
+        "cancelled layers must release desktop input"
+    );
+    assert!(app.pins.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reconnected_display_refreshes_reused_layer_before_accepting_pointer_input() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let viewport = layer_id(9);
+    // AppKit can move a prepared layer onto the remaining screen while its
+    // display is unplugged. Reconnecting with the same layout leaves the
+    // framework's cached builder unchanged, even though the native frame moved.
+    for _ in 0..2 {
+        app.demo = false;
+        let mut external = capture::demo();
+        external.display.id = 9;
+        external.display.origin = [-680.0, 0.0];
+        let display = external.display.clone();
+        let id = app.gate.begin().expect("capture starts");
+        app.accept_capture(id, Ok(vec![capture::demo(), external]), None, &ctx);
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        root.textures_delta.clear();
+        let callback = root.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .expect("production selection callback");
+        let stale_bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(stale_bounds),
+            events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| callback(ui));
+        output.textures_delta.clear();
+        let commands = &output.viewport_output[&viewport].commands;
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                ViewportCommand::OuterPosition(position)
+                    if *position == egui::Pos2::from(display.position())
+            )),
+            "reused capture layer must return to its source display"
+        );
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                ViewportCommand::InnerSize(size)
+                    if *size == egui::Vec2::from(display.logical_size())
+            )),
+            "stale native size must be refreshed before the size guard"
+        );
+        assert!(
+            app.events.try_recv().is_err(),
+            "stale input must be ignored"
+        );
+        // A second stale frame cannot retry placement or consume input.
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(stale_bounds),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| callback(ui));
+        output.textures_delta.clear();
+        assert!(
+            !output.viewport_output[&viewport]
+                .commands
+                .iter()
+                .any(|command| {
+                    matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    )
+                })
+        );
+        // Deliver the actual post-resize bounds, then move and click on the
+        // external screen through the production callback and event dispatcher.
+        app.demo = true;
+        for pressed in [None, Some(true), Some(false)] {
+            let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+            root.textures_delta.clear();
+            let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, display.logical_size().into());
+            let point = egui::pos2(40.0, 40.0);
+            let mut events = vec![egui::Event::PointerMoved(point)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let mut input = egui::RawInput {
+                viewport_id: viewport,
+                screen_rect: Some(bounds),
+                events,
+                ..Default::default()
+            };
+            input.viewports.insert(
+                viewport,
+                egui::ViewportInfo {
+                    inner_rect: Some(bounds),
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                root.viewport_output[&viewport]
+                    .viewport_ui_cb
+                    .as_ref()
+                    .unwrap()(ui);
+                while let Ok(event) = app.events.try_recv() {
+                    app.handle_event(event, ui.ctx());
+                }
+            });
+            output.textures_delta.clear();
+            assert_eq!(
+                app.active_display,
+                Some(9),
+                "hover must activate the external display"
+            );
+        }
+        let pin = app
+            .pins
+            .values()
+            .next_back()
+            .expect("external screen captured");
+        assert_eq!(pin.pixels.resolution(), capture::demo().pixels.resolution());
+        assert_eq!(pin.initial.min, egui::Pos2::from(display.position()));
+        app.reset_capture(&ctx);
+    }
+}
+
+#[test]
+fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins() {
+    for selecting in [false, true] {
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let mut app = app();
+        let mut fixture = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let id = app.gate.begin().unwrap();
+            app.accept_capture(id, Ok(vec![capture::demo()]), None, ui.ctx());
+            app.selection_action(
+                id,
+                0,
+                overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100,
+                }),
+                ui.ctx(),
+            );
+            app.pins[&1]
+                .first_frame_drawn
+                .store(true, Ordering::Release);
+            app.reset_capture(ui.ctx());
+            app.set_pin_locked(1, true, ui.ctx());
+        });
+        fixture.textures_delta.clear();
+        let preserved = app.pins[&1].pixels.clone();
+        let mut snapshot = capture::demo();
+        snapshot.display.id = 9;
+        snapshot.display.origin = [-680.0, 0.0];
+        let pixels = Arc::downgrade(&snapshot.pixels);
+        let id = app.gate.begin().unwrap();
+        app.phase = Phase::Capturing;
+        if selecting {
+            app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+        } else {
+            app.layers
+                .insert(9, Layer::idle(snapshot.display.clone(), 0));
+            app.sender.send(Event::DisplaysChanged).unwrap();
+            app.sender
+                .send(Event::Ready {
+                    request_id: id,
+                    result: Ok(vec![snapshot]),
+                    pointer: None,
+                })
+                .unwrap();
+        }
+        let mut old = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        old.textures_delta.clear();
+        if selecting {
+            // The notification may be queued after an old selection action,
+            // although it already invalidated the native display generation.
+            app.sender
+                .send(Event::Selection {
+                    request_id: id,
+                    display_id: 9,
+                    action: overlay::Action::Select(geometry::PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 20,
+                        height: 20,
+                    }),
+                })
+                .unwrap();
+            app.sender.send(Event::DisplaysChanged).unwrap();
+        }
+        app.sender
+            .send(Event::Selection {
+                request_id: id,
+                display_id: 9,
+                action: overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 20,
+                    height: 20,
+                }),
+            })
+            .unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut frame = eframe::Frame::_new_kittest();
+            eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+            eframe::App::ui(&mut app, ui, &mut frame);
+        });
+        output.textures_delta.clear();
+        assert!(matches!(app.phase, Phase::Idle));
+        assert_eq!(app.gate.active(), None);
+        assert_eq!(app.active_display, None);
+        assert!(
+            pixels.upgrade().is_none(),
+            "old capture pixels must be released"
+        );
+        assert_eq!(app.pins.len(), 1);
+        assert!(app.pins[&1].locked());
+        assert!(Arc::ptr_eq(&app.pins[&1].pixels, &preserved));
+        assert_eq!(app.layers.keys().copied().collect::<Vec<_>>(), vec![0]);
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+        assert!(
+            !output.viewport_output.contains_key(&layer_id(9)),
+            "the backend must retire the removed display viewport"
+        );
+        assert_eq!(
+            output.viewport_output[&app.layers[&0].viewport_id()]
+                .builder
+                .mouse_passthrough,
+            Some(true)
+        );
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::OutputCommand::CopyImage(_)))
+        );
+        // The old native callback must not focus, reposition or revive a layer.
+        let viewport = layer_id(9);
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut stale = ctx.run_ui(input, |ui| {
+            old.viewport_output[&viewport]
+                .viewport_ui_cb
+                .as_ref()
+                .unwrap()(ui)
+        });
+        stale.textures_delta.clear();
+        assert!(
+            stale.viewport_output.get(&viewport).is_none_or(|viewport| {
+                !viewport.commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        ViewportCommand::Focus
+                            | ViewportCommand::OuterPosition(_)
+                            | ViewportCommand::InnerSize(_)
+                            | ViewportCommand::Visible(true)
+                            | ViewportCommand::MousePassthrough(false)
+                    )
+                })
+            }),
+            "a retired callback must not restore input, focus or geometry"
+        );
+        assert!(app.events.try_recv().is_err());
+    }
+}
+
+#[test]
+fn display_notification_during_refresh_keeps_replacement_layers_stale() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let generation = app.display_generation.clone();
+    let sender = app.sender.clone();
+    app.refresh_displays(&ctx, || {
+        generation.fetch_add(1, Ordering::AcqRel);
+        sender.send(Event::DisplaysChanged).unwrap();
+        Ok(vec![capture::demo().display])
+    });
+    assert!(!app.display_layout_is_current());
+    app.begin_capture(&ctx);
+    assert!(
+        app.capture_worker.is_none(),
+        "an unsettled layout cannot start capture"
+    );
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    output.textures_delta.clear();
+    let stale = app.layers[&0].viewport_id();
+    assert_eq!(output.viewport_output[&stale].builder.visible, Some(false));
+    assert_eq!(
+        output.viewport_output[&stale].builder.mouse_passthrough,
+        Some(true)
+    );
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+    });
+    output.textures_delta.clear();
+    assert!(app.display_layout_is_current());
+    assert_ne!(app.layers[&0].viewport_id(), stale);
+    assert!(!output.viewport_output.contains_key(&stale));
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
+fn display_notification_before_pin_frame_cannot_complete_an_expired_capture() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    app.selection_action(
+        id,
+        0,
+        overlay::Action::Select(geometry::PixelRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 20,
+        }),
+        &ctx,
+    );
+    app.display_generation.fetch_add(1, Ordering::AcqRel);
+    app.handle_event(
+        Event::PinFrameDrawn {
+            session: id,
+            pin_id: 1,
+        },
+        &ctx,
+    );
+    assert!(
+        app.pins.is_empty(),
+        "an invalidated pending pin must be released"
+    );
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
+fn display_reconfiguration_clears_every_capture_and_hint_state() {
+    for state in [
+        "idle",
+        "capturing",
+        "selecting",
+        "pending_pin",
+        "preparing_hint",
+        "visible_hint",
+    ] {
+        for no_displays in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let mut app = tiny_pin_app(&ctx);
+            app.home_visible = false;
+            app.set_pin_locked(1, true, &ctx);
+            let preserved = app.pins[&1].pixels.clone();
+            let id = app.gate.begin().unwrap();
+            app.phase = Phase::Capturing;
+            if matches!(state, "selecting" | "pending_pin") {
+                app.accept_capture(id, Ok(vec![capture::demo_windows(None)]), None, &ctx);
+                if state == "pending_pin" {
+                    app.selection_action(
+                        id,
+                        0,
+                        overlay::Action::Select(geometry::PixelRect {
+                            x: 0,
+                            y: 0,
+                            width: 20,
+                            height: 20,
+                        }),
+                        &ctx,
+                    );
+                }
+            } else if state != "capturing" {
+                app.reset_capture(&ctx);
+            }
+            if matches!(state, "preparing_hint" | "visible_hint") {
+                app.show_unlock_hint(1, None, &ctx);
+                if state == "visible_hint" {
+                    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
+                    app.handle_event(
+                        Event::LayerFrameDrawn {
+                            hint: hint.clone(),
+                            display: 0,
+                            bounds: test_hint_bounds(),
+                        },
+                        &ctx,
+                    );
+                    app.handle_event(Event::LayerVisibleFrameDrawn { hint, display: 0 }, &ctx);
+                }
+            }
+            let old_hint = app
+                .layer_presentation
+                .as_ref()
+                .map(|hint| hint.raised.clone());
+            let old_viewport = app.layers[&0].viewport_id();
+            // Reuse a physical ID while changing its origin, size and density;
+            // then repeat invalidation before the new surfaces have painted.
+            for pass in 0..3 {
+                app.refresh_displays(&ctx, || {
+                    Ok(if no_displays {
+                        Vec::new()
+                    } else {
+                        vec![Display {
+                            id: 0,
+                            origin: [-800.0, -600.0],
+                            size: [800.0, 600.0],
+                            scale: 1.0 + pass as f32 * 0.5,
+                        }]
+                    })
+                });
+            }
+            if let Some(hint) = old_hint {
+                app.handle_event(
+                    Event::LayerFrameDrawn {
+                        hint: hint.clone(),
+                        display: 0,
+                        bounds: test_hint_bounds(),
+                    },
+                    &ctx,
+                );
+                app.handle_event(Event::LayerVisibleFrameDrawn { hint, display: 0 }, &ctx);
+            }
+            app.handle_event(
+                Event::Ready {
+                    request_id: id,
+                    result: Ok(vec![capture::demo()]),
+                    pointer: None,
+                },
+                &ctx,
+            );
+            app.handle_event(
+                Event::PinFrameDrawn {
+                    session: id,
+                    pin_id: 2,
+                },
+                &ctx,
+            );
+            app.selection_action(id, 0, overlay::Action::Activate, &ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_layers(ui.ctx());
+                app.paint_pending_layers(ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert!(matches!(app.phase, Phase::Idle), "state={state}");
+            assert!(app.layer_presentation.is_none());
+            assert_eq!(
+                app.pins.len(),
+                1,
+                "only the completed pin survives, state={state}"
+            );
+            assert!(app.pins[&1].locked());
+            assert!(Arc::ptr_eq(&app.pins[&1].pixels, &preserved));
+            assert!(!app.home_visible);
+            assert!(!output.viewport_output.contains_key(&old_viewport));
+            for layer in app.layers.values() {
+                assert!(layer.selection.is_none());
+                assert_eq!(
+                    output.viewport_output[&layer.viewport_id()]
+                        .builder
+                        .mouse_passthrough,
+                    Some(true)
+                );
+            }
+            assert!(
+                app.capture_worker.is_none(),
+                "hot-plug cannot start a capture"
+            );
+        }
+    }
+}
+
+#[test]
+fn display_change_refreshes_existing_pin_controls_without_changing_placement() {
+    for (origin, size, scale) in [
+        ([0.0, 0.0], [680.0, 420.0], 1.0),
+        ([-680.0, -420.0], [800.0, 600.0], 2.0),
+        ([0.0, 0.0], [320.0, 240.0], 1.25),
+    ] {
+        for locked in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let mut app = app();
+            let mut snapshot = capture::demo();
+            snapshot.display.origin = [1200.0, 100.0];
+            let session = app.gate.begin().unwrap();
+            app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+            app.selection_action(
+                session,
+                0,
+                overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 300,
+                    height: 200,
+                }),
+                &ctx,
+            );
+            app.reset_capture(&ctx);
+            app.set_pin_locked(1, locked, &ctx);
+            let initial = app.pins[&1].initial;
+            let pixels = app.pins[&1].pixels.clone();
+            let display = Display {
+                id: 9,
+                origin,
+                size,
+                scale,
+            };
+            let actual = egui::Rect::from_min_size(
+                egui::Pos2::from(display.position()) + egui::vec2(10.0, 10.0),
+                egui::vec2(180.0, 100.0),
+            );
+            // The compositor relocates a surviving pin. The app refreshes only
+            // the work areas used by its controls, never the window geometry.
+            app.refresh_displays(&ctx, || Ok(vec![display]));
+            let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+            root.textures_delta.clear();
+            assert_eq!(
+                root.viewport_output[&pin_id(1)].builder.position,
+                Some(initial.min)
+            );
+            let mut input = egui::RawInput {
+                viewport_id: pin_id(1),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
+                events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))],
+                ..Default::default()
+            };
+            input.viewports.insert(
+                pin_id(1),
+                egui::ViewportInfo {
+                    inner_rect: Some(actual),
+                    outer_rect: Some(actual),
+                    native_pixels_per_point: Some(scale),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                root.viewport_output[&pin_id(1)]
+                    .viewport_ui_cb
+                    .as_ref()
+                    .unwrap()(ui);
+            });
+            output.textures_delta.clear();
+            let buttons = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                            if rect.rect.size() == egui::Vec2::splat(pin::METRICS.button)
+                    )
+                })
+                .count();
+            assert_eq!(
+                buttons,
+                pin::Control::ALL.len(),
+                "controls must remain reachable on the replacement display"
+            );
+            assert!(
+                output.viewport_output[&pin_id(1)]
+                    .commands
+                    .iter()
+                    .all(|command| !matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    ))
+            );
+            assert_eq!(app.pins[&1].initial, initial);
+            assert_eq!(app.pins[&1].locked(), locked);
+            assert!(Arc::ptr_eq(&app.pins[&1].pixels, &pixels));
+        }
+    }
+}
+
+#[test]
+fn display_notification_after_event_drain_rejects_ready_and_selection() {
+    for selecting in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let id = app.gate.begin().unwrap();
+        app.phase = Phase::Capturing;
+        if selecting {
+            app.accept_capture(id, Ok(vec![capture::demo_windows(None)]), None, &ctx);
+        }
+        // The root already took its event batch. A synchronous native call can
+        // now deliver a display notification before the next event is consumed.
+        app.display_generation.fetch_add(1, Ordering::AcqRel);
+        app.sender.send(Event::DisplaysChanged).unwrap();
+        let event = if selecting {
+            Event::Selection {
+                request_id: id,
+                display_id: 0,
+                action: overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 20,
+                    height: 20,
+                }),
+            }
+        } else {
+            Event::Ready {
+                request_id: id,
+                result: Ok(vec![capture::demo_windows(None)]),
+                pointer: None,
+            }
+        };
+        let mut event = Some(event);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            if let Some(event) = event.take() {
+                app.handle_event(event, ui.ctx());
+            }
+            app.show_layers(ui.ctx());
+        });
+        output.textures_delta.clear();
+        assert!(app.pins.is_empty(), "an expired crop must not create a pin");
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| { matches!(command, egui::OutputCommand::CopyImage(_)) }),
+            "an expired crop must not reach the clipboard"
+        );
+        assert!(
+            matches!(app.phase, Phase::Idle),
+            "late results must not revive selection"
+        );
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+    }
+}
+
+#[test]
+fn display_notification_cannot_republish_a_highlight_from_the_old_capture() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let snapshot = capture::demo_windows(None);
+    let bounds =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
+    let viewport = layer_id(0);
+    let paint = |app: &Snip2Pin, viewport: ViewportId| {
+        let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+        root.textures_delta.clear();
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            screen_rect: Some(bounds),
+            events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+            ..Default::default()
+        };
+        input
+            .viewports
+            .insert(viewport, egui::ViewportInfo::default());
+        let mut output = ctx.run_ui(input, |ui| {
+            root.viewport_output[&viewport]
+                .viewport_ui_cb
+                .as_ref()
+                .unwrap()(ui)
+        });
+        output.textures_delta.clear();
+        output
+    };
+    let highlighted = |output: &egui::FullOutput| {
+        output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == ui::style::OVERLAY.highlight
+    ))
+    };
+    assert!(
+        highlighted(&paint(&app, viewport)),
+        "the fixture must first draw a real capture highlight"
+    );
+    // Reconfiguration can be delivered during native window preparation, after
+    // root event draining but before that pass publishes deferred callbacks.
+    app.display_generation.fetch_add(1, Ordering::AcqRel);
+    app.sender.send(Event::DisplaysChanged).unwrap();
+    let invalid = paint(&app, viewport);
+    assert!(
+        !highlighted(&invalid),
+        "republishing must not attach the new display generation to old screenshot pixels and window regions"
+    );
+    assert!(
+        !invalid.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::Focus)
+    );
+    assert_eq!(
+        invalid.viewport_output[&viewport].builder.visible,
+        Some(false)
+    );
+    assert_eq!(
+        invalid.viewport_output[&viewport].builder.mouse_passthrough,
+        Some(true)
+    );
+    let mut cleared = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    cleared.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(
+        !cleared.viewport_output.contains_key(&viewport),
+        "the previously highlighted native surface must be retired even when its display remains connected"
+    );
+    let current = app.layers[&0].viewport_id();
+    assert_ne!(
+        current, viewport,
+        "the new idle layer must not reuse the old painted window"
+    );
+    assert!(!highlighted(&paint(&app, current)));
+}
+
+#[test]
+fn display_refresh_failure_releases_layers_and_new_topology_stays_idle() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    let mut setup = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    setup.textures_delta.clear();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        app.refresh_displays(ui.ctx(), || Err("display query fixture failure".into()));
+        app.show_layers(ui.ctx());
+    });
+    output.textures_delta.clear();
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layers.is_empty());
+    assert!(!output.viewport_output.contains_key(&layer_id(0)));
+    let mut added = capture::demo().display;
+    added.id = 9;
+    added.origin = [680.0, -420.0];
+    for _ in 0..2 {
+        app.refresh_displays(&ctx, || Ok(vec![added.clone(), capture::demo().display]));
+        assert!(matches!(app.phase, Phase::Idle));
+        assert_eq!(app.layers.len(), 2);
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
+        assert!(
+            app.capture_worker.is_none(),
+            "display changes cannot trigger a screenshot"
+        );
+    }
+    let next = app
+        .gate
+        .begin()
+        .expect("capture remains available after topology changes");
+    let mut snapshot = capture::demo();
+    snapshot.display = added;
+    app.accept_capture(next, Ok(vec![snapshot]), None, &ctx);
+    assert_eq!(app.active_display, Some(9));
+}
+
+#[test]
+fn cancelled_capture_callback_cannot_keep_painting_window_highlights() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let snapshot = capture::demo_windows(None);
+    let bounds =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, snapshot.display.logical_size().into());
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    #[cfg(target_os = "windows")]
+    prepare_capture_layers(&mut app, &ctx);
+    let viewport = app.layers[&0].viewport_id();
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let callback = root.viewport_output[&viewport]
+        .viewport_ui_cb
+        .as_ref()
+        .unwrap()
+        .clone();
+    app.reset_capture(&ctx);
+    // A hidden Home can leave this old deferred callback installed until the
+    // requested full pass publishes the idle callback. It must already be dead.
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        screen_rect: Some(bounds),
+        events: vec![egui::Event::PointerMoved(egui::pos2(40.0, 40.0))],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut output = ctx.run_ui(input, |ui| callback(ui));
+    output.textures_delta.clear();
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == ui::style::OVERLAY.highlight
+    )), "a cancelled callback must not highlight windows under the pointer");
+    assert!(
+        !output.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::Focus)
+    );
+    assert!(
+        output.viewport_output[&viewport]
+            .commands
+            .contains(&ViewportCommand::MousePassthrough(true))
+    );
+    assert!(
+        output.viewport_output[&ViewportId::ROOT]
+            .commands
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    assert!(app.events.try_recv().is_err());
+}
+
+#[test]
+fn display_change_releases_input_even_when_home_only_runs_logic() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    app.home_visible = false;
+    let id = app.gate.begin().unwrap();
+    let mut snapshot = capture::demo();
+    snapshot.display.id = 9;
+    app.accept_capture(id, Ok(vec![snapshot]), None, &ctx);
+    let mut published = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    published.textures_delta.clear();
+    app.sender.send(Event::DisplaysChanged).unwrap();
+    let mut frame = eframe::Frame::_new_kittest();
+    let logic = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+        eframe::App::logic(&mut app, ctx, &mut frame);
+    });
+    assert!(matches!(app.phase, Phase::Idle));
+    let retired = &logic.viewport_commands[&layer_id(9)];
+    assert!(retired.contains(&ViewportCommand::MousePassthrough(true)));
+    assert!(retired.contains(&ViewportCommand::Close));
+    assert!(
+        logic.viewport_commands[&ViewportId::ROOT]
+            .contains(&ViewportCommand::RequestPaintWhileHidden)
+    );
+    let mut complete = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+        eframe::App::ui(&mut app, ui, &mut frame);
+    });
+    complete.textures_delta.clear();
+    assert!(!complete.viewport_output.contains_key(&layer_id(9)));
+    assert_eq!(
+        complete.viewport_output[&app.layers[&0].viewport_id()]
+            .builder
+            .mouse_passthrough,
+        Some(true)
+    );
+    assert!(!app.home_visible, "hot-plug must not activate Home");
 }
 
 #[test]
@@ -2276,6 +3257,7 @@ fn unlock_notice_uses_the_pointed_display_layer_without_focus_or_capture() {
             display.id,
             Layer {
                 display,
+                generation: 0,
                 selection: None,
                 positioned: Arc::new(AtomicBool::new(true)),
                 paint_pending: false,
@@ -5288,6 +6270,7 @@ fn ready_and_cancel_repaint_warmed_selection_layers_without_pointer_events() {
         0,
         Layer {
             display: capture::demo().display,
+            generation: 0,
             selection: None,
             positioned: Arc::new(AtomicBool::new(false)),
             paint_pending: false,

@@ -30,7 +30,7 @@ Snip2Pin 使用短分支、PR 和三平台检查，只有用户明确要求时�
 用户仍能复现时继续在该 PR 排查，保留失败证据，不先合入再处理。
 验收结论对应具体提交；后续改动影响已验收行为时重新验证。完整记录放 PR 评论。
 
-PR 正文和评论只保留问题背景、设计依据、实现、修复内容及必要的验证结论和限制。
+PR 标题保持简短，正文和进度评论只列出问题列表、修复列表，不展开调试过程。
 技术评审发现放在对应 PR 评论；不得公开聊天内容、个人信息、偏好与授权经过、
 本地操作记录或内部协作与模型配置，也不直接粘贴内部评审报告。验收仅记录提交、
 平台、场景和技术结论；仓库只保留当前使用、开发、架构和维护文档。
@@ -47,8 +47,8 @@ PR 标题及分支内每个 commit 的标题使用 Conventional Commits：
 `docs`、`refactor`、`perf`、`test`、`build`、`ci`、`chore`、`revert`；scope
 使用小写字母、数字和连字符。描述可用中文或英文，整行不超过 100 字符且不能空白。
 例如 `fix(pin): 修复顶部按钮位置`、`ci: automate signing`。正文按需解释原因；
-不兼容变更使用 `!` 并在正文注明 `BREAKING CHANGE:`。PR 正文说明问题、结果、范围、
-关联 Issue 和验证缺口。独立 `messages.yml` 在开放 PR 更新和标题修改时检查，失败阻止合并；
+不兼容变更使用 `!` 并在正文注明 `BREAKING CHANGE:`。PR 正文只列问题与修复，必要时
+关联 Issue。独立 `messages.yml` 在开放 PR 更新和标题修改时检查，失败阻止合并；
 已关闭或合入的 PR 不再检查，避免删分支后修改说明触发无效的源码范围检查。
 修改不合规提交后使用安全的分支更新，不强推 main。squash commit 沿用 PR 标题和正文。
 
@@ -108,7 +108,15 @@ Rust 视图，使用生成图片，不提供真实截图、系统剪贴板、自
 网页宿主也在 `cargo test --workspace` 中运行：直接驱动同一 Rust 界面，验证焦点、菜单、
 快捷键录制、晚到截图结果、锁定与主题变化。跨端修改同时检查共享规则和宿主事件流，
 不能仅以共用绘制函数或 WASM 编译通过作为行为一致的证据。
-本地 `packaging/macos/build.sh --install` 使用优化构建；这属于开发安装，不是发版。
+本地 `packaging/macos/build.sh --install` 使用优化构建，固定安装到
+`/Applications/Snip2Pin Dev.app`，应用标识为 `io.github.Snip2Pin.Snip2Pin.dev`。
+开发版启用 `local-dev` Cargo feature，构建资源放在 `target/local-dev`，设置独立放在
+`~/Library/Application Support/Snip2Pin/dev`，自启入口使用开发标识且默认关闭。
+正式版仍为 `/Applications/Snip2Pin.app`，使用原有标识、设置和分发签名。
+两者分别申请截屏授权；测试时退出另一份，避免占用相同全局快捷键。
+后续修改继续运行同一安装命令，复用固定路径和本机证书，再打开开发版验证；
+不保证 macOS 永远不再询问权限，不清理或迁移正式版授权。这属于开发安装，不是发版。
+正式打包不启用 `local-dev`；macOS 打包工具核对可执行文件的 `--version --app-id`，拒绝混用身份。
 
 ### 本地 macOS 菜单资源
 

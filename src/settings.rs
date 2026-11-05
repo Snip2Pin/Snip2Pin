@@ -265,8 +265,12 @@ impl Preferences {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| {
-        dirs.config_dir()
-            .join(crate::APP_NAME)
-            .join("preferences.toml")
+        let root = dirs.config_dir().join("Snip2Pin");
+        let root = if crate::LOCAL_DEV {
+            root.join("dev")
+        } else {
+            root
+        };
+        root.join("preferences.toml")
     })
 }

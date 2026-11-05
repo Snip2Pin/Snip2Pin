@@ -49,6 +49,9 @@ fn run() -> Result {
         ["bundle-macos", binary, destination, variant] => {
             package::macos_bundle(Path::new(binary), Path::new(destination), variant)
         }
+        ["bundle-macos-dev", binary, destination, variant] => {
+            package::macos_dev_bundle(Path::new(binary), Path::new(destination), variant)
+        }
         ["verify", directory] => package::verify(Path::new(directory)).map(|_| ()),
         ["verify-native", directory, target, distribution] => package::verify_native(Path::new(directory), target, package::Distribution::parse(distribution)?),
         ["prepare-unverified", candidate, destination, target] => package::prepare_unverified(Path::new(candidate), Path::new(destination), target),
@@ -141,6 +144,16 @@ fn revision() -> Result<String> {
 fn check() -> Result {
     lint()?;
     execute(Command::new("cargo").args(["test", "--locked", "--workspace"]))?;
+    if cfg!(target_os = "macos") {
+        execute(Command::new("cargo").args([
+            "test",
+            "--locked",
+            "--package",
+            "snip2pin",
+            "--features",
+            "local-dev",
+        ]))?;
+    }
     // Windows cannot replace the running xtask executable.
     execute(Command::new("cargo").args([
         "build",
@@ -171,6 +184,18 @@ fn lint() -> Result {
     execute(Command::new("git").args(["diff", "--check"]))?;
     execute(Command::new("git").args(["diff", "--cached", "--check"]))?;
     if cfg!(target_os = "macos") {
+        execute(Command::new("cargo").args([
+            "clippy",
+            "--locked",
+            "--package",
+            "snip2pin",
+            "--features",
+            "local-dev",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ]))?;
         execute(Command::new("bash").args([
             "-n",
             "packaging/macos/build.sh",

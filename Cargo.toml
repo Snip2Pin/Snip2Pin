@@ -13,6 +13,10 @@ members = ["xtask", "preview"]
 default-members = ["."]
 resolver = "3"
 
+[features]
+# Separate identity for local macOS installs; never enabled by release packaging.
+local-dev = []
+
 # Windows deferred-viewport paint fairness: https://github.com/emilk/egui/pull/8650.
 # Keep direct and transitive egui types on the same immutable upstream source.
 [patch.crates-io]
@@ -44,7 +48,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2 = "0.6"
 block2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSWindow", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSScreen", "NSAppearance", "NSWorkspace", "NSRunningApplication", "NSCursor", "NSEvent", "NSNib", "NSMenu", "NSMenuItem", "NSAlert", "NSButton", "block2"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSUserDefaults", "NSData", "NSBundle", "NSURL", "NSAppleEventManager", "NSAppleEventDescriptor", "objc2-core-services"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSGeometry", "NSUserDefaults", "NSData", "NSBundle", "NSURL", "NSAppleEventManager", "NSAppleEventDescriptor", "NSNotification", "NSOperation", "block2", "objc2-core-services"] }
 plist = "1.8"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
@@ -91,6 +95,10 @@ harness = false
 
 [[test]]
 name = "macos_dock"
+harness = false
+
+[[test]]
+name = "macos_displays"
 harness = false
 
 [lints.rust]

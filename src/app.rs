@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -148,6 +148,7 @@ pub struct ObservedPosition {
 }
 
 pub enum Event {
+    DisplaysChanged,
     UnlockHint(u64),
     LayerFrameDrawn {
         hint: Arc<AtomicBool>,
@@ -223,9 +224,26 @@ enum Phase {
 
 struct Layer {
     display: Display,
+    generation: u64,
     selection: Option<Arc<Mutex<overlay::Selection>>>,
     positioned: Arc<AtomicBool>,
     paint_pending: bool,
+}
+
+impl Layer {
+    fn idle(display: Display, generation: u64) -> Self {
+        Self {
+            display,
+            generation,
+            selection: None,
+            positioned: Arc::new(AtomicBool::new(false)),
+            paint_pending: false,
+        }
+    }
+
+    fn viewport_id(&self) -> ViewportId {
+        ViewportId::from_hash_of(("selection", self.display.id, self.generation))
+    }
 }
 
 enum LayerPurpose {
@@ -301,6 +319,10 @@ pub struct Snip2Pin {
     phase: Phase,
     gate: CaptureGate,
     capture_worker: Option<capture::Worker>,
+    display_generation: Arc<AtomicU64>,
+    applied_display_generation: u64,
+    #[cfg(target_os = "macos")]
+    _display_observer: Option<platform::macos_displays::DisplayChanges>,
     layers: BTreeMap<u32, Layer>,
     active_display: Option<u32>,
     pins: BTreeMap<u64, Pin>,
@@ -391,17 +413,7 @@ impl Snip2Pin {
         let layers: BTreeMap<_, _> = displays
             .unwrap_or_default()
             .into_iter()
-            .map(|display| {
-                (
-                    display.id,
-                    Layer {
-                        display,
-                        selection: None,
-                        positioned: Arc::new(AtomicBool::new(false)),
-                        paint_pending: false,
-                    },
-                )
-            })
+            .map(|display| (display.id, Layer::idle(display, 0)))
             .collect();
         let tray = if demo {
             None
@@ -474,12 +486,40 @@ impl Snip2Pin {
                 platform::macos_drag::DragEvents::default()
             })
         };
+        let display_generation = Arc::new(AtomicU64::new(0));
+        #[cfg(target_os = "macos")]
+        let display_observer = if demo {
+            None
+        } else {
+            let generation = display_generation.clone();
+            let sender = sender.clone();
+            let ctx = cc.egui_ctx.clone();
+            match platform::macos_displays::DisplayChanges::install(move || {
+                generation.fetch_add(1, Ordering::AcqRel);
+                let _ = sender.send(Event::DisplaysChanged);
+                ctx.send_viewport_cmd_to(
+                    ViewportId::ROOT,
+                    ViewportCommand::RequestPaintWhileHidden,
+                );
+                ctx.request_repaint_of(ViewportId::ROOT);
+            }) {
+                Ok(observer) => Some(observer),
+                Err(error) => {
+                    message = Some(error);
+                    None
+                }
+            }
+        };
         Self {
             events,
             sender,
             phase: Phase::Idle,
             gate: CaptureGate::default(),
             capture_worker: None,
+            display_generation,
+            applied_display_generation: 0,
+            #[cfg(target_os = "macos")]
+            _display_observer: display_observer,
             layers,
             active_display: None,
             pins: BTreeMap::new(),
@@ -529,7 +569,10 @@ impl Snip2Pin {
         for id in self.pins.keys() {
             ui::pin::forget_input(ctx, *id);
         }
-        if !matches!(self.phase, Phase::Idle) || self.recording.blocks_input(ctx) {
+        if !matches!(self.phase, Phase::Idle)
+            || self.recording.blocks_input(ctx)
+            || !self.display_layout_is_current()
+        {
             return;
         }
         self.clear_layer_presentation(ctx);
@@ -643,6 +686,16 @@ impl Snip2Pin {
             return;
         }
         match event {
+            Event::DisplaysChanged => {
+                let demo = self.demo;
+                self.refresh_displays(ctx, move || {
+                    if demo {
+                        Ok(vec![capture::demo().display])
+                    } else {
+                        capture::displays()
+                    }
+                });
+            }
             Event::LayerFrameDrawn {
                 hint,
                 display,
@@ -793,7 +846,11 @@ impl Snip2Pin {
                 }
                 if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
                 {
-                    self.reset_capture(ctx);
+                    if self.display_layout_is_current() {
+                        self.reset_capture(ctx);
+                    } else {
+                        self.cancel_capture(ctx);
+                    }
                 }
             }
             #[cfg(target_os = "macos")]
@@ -988,16 +1045,76 @@ impl Snip2Pin {
             worker.cancel();
         }
         let was_selecting = matches!(self.phase, Phase::Selecting { .. });
-        for (&display_id, layer) in &mut self.layers {
+        for layer in self.layers.values_mut() {
             layer.selection = None;
-            ctx.request_repaint_of(layer_id(display_id));
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::MousePassthrough(true));
         }
         self.phase = Phase::Idle;
         self.active_display = None;
         if was_selecting && !self.demo {
             platform::finish_capture(ctx);
         }
-        ctx.request_repaint_of(ViewportId::ROOT);
+        self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
+    }
+
+    fn refresh_displays(
+        &mut self,
+        ctx: &egui::Context,
+        read: impl FnOnce() -> Result<Vec<Display>, Message>,
+    ) {
+        // Frozen images and coordinates belong to the old topology. Release
+        // input before querying the replacement; never capture automatically.
+        let was_capturing = !matches!(self.phase, Phase::Idle);
+        let generation = self
+            .display_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        self.applied_display_generation = generation;
+        self.cancel_capture(ctx);
+        for layer in self.layers.values() {
+            // Retire every old surface, including displays whose physical IDs
+            // survived. A pass-through window can still show an old blue frame.
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::MousePassthrough(true));
+            ctx.send_viewport_cmd_to(layer.viewport_id(), ViewportCommand::Close);
+        }
+        let displays = match read() {
+            Ok(displays) => {
+                if was_capturing {
+                    self.message = Some(Text::DisplaysChanged.into());
+                }
+                displays
+            }
+            Err(error) => {
+                self.message = Some(error);
+                Vec::new()
+            }
+        };
+        self.refresh_pin_work_areas(&displays, ctx);
+        let layers = displays
+            .into_iter()
+            .map(|display| (display.id, Layer::idle(display, generation)))
+            .collect::<BTreeMap<_, _>>();
+        self.layers = layers;
+        self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
+    }
+
+    fn display_layout_is_current(&self) -> bool {
+        self.applied_display_generation == self.display_generation.load(Ordering::Acquire)
+    }
+
+    fn refresh_pin_work_areas(&mut self, displays: &[Display], ctx: &egui::Context) {
+        if self.pins.is_empty() || displays.is_empty() {
+            return;
+        }
+        let areas = display_areas(displays, self.demo);
+        for (&id, pin) in &mut self.pins {
+            let areas = pin_work_areas(displays, &areas, pin.display_scale);
+            if let Some(area) = areas.first() {
+                pin.screen = *area;
+            }
+            pin.screen_areas = Arc::new(areas);
+            ctx.request_repaint_of(pin_id(id));
+        }
     }
 
     fn accept_capture(
@@ -1007,9 +1124,16 @@ impl Snip2Pin {
         pointer: Option<[f32; 2]>,
         ctx: &egui::Context,
     ) {
-        if !self.gate.complete(id) {
+        if self.gate.active() != Some(id) {
             return;
         }
+        // Notifications can arrive after root drained its event batch. Do not
+        // adopt the new epoch for an old result while invalidation is queued.
+        if !self.display_layout_is_current() {
+            self.cancel_capture(ctx);
+            return;
+        }
+        self.gate.complete(id);
         let result = result.and_then(|snapshots| {
             let limit = ctx.input(|input| input.max_texture_side);
             if snapshots.iter().any(|snapshot| {
@@ -1026,6 +1150,16 @@ impl Snip2Pin {
         });
         match result {
             Ok(snapshots) if !snapshots.is_empty() => {
+                let generation = self.applied_display_generation;
+                let displays = snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.display.clone())
+                    .collect::<Vec<_>>();
+                self.refresh_pin_work_areas(&displays, ctx);
+                if !self.display_layout_is_current() {
+                    self.cancel_capture(ctx);
+                    return;
+                }
                 self.active_display = pointer
                     .and_then(|point| snapshots.iter().find(|shot| shot.display.contains(point)))
                     .or_else(|| snapshots.first())
@@ -1054,6 +1188,7 @@ impl Snip2Pin {
                             display.id,
                             Layer {
                                 display,
+                                generation,
                                 selection: Some(Arc::new(Mutex::new(selection))),
                                 positioned: Arc::new(AtomicBool::new(false)),
                                 paint_pending: false,
@@ -1089,8 +1224,8 @@ impl Snip2Pin {
                     });
                     self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
                 }
-                for &display_id in self.layers.keys() {
-                    ctx.request_repaint_of(layer_id(display_id));
+                for layer in self.layers.values() {
+                    ctx.request_repaint_of(layer.viewport_id());
                 }
                 ctx.request_repaint_of(ViewportId::ROOT);
             }
@@ -1112,6 +1247,10 @@ impl Snip2Pin {
         action: overlay::Action,
         ctx: &egui::Context,
     ) {
+        if !self.display_layout_is_current() {
+            self.cancel_capture(ctx);
+            return;
+        }
         let Phase::Selecting {
             id: current,
             snapshots,
@@ -1133,8 +1272,8 @@ impl Snip2Pin {
         if matches!(action, overlay::Action::Activate) {
             if self.layers.contains_key(&display_id) {
                 self.active_display = Some(display_id);
-                for &display in self.layers.keys() {
-                    ctx.request_repaint_of(layer_id(display));
+                for layer in self.layers.values() {
+                    ctx.request_repaint_of(layer.viewport_id());
                 }
             }
             return;
@@ -1143,7 +1282,6 @@ impl Snip2Pin {
             && let Some(snapshot) = snapshots.iter().find(|shot| shot.display.id == display_id)
             && let Some(pixels) = capture::crop(&snapshot.pixels, rect)
         {
-            self.next_pin += 1;
             let placement = geometry::pin_placement(
                 rect,
                 snapshot.pixel_size(),
@@ -1151,12 +1289,6 @@ impl Snip2Pin {
                 snapshot.display.logical_size(),
             );
             let pixels = Arc::new(pixels);
-            let texture = ctx.load_texture(
-                format!("pin-{}", self.next_pin),
-                pixels.clone(),
-                egui::TextureOptions::LINEAR,
-            );
-            ctx.copy_image((*pixels).clone());
             let displays: Vec<_> = self
                 .layers
                 .values()
@@ -1173,21 +1305,20 @@ impl Snip2Pin {
                     // if its warmed layer is no longer in the topology snapshot.
                     display_areas(std::slice::from_ref(&snapshot.display), self.demo)[0]
                 });
-            let screen_areas = Arc::new(
-                displays
-                    .iter()
-                    .zip(areas)
-                    .map(|(display, area)| {
-                        // Normalize mixed-DPI bounds into the capture's coordinates.
-                        let factor = if cfg!(target_os = "macos") {
-                            1.0
-                        } else {
-                            display.scale / snapshot.display.scale
-                        };
-                        egui::Rect::from_min_max(area.min * factor, area.max * factor)
-                    })
-                    .collect(),
+            let screen_areas = Arc::new(pin_work_areas(&displays, &areas, snapshot.display.scale));
+            // Native work-area queries may deliver another display notification.
+            // Commit the crop only while its frozen coordinate space is valid.
+            if self.applied_display_generation != self.display_generation.load(Ordering::Acquire) {
+                self.cancel_capture(ctx);
+                return;
+            }
+            self.next_pin += 1;
+            let texture = ctx.load_texture(
+                format!("pin-{}", self.next_pin),
+                pixels.clone(),
+                egui::TextureOptions::LINEAR,
             );
+            ctx.copy_image((*pixels).clone());
             self.pins.insert(
                 self.next_pin,
                 Pin {
@@ -1346,19 +1477,21 @@ impl Snip2Pin {
     }
 
     fn paint_pending_layers(&mut self, ctx: &egui::Context) {
-        for (&display, layer) in &mut self.layers {
+        for layer in self.layers.values_mut() {
             if std::mem::take(&mut layer.paint_pending) {
                 ctx.send_viewport_cmd_to(
-                    layer_id(display),
+                    layer.viewport_id(),
                     ViewportCommand::RequestPaintWhileHidden,
                 );
-                ctx.request_repaint_of(layer_id(display));
+                ctx.request_repaint_of(layer.viewport_id());
             }
         }
     }
 
     fn show_unlock_hint(&mut self, id: u64, point: Option<[f32; 2]>, ctx: &egui::Context) {
-        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked())
+        if !matches!(self.phase, Phase::Idle)
+            || !self.display_layout_is_current()
+            || !self.pins.get(&id).is_some_and(|pin| pin.locked())
         {
             return;
         }
@@ -1846,8 +1979,8 @@ impl Snip2Pin {
             ctx.request_repaint_of(pin_menu_id());
         }
         if self.layer_presentation.is_some() {
-            for &display in self.layers.keys() {
-                ctx.request_repaint_of(layer_id(display));
+            for layer in self.layers.values() {
+                ctx.request_repaint_of(layer.viewport_id());
             }
         }
     }
@@ -1906,14 +2039,20 @@ impl Snip2Pin {
         };
         let demo = self.demo;
         for (&display_id, layer) in &self.layers {
-            let selection = layer.selection.clone();
+            let current_display_generation = self.display_generation.clone();
+            let display_generation = layer.generation;
+            let current = current_display_generation.load(Ordering::Acquire) == display_generation;
+            let viewport_id = layer.viewport_id();
+            // The layer owns the session. Retained framework callbacks must not
+            // keep a cancelled selection (and its highlight) alive.
+            let selection = layer.selection.as_ref().map(Arc::downgrade);
             let positioned = layer.positioned.clone();
             let hint_raised = self
                 .layer_presentation
                 .as_ref()
                 .map(|hint| hint.raised.clone());
             let events = self.sender.clone();
-            let active = selection.is_some();
+            let active = current && selection.is_some();
             let preparing_capture = active
                 && cfg!(target_os = "windows")
                 && self
@@ -1962,7 +2101,10 @@ impl Snip2Pin {
                 // Dock overlays cover X11 panels without reserving work space.
                 .with_window_type(egui::X11WindowType::Dock)
                 .with_visible(
-                    cfg!(target_os = "macos") || (active && !preparing_capture) || hint_ready,
+                    current
+                        && (cfg!(target_os = "macos")
+                            || (active && !preparing_capture)
+                            || hint_ready),
                 );
             if let Some(bounds) = bounds {
                 let bounds = if cfg!(target_os = "windows") {
@@ -1971,7 +2113,7 @@ impl Snip2Pin {
                             input
                                 .raw
                                 .viewports
-                                .get(&layer_id(display_id))
+                                .get(&viewport_id)
                                 .and_then(|viewport| viewport.native_pixels_per_point)
                         })
                         .unwrap_or(display.scale);
@@ -1989,11 +2131,52 @@ impl Snip2Pin {
                     .with_inner_size(bounds.size());
             }
             ctx.show_viewport_deferred(
-                layer_id(display_id),
+                viewport_id,
                 builder.with_mouse_passthrough(!active || preparing_capture),
                 move |ui, _| {
+                    if retire_stale_layer(ui.ctx(), display_generation, &current_display_generation)
+                    {
+                        return;
+                    }
+                    let selection = selection.as_ref().and_then(|selection| selection.upgrade());
+                    if active && selection.is_none() {
+                        return;
+                    }
+                    // Cancellation remains reachable while native display
+                    // dimensions are changing, before any geometry preparation.
+                    if let Some(id) = session
+                        && ui.input(|input| {
+                            input.key_pressed(egui::Key::Escape)
+                                || input.viewport().close_requested()
+                        })
+                    {
+                        let _ = events.send(Event::Selection {
+                            request_id: id,
+                            display_id,
+                            action: overlay::Action::Cancel,
+                        });
+                        ui.ctx().request_repaint_of(ViewportId::ROOT);
+                        return;
+                    }
                     // Root logic reports any pin-adapter failure.
                     let _ = platform::prepare_floating_windows();
+                    // AppKit preparation can synchronously deliver a display
+                    // notification. Recheck before any geometry or painting.
+                    if retire_stale_layer(ui.ctx(), display_generation, &current_display_generation)
+                    {
+                        return;
+                    }
+                    if cfg!(target_os = "macos") && !positioned.swap(true, Ordering::AcqRel) {
+                        // AppKit can relocate a retained layer when a display is
+                        // disconnected. An unchanged builder does not restore it
+                        // after reconnection. Apply this capture's topology once,
+                        // before waiting for native resize input.
+                        let zoom = ui.ctx().zoom_factor();
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::InnerSize(size / zoom));
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::OuterPosition(position / zoom));
+                    }
                     if cfg!(target_os = "macos") && !demo {
                         // Native bounds can change after this frame's input was
                         // collected. Wait for the resize event instead of squeezing
@@ -2003,7 +2186,6 @@ impl Snip2Pin {
                         if (actual.x - expected.x).abs() > OVERLAY_SIZE_TOLERANCE
                             || (actual.y - expected.y).abs() > OVERLAY_SIZE_TOLERANCE
                         {
-                            ui.ctx().request_repaint();
                             return;
                         }
                     }
@@ -2380,11 +2562,24 @@ impl eframe::App for Snip2Pin {
             self.cancel_capture(ctx);
         }
         self.update_icon(ctx);
-        if let Err(error) = platform::prepare_floating_windows() {
-            self.message = Some(error);
+        let events = self.events.try_iter().collect::<Vec<_>>();
+        let displays_changed = events
+            .iter()
+            .any(|event| matches!(event, Event::DisplaysChanged));
+        if displays_changed {
+            // Invalidate the frozen session before consuming any queued crop or
+            // capture result, even if that input reached the channel first.
+            self.handle_event(Event::DisplaysChanged, ctx);
         }
-        while let Ok(event) = self.events.try_recv() {
-            self.handle_event(event, ctx);
+        for event in events {
+            if !matches!(event, Event::DisplaysChanged) {
+                self.handle_event(event, ctx);
+            }
+        }
+        // Let this pass retire invalidated windows before preparing the new
+        // layers. Deferred callbacks also reject the previous display generation.
+        if !displays_changed && let Err(error) = platform::prepare_floating_windows() {
+            self.message = Some(error);
         }
         if let Some(until) = self.layer_presentation.as_ref().and_then(|hint| hint.until) {
             let remaining = until.saturating_duration_since(Instant::now());
@@ -2541,8 +2736,18 @@ impl eframe::App for Snip2Pin {
     }
 }
 
+#[cfg(test)]
 fn layer_id(display_id: u32) -> ViewportId {
-    ViewportId::from_hash_of(("selection", display_id))
+    ViewportId::from_hash_of(("selection", display_id, 0_u64))
+}
+
+fn retire_stale_layer(ctx: &egui::Context, generation: u64, current: &AtomicU64) -> bool {
+    if current.load(Ordering::Acquire) == generation {
+        return false;
+    }
+    ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(true));
+    ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+    true
 }
 
 fn register_shortcut(
@@ -2581,6 +2786,26 @@ fn display_areas(displays: &[Display], demo: bool) -> Vec<egui::Rect> {
     } else {
         platform::pin_work_areas(displays)
     }
+}
+
+/// Keep work areas in the pin's capture coordinate domain across mixed DPI.
+fn pin_work_areas(
+    displays: &[Display],
+    areas: &[egui::Rect],
+    source_scale: f32,
+) -> Vec<egui::Rect> {
+    displays
+        .iter()
+        .zip(areas)
+        .map(|(display, area)| {
+            let factor = if cfg!(target_os = "macos") {
+                1.0
+            } else {
+                display.scale / source_scale
+            };
+            egui::Rect::from_min_max(area.min * factor, area.max * factor)
+        })
+        .collect()
 }
 
 fn pin_focused(ctx: &egui::Context, id: u64) -> bool {

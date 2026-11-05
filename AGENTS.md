@@ -4,11 +4,11 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 ## 项目原则
 
-- 中文显示名为 `Snip2Pin · 截图置顶`，英文显示名为 `Snip2Pin`；界面、打包本地化资源及文档保持一致。
+- 中文显示名为 `Snip2Pin · 截图置顶`，英文显示名为 `Snip2Pin`；界面、打包本地化资源及文档保持一致。运行时名称统一引用 `APP_NAME`，带名称的翻译通过模板填入，不在各使用处重复判断正式版或开发版。
 - 产品定位是截图 + Pin：框选截图、自动复制、原位置顶、拖动、手动缩放和关闭；菜单栏入口、开机自启、快捷键、主题和图标仅作为基础设置，保持项目简洁。
 - README 的使用介绍保持简洁，中英文同步，只保留基本操作、快捷键、基础设置和必要的权限说明。
 - 主页采用紧凑直达布局，使用系统原生边缘拖拽调整窗口大小：一个截图主按钮，快捷键与主题、图标、开机自启直接可见；版本与 GitHub Releases 入口固定在底部。长快捷键可换行，小窗口内容可滚动，不把设置拆成多页，不增加常驻操作说明。
-- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置目录只使用 `Snip2Pin`，应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持用户选定的大小写）；产品身份与仓库所有者无关。
+- 代码、配置路径和打包元数据不得包含个人姓名或账号，也不保留旧产品名称。配置根目录只使用 `Snip2Pin`，发行应用标识统一为 `io.github.Snip2Pin.Snip2Pin`（保持大小写）；产品身份与仓库所有者无关。本地 macOS 开发版是明确例外：显示名 `Snip2Pin Dev`（中文 `Snip2Pin Dev · 截图置顶`），标识 `io.github.Snip2Pin.Snip2Pin.dev`，固定安装到 `/Applications/Snip2Pin Dev.app`，设置放在 `Snip2Pin/dev`，使用独立自启入口；不覆盖正式版及其授权。
 - 网页交互演示使用 GitHub Pages，复用实际 Rust/WASM 界面；建立并验证页面之前，不添加尚不存在的演示链接。
 - 公开演示使用 `cargo xtask preview-site` 构建，只打包生成的网页资源、开源字体及许可声明，不上传本机系统字体、源码目录、配置或凭据。字体来源固定版本并校验 SHA-256，子集化后保留许可和版权、使用独立字体名称。网页字体不进入原生应用资源。
 - `pages.yml` 对 PR 只构建检查，仅从 `main` 部署到 `github-pages` 环境；网页资源可随主分支更新，不触发应用发版、签名、标签或 GitHub Release。网站部署权限仅授予部署任务，不使用 `release` 环境或本机身份。
@@ -24,6 +24,7 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 - CI 只运行验证，不因普通提交或合并自动发版；本地开发构建不代表已经发版。
 - 当前采用 GitHub Releases 安装包分发，不上 App Store，暂不开通付费签名服务。默认明确选择 `unverified`：macOS 仅使用 ad-hoc 完整性签名、未经公证，Windows 可执行文件未签名；文件名和发布说明必须如实标识。`signed` 为未来取得正式凭据后的选项，签名失败不得自动降级。不清除 quarantine、不关闭 Gatekeeper/SmartScreen、不自动信任自签证书；用户使用系统允许的方式自行确认。不得承诺未公证包更新可无感保留 macOS 截屏授权。
 - 自动覆盖所有显示器，每次截图刷新屏幕布局；初始置顶保持原始显示尺寸，仅超过可用区时等比缩小。截图只校验非空和源图边界，不设置额外的 2 像素或 2 点下限，原生窗口和宿主决定实际最小尺寸。高亮边框为 1 个物理像素。按钮不得决定图片尺寸，不为容纳按钮放大小图或拉伸短边；不增加 DPI 下限换算、几何反馈或定位重试。复制始终使用原始像素。
+- 截图采集或框选期间显示器配置改变时，取消本次会话并释放旧截图层的输入拦截，保留已有贴图，不自动重拍。macOS 通过系统屏幕配置通知唤醒 UI，不替换应用 delegate 或轮询；主页隐藏时也要完成旧层撤销及新回调发布。图层代际随创建时的布局固定，不在发布回调时重新赋值；配置变化须撤销全部旧截图窗口，包括仍连接的屏幕，不复用旧绘制表面。取消后缓存的回调不得继续持有或绘制选区。拒绝晚到采集结果、选区事件和旧代际绘制，枚举失败仍须释放输入。事件出队后仍可能收到配置通知，结果接收、选区提交和贴图首帧确认都须检查布局代际，不得给旧画面套用最新代际。同步刷新已有贴图按钮使用的可用区域，不改动原图、初始放置或原生窗口几何。Esc 和原生关闭不得被尺寸校验或窗口准备挡住。
 - 鼠标／触摸屏单指拖动和边缘缩放交给系统，比例、Shift 和边缘锚点遵循各平台原生惯例，不再强制统一手写手势。图片内容铺满原生内容区，以系统实际位置和尺寸为准；UI 只分派语义输入，不计算窗口几何。键盘缩放及恢复原始尺寸单次请求尺寸；滚轮和捏合缩放固定手势开始时鼠标指向的图片点，由平台适配器从实际内容区计算，使用一次原生调用同时更新位置和尺寸。遵守系统约束，不重试或补偿；Wayland 缺少全局位置时保留尺寸调整，不猜测锚点位置。
 - 缩放和初始适配只改变显示尺寸，复制始终使用原始截图；原始像素不能被覆盖或反复重采样。显示器、DPI 和应用缩放按统一单位换算；复制、关闭按钮仍须在可用区内。
 - 菜单栏／托盘及 macOS Dock 提供打开主页、截图和关闭未锁定贴图等操作；关闭主页时保留托盘和贴图，通过菜单退出才关闭应用。明确打开主页或点击 macOS Dock 图标时恢复隐藏／最小化并激活主页，使其显示到其他普通应用之前，保持普通窗口层级；不能用 key-window 状态代替应用前台状态，也不靠永久置顶、定时或反复聚焦补偿。菜单事件唤醒 UI，不使用后台轮询；无托盘后端时保留主页，关闭主页走统一退出确认。macOS Dock 菜单通过官方 NIB outlet 接入，退出和重新打开的 AppleEvent 路由独立于菜单资源加载，不替换 winit 的应用 delegate 或窗口类。
@@ -91,9 +92,9 @@ Canonical repository: `https://github.com/Snip2Pin/Snip2Pin`.
 
 - 实现前先弄清用户要解决什么问题、为什么需要这个行为，以及怎样才算使用顺畅。区分用户的目标与用户提出的具体做法，不能把具体做法当成需求的全部；实现和验证都要围绕目标展开。
 - 新方案或评审建议与用户先前指令、已确认需求冲突时，说明冲突、依据与推荐方案，向用户确认；确认前不实施冲突部分，其他独立工作继续。不能擅自覆盖旧要求，也不能仅因旧要求而默认否决新方案。
-- PR 正文和评论面向不了解内部沟通的贡献者，只保留问题背景、设计依据、实现、修复的 bug，以及必要的验证结论和限制。技术评审发现放在对应 PR 评论中；仓库文档只保留当前使用方法、开发命令、架构与长期维护规范。
+- PR 标题保持简短；正文和进度评论只列出问题列表、修复列表，面向不了解内部沟通的贡献者，不展开调试过程或堆叠实现细节。技术评审发现放在对应 PR 评论中；仓库文档只保留当前使用方法、开发命令、架构与长期维护规范。
 - 公开引用 commit、PR、Issue、CI 运行或代码位置时使用可点击链接，便于追溯；commit 用短 SHA 作链接文字并指向完整 SHA，PR／Issue 使用编号作链接文字。发布前确认链接目标真实存在。
-- 不得将聊天内容、指令原文、个人信息、偏好与授权经过、本地操作／安装记录、内部协作过程、agent 角色或模型配置写入公开 PR、Issue、提交说明等。公开内容须先提炼为必要的项目技术信息，不直接复制对话或内部评审报告；验收仅记录提交、平台、场景和技术结论。
+- 不得将聊天内容、指令原文、个人信息、偏好与授权经过、本地调试细节、操作／安装记录、内部协作过程、agent 角色或模型配置写入公开 PR、Issue、提交说明等。公开内容须先提炼为必要的项目技术信息，不直接复制对话或内部评审报告；验收仅记录提交、平台、场景和技术结论。
 - 方案必须考虑通用性和可维护性，覆盖不同平台、显示器布局、DPI、缩放比例、图片尺寸和边缘位置。把共同规则封装在合适的模块中，平台差异留在适配层；保持项目简洁，不为假设中的需求增加抽象或功能。
 - 禁止通过硬编码位置、偏移量或针对某个场景的特殊数值修补现象。坐标和布局应从实际边界及统一的坐标换算推导，样式参数和阈值应有明确含义并集中管理。仅把散落数字改成常量，不能代替对模型和计算方式的改进。
 - 出现偏移或位置异常时，先定位坐标单位、DPI、缩放、窗口边框、原生系统约束及生命周期中的根因。不得用反复移动、缩放、重试或轮询来掩盖错误；之前用定位重试补偿偏移既未解决根因，又引入了死循环问题，不能再采用这种做法。
@@ -164,8 +165,9 @@ and hyphens), a nonempty Chinese or English description, and at most 100 charact
 Examples: `fix(pin): 修复顶部按钮位置`, `ci: automate release signing`.
 Use `!` and a `BREAKING CHANGE:` body/footer when changing incompatible behavior.
 Explain why in the body when useful; avoid vague subjects such as `update` or `fix`.
-PR descriptions state the problem/result, scope, validation and unverified native
-coverage; link issues when applicable. `messages.yml` checks open PR titles on edits and
+Keep PR titles short and descriptions/progress comments to problem and fix lists;
+omit conversations and local debugging details. Link issues when applicable.
+`messages.yml` checks open PR titles on edits and
 all branch commits on updates; fix/reword invalid commits before merging.
 Squash commits use the validated PR title and PR body. Do not bypass the required
 `messages` check. Conventional formatting never authorizes a version bump/release.
@@ -323,15 +325,20 @@ Linux X11, and Wayland. Document compositor-controlled pinning and shortcuts.
 Do not commit private screenshots, credentials, toolchains, caches, or build output.
 Explicitly requested README illustrations may use generated public sample images
 from the shared UI sandbox; label their source and keep binary assets in Git LFS.
-Keep macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
+Keep the release macOS bundle ID `io.github.Snip2Pin.Snip2Pin` stable. Local certificate
 signing is for development; it does not mean an app is notarized for distribution.
 Settings use the platform configuration root plus `Snip2Pin`; local macOS signing
 material uses `~/Library/Application Support/Snip2Pin/signing`, outside the repo.
 Reuse the existing certificate; do not regenerate credentials during a rename.
 An explicitly requested identifier change uses `--install --migrate-identity`,
 which preserves the certificate requirement; later updates use ordinary `--install`.
-`build.sh --install` performs a local development update. Formal distribution
-uses the manual workflows documented in docs/workflow.md, production signing
+`build.sh --install` enables `local-dev` and updates only `Snip2Pin Dev.app` with
+bundle ID `io.github.Snip2Pin.Snip2Pin.dev`, settings under `Snip2Pin/dev`, and
+build artifacts under `target/local-dev`. The runtime identity, localized names,
+bundle metadata, signing requirement, registration and login entry must agree.
+macOS packaging checks the binary identity and rejects a development executable
+in a release bundle. The release installation and its permissions stay intact.
+Formal distribution uses the manual workflows documented in docs/workflow.md, production signing
 and notarization only when `signed` is explicitly selected; default `unverified`
 packages are not Apple-notarized. Never use the local development certificate to release.
 

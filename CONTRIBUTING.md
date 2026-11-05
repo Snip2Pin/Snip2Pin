@@ -61,16 +61,31 @@ bash packaging/macos/test-signing.sh
 bash packaging/macos/build.sh --install
 ```
 
+This command installs **Snip2Pin Dev** at `/Applications/Snip2Pin Dev.app`, using
+`io.github.Snip2Pin.Snip2Pin.dev` and the `local-dev` Cargo feature. It keeps the
+release app and its permissions separate. Preferences live under
+`~/Library/Application Support/Snip2Pin/dev`; login startup uses the development
+bundle identifier and remains disabled by default. Quit the other app before
+testing to avoid global shortcut conflicts. Request screen recording access from
+Snip2Pin Dev once as needed; later builds reuse the same path and certificate,
+without guaranteeing that macOS will never ask again.
+
+Repeat the same command for updates, then open `/Applications/Snip2Pin Dev.app`.
+Development build artifacts use `target/local-dev`, leaving ordinary release
+builds separate. Release workflows never enable `local-dev`; macOS packaging
+checks the binary's `--version --app-id` before assigning a bundle identity.
+
 Keep the private key and password outside the repository. Trust the certificate
 only for code signing in your user account. Local development signing is not
 Developer ID notarization; see [the workflow](docs/workflow.md) for distribution.
-The installer preserves signing identity and settings and does not stop the
+The development installer preserves signing identity and settings and does not stop the
 running app. Quit it before installing, then reopen it yourself.
 
 Preferences live in `~/Library/Application Support/Snip2Pin` on macOS,
 `%APPDATA%\Snip2Pin` on Windows, and `$XDG_CONFIG_HOME/Snip2Pin`
 (`~/.config/Snip2Pin` by default) on Linux. The bundle identifier is
-`io.github.Snip2Pin.Snip2Pin`. Only an explicitly requested identifier change
+`io.github.Snip2Pin.Snip2Pin` for releases; the local macOS development exception
+is described above. Only an explicitly requested development identifier change
 uses `--install --migrate-identity`; ordinary updates use `--install`.
 
 Regenerate all icon PNGs from their editable SVG sources with `cargo xtask icons`.
