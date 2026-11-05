@@ -15,6 +15,7 @@ fn app() -> Snip2Pin {
         gate: CaptureGate::default(),
         capture_worker: None,
         display_generation: Arc::new(AtomicU64::new(0)),
+        applied_display_generation: 0,
         #[cfg(target_os = "macos")]
         _display_observer: None,
         layers: BTreeMap::new(),
@@ -1049,6 +1050,367 @@ fn display_changes_cancel_capturing_and_selecting_without_losing_existing_pins()
             "a retired callback must not restore input, focus or geometry"
         );
         assert!(app.events.try_recv().is_err());
+    }
+}
+
+#[test]
+fn display_notification_during_refresh_keeps_replacement_layers_stale() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let generation = app.display_generation.clone();
+    let sender = app.sender.clone();
+    app.refresh_displays(&ctx, || {
+        generation.fetch_add(1, Ordering::AcqRel);
+        sender.send(Event::DisplaysChanged).unwrap();
+        Ok(vec![capture::demo().display])
+    });
+    assert!(!app.display_layout_is_current());
+    app.begin_capture(&ctx);
+    assert!(
+        app.capture_worker.is_none(),
+        "an unsettled layout cannot start capture"
+    );
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    output.textures_delta.clear();
+    let stale = app.layers[&0].viewport_id();
+    assert_eq!(output.viewport_output[&stale].builder.visible, Some(false));
+    assert_eq!(
+        output.viewport_output[&stale].builder.mouse_passthrough,
+        Some(true)
+    );
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        eframe::App::logic(&mut app, ui.ctx(), &mut frame);
+    });
+    output.textures_delta.clear();
+    assert!(app.display_layout_is_current());
+    assert_ne!(app.layers[&0].viewport_id(), stale);
+    assert!(!output.viewport_output.contains_key(&stale));
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
+fn display_notification_before_pin_frame_cannot_complete_an_expired_capture() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let id = app.gate.begin().unwrap();
+    app.accept_capture(id, Ok(vec![capture::demo()]), None, &ctx);
+    app.selection_action(
+        id,
+        0,
+        overlay::Action::Select(geometry::PixelRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 20,
+        }),
+        &ctx,
+    );
+    app.display_generation.fetch_add(1, Ordering::AcqRel);
+    app.handle_event(
+        Event::PinFrameDrawn {
+            session: id,
+            pin_id: 1,
+        },
+        &ctx,
+    );
+    assert!(
+        app.pins.is_empty(),
+        "an invalidated pending pin must be released"
+    );
+    assert!(matches!(app.phase, Phase::Idle));
+}
+
+#[test]
+fn display_reconfiguration_clears_every_capture_and_hint_state() {
+    for state in [
+        "idle",
+        "capturing",
+        "selecting",
+        "pending_pin",
+        "preparing_hint",
+        "visible_hint",
+    ] {
+        for no_displays in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let mut app = tiny_pin_app(&ctx);
+            app.home_visible = false;
+            app.set_pin_locked(1, true, &ctx);
+            let preserved = app.pins[&1].pixels.clone();
+            let id = app.gate.begin().unwrap();
+            app.phase = Phase::Capturing;
+            if matches!(state, "selecting" | "pending_pin") {
+                app.accept_capture(id, Ok(vec![capture::demo_windows(None)]), None, &ctx);
+                if state == "pending_pin" {
+                    app.selection_action(
+                        id,
+                        0,
+                        overlay::Action::Select(geometry::PixelRect {
+                            x: 0,
+                            y: 0,
+                            width: 20,
+                            height: 20,
+                        }),
+                        &ctx,
+                    );
+                }
+            } else if state != "capturing" {
+                app.reset_capture(&ctx);
+            }
+            if matches!(state, "preparing_hint" | "visible_hint") {
+                app.show_unlock_hint(1, None, &ctx);
+                if state == "visible_hint" {
+                    let hint = app.layer_presentation.as_ref().unwrap().raised.clone();
+                    app.handle_event(
+                        Event::LayerFrameDrawn {
+                            hint: hint.clone(),
+                            display: 0,
+                            bounds: test_hint_bounds(),
+                        },
+                        &ctx,
+                    );
+                    app.handle_event(Event::LayerVisibleFrameDrawn { hint, display: 0 }, &ctx);
+                }
+            }
+            let old_hint = app
+                .layer_presentation
+                .as_ref()
+                .map(|hint| hint.raised.clone());
+            let old_viewport = app.layers[&0].viewport_id();
+            // Reuse a physical ID while changing its origin, size and density;
+            // then repeat invalidation before the new surfaces have painted.
+            for pass in 0..3 {
+                app.refresh_displays(&ctx, || {
+                    Ok(if no_displays {
+                        Vec::new()
+                    } else {
+                        vec![Display {
+                            id: 0,
+                            origin: [-800.0, -600.0],
+                            size: [800.0, 600.0],
+                            scale: 1.0 + pass as f32 * 0.5,
+                        }]
+                    })
+                });
+            }
+            if let Some(hint) = old_hint {
+                app.handle_event(
+                    Event::LayerFrameDrawn {
+                        hint: hint.clone(),
+                        display: 0,
+                        bounds: test_hint_bounds(),
+                    },
+                    &ctx,
+                );
+                app.handle_event(Event::LayerVisibleFrameDrawn { hint, display: 0 }, &ctx);
+            }
+            app.handle_event(
+                Event::Ready {
+                    request_id: id,
+                    result: Ok(vec![capture::demo()]),
+                    pointer: None,
+                },
+                &ctx,
+            );
+            app.handle_event(
+                Event::PinFrameDrawn {
+                    session: id,
+                    pin_id: 2,
+                },
+                &ctx,
+            );
+            app.selection_action(id, 0, overlay::Action::Activate, &ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.show_layers(ui.ctx());
+                app.paint_pending_layers(ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert!(matches!(app.phase, Phase::Idle), "state={state}");
+            assert!(app.layer_presentation.is_none());
+            assert_eq!(
+                app.pins.len(),
+                1,
+                "only the completed pin survives, state={state}"
+            );
+            assert!(app.pins[&1].locked());
+            assert!(Arc::ptr_eq(&app.pins[&1].pixels, &preserved));
+            assert!(!app.home_visible);
+            assert!(!output.viewport_output.contains_key(&old_viewport));
+            for layer in app.layers.values() {
+                assert!(layer.selection.is_none());
+                assert_eq!(
+                    output.viewport_output[&layer.viewport_id()]
+                        .builder
+                        .mouse_passthrough,
+                    Some(true)
+                );
+            }
+            assert!(
+                app.capture_worker.is_none(),
+                "hot-plug cannot start a capture"
+            );
+        }
+    }
+}
+
+#[test]
+fn display_change_refreshes_existing_pin_controls_without_changing_placement() {
+    for (origin, size, scale) in [
+        ([0.0, 0.0], [680.0, 420.0], 1.0),
+        ([-680.0, -420.0], [800.0, 600.0], 2.0),
+        ([0.0, 0.0], [320.0, 240.0], 1.25),
+    ] {
+        for locked in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            let mut app = app();
+            let mut snapshot = capture::demo();
+            snapshot.display.origin = [1200.0, 100.0];
+            let session = app.gate.begin().unwrap();
+            app.accept_capture(session, Ok(vec![snapshot]), None, &ctx);
+            app.selection_action(
+                session,
+                0,
+                overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 300,
+                    height: 200,
+                }),
+                &ctx,
+            );
+            app.reset_capture(&ctx);
+            app.set_pin_locked(1, locked, &ctx);
+            let initial = app.pins[&1].initial;
+            let pixels = app.pins[&1].pixels.clone();
+            let display = Display {
+                id: 9,
+                origin,
+                size,
+                scale,
+            };
+            let actual = egui::Rect::from_min_size(
+                egui::Pos2::from(display.position()) + egui::vec2(10.0, 10.0),
+                egui::vec2(180.0, 100.0),
+            );
+            // The compositor relocates a surviving pin. The app refreshes only
+            // the work areas used by its controls, never the window geometry.
+            app.refresh_displays(&ctx, || Ok(vec![display]));
+            let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_pins(ui.ctx()));
+            root.textures_delta.clear();
+            assert_eq!(
+                root.viewport_output[&pin_id(1)].builder.position,
+                Some(initial.min)
+            );
+            let mut input = egui::RawInput {
+                viewport_id: pin_id(1),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, actual.size())),
+                events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))],
+                ..Default::default()
+            };
+            input.viewports.insert(
+                pin_id(1),
+                egui::ViewportInfo {
+                    inner_rect: Some(actual),
+                    outer_rect: Some(actual),
+                    native_pixels_per_point: Some(scale),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(input, |ui| {
+                root.viewport_output[&pin_id(1)]
+                    .viewport_ui_cb
+                    .as_ref()
+                    .unwrap()(ui);
+            });
+            output.textures_delta.clear();
+            let buttons = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                            if rect.rect.size() == egui::Vec2::splat(pin::METRICS.button)
+                    )
+                })
+                .count();
+            assert_eq!(
+                buttons,
+                pin::Control::ALL.len(),
+                "controls must remain reachable on the replacement display"
+            );
+            assert!(
+                output.viewport_output[&pin_id(1)]
+                    .commands
+                    .iter()
+                    .all(|command| !matches!(
+                        command,
+                        ViewportCommand::OuterPosition(_) | ViewportCommand::InnerSize(_)
+                    ))
+            );
+            assert_eq!(app.pins[&1].initial, initial);
+            assert_eq!(app.pins[&1].locked(), locked);
+            assert!(Arc::ptr_eq(&app.pins[&1].pixels, &pixels));
+        }
+    }
+}
+
+#[test]
+fn display_notification_after_event_drain_rejects_ready_and_selection() {
+    for selecting in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let id = app.gate.begin().unwrap();
+        app.phase = Phase::Capturing;
+        if selecting {
+            app.accept_capture(id, Ok(vec![capture::demo_windows(None)]), None, &ctx);
+        }
+        // The root already took its event batch. A synchronous native call can
+        // now deliver a display notification before the next event is consumed.
+        app.display_generation.fetch_add(1, Ordering::AcqRel);
+        app.sender.send(Event::DisplaysChanged).unwrap();
+        let event = if selecting {
+            Event::Selection {
+                request_id: id,
+                display_id: 0,
+                action: overlay::Action::Select(geometry::PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 20,
+                    height: 20,
+                }),
+            }
+        } else {
+            Event::Ready {
+                request_id: id,
+                result: Ok(vec![capture::demo_windows(None)]),
+                pointer: None,
+            }
+        };
+        let mut event = Some(event);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            if let Some(event) = event.take() {
+                app.handle_event(event, ui.ctx());
+            }
+            app.show_layers(ui.ctx());
+        });
+        output.textures_delta.clear();
+        assert!(app.pins.is_empty(), "an expired crop must not create a pin");
+        assert!(
+            !output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| { matches!(command, egui::OutputCommand::CopyImage(_)) }),
+            "an expired crop must not reach the clipboard"
+        );
+        assert!(
+            matches!(app.phase, Phase::Idle),
+            "late results must not revive selection"
+        );
+        assert!(app.layers.values().all(|layer| layer.selection.is_none()));
     }
 }
 

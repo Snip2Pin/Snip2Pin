@@ -320,6 +320,7 @@ pub struct Snip2Pin {
     gate: CaptureGate,
     capture_worker: Option<capture::Worker>,
     display_generation: Arc<AtomicU64>,
+    applied_display_generation: u64,
     #[cfg(target_os = "macos")]
     _display_observer: Option<platform::macos_displays::DisplayChanges>,
     layers: BTreeMap<u32, Layer>,
@@ -516,6 +517,7 @@ impl Snip2Pin {
             gate: CaptureGate::default(),
             capture_worker: None,
             display_generation,
+            applied_display_generation: 0,
             #[cfg(target_os = "macos")]
             _display_observer: display_observer,
             layers,
@@ -567,7 +569,10 @@ impl Snip2Pin {
         for id in self.pins.keys() {
             ui::pin::forget_input(ctx, *id);
         }
-        if !matches!(self.phase, Phase::Idle) || self.recording.blocks_input(ctx) {
+        if !matches!(self.phase, Phase::Idle)
+            || self.recording.blocks_input(ctx)
+            || !self.display_layout_is_current()
+        {
             return;
         }
         self.clear_layer_presentation(ctx);
@@ -841,7 +846,11 @@ impl Snip2Pin {
                 }
                 if matches!(&self.phase, Phase::Selecting { id, pending_pin: Some(pending), .. } if *id == session && *pending == pin)
                 {
-                    self.reset_capture(ctx);
+                    if self.display_layout_is_current() {
+                        self.reset_capture(ctx);
+                    } else {
+                        self.cancel_capture(ctx);
+                    }
                 }
             }
             #[cfg(target_os = "macos")]
@@ -1060,6 +1069,7 @@ impl Snip2Pin {
             .display_generation
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
+        self.applied_display_generation = generation;
         self.cancel_capture(ctx);
         for layer in self.layers.values() {
             // Retire every old surface, including displays whose physical IDs
@@ -1079,12 +1089,32 @@ impl Snip2Pin {
                 Vec::new()
             }
         };
+        self.refresh_pin_work_areas(&displays, ctx);
         let layers = displays
             .into_iter()
             .map(|display| (display.id, Layer::idle(display, generation)))
             .collect::<BTreeMap<_, _>>();
         self.layers = layers;
         self.queue_layer_paints(self.layers.keys().copied().collect::<Vec<_>>(), ctx);
+    }
+
+    fn display_layout_is_current(&self) -> bool {
+        self.applied_display_generation == self.display_generation.load(Ordering::Acquire)
+    }
+
+    fn refresh_pin_work_areas(&mut self, displays: &[Display], ctx: &egui::Context) {
+        if self.pins.is_empty() || displays.is_empty() {
+            return;
+        }
+        let areas = display_areas(displays, self.demo);
+        for (&id, pin) in &mut self.pins {
+            let areas = pin_work_areas(displays, &areas, pin.display_scale);
+            if let Some(area) = areas.first() {
+                pin.screen = *area;
+            }
+            pin.screen_areas = Arc::new(areas);
+            ctx.request_repaint_of(pin_id(id));
+        }
     }
 
     fn accept_capture(
@@ -1094,9 +1124,16 @@ impl Snip2Pin {
         pointer: Option<[f32; 2]>,
         ctx: &egui::Context,
     ) {
-        if !self.gate.complete(id) {
+        if self.gate.active() != Some(id) {
             return;
         }
+        // Notifications can arrive after root drained its event batch. Do not
+        // adopt the new epoch for an old result while invalidation is queued.
+        if !self.display_layout_is_current() {
+            self.cancel_capture(ctx);
+            return;
+        }
+        self.gate.complete(id);
         let result = result.and_then(|snapshots| {
             let limit = ctx.input(|input| input.max_texture_side);
             if snapshots.iter().any(|snapshot| {
@@ -1113,7 +1150,16 @@ impl Snip2Pin {
         });
         match result {
             Ok(snapshots) if !snapshots.is_empty() => {
-                let generation = self.display_generation.load(Ordering::Acquire);
+                let generation = self.applied_display_generation;
+                let displays = snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.display.clone())
+                    .collect::<Vec<_>>();
+                self.refresh_pin_work_areas(&displays, ctx);
+                if !self.display_layout_is_current() {
+                    self.cancel_capture(ctx);
+                    return;
+                }
                 self.active_display = pointer
                     .and_then(|point| snapshots.iter().find(|shot| shot.display.contains(point)))
                     .or_else(|| snapshots.first())
@@ -1201,6 +1247,10 @@ impl Snip2Pin {
         action: overlay::Action,
         ctx: &egui::Context,
     ) {
+        if !self.display_layout_is_current() {
+            self.cancel_capture(ctx);
+            return;
+        }
         let Phase::Selecting {
             id: current,
             snapshots,
@@ -1232,7 +1282,6 @@ impl Snip2Pin {
             && let Some(snapshot) = snapshots.iter().find(|shot| shot.display.id == display_id)
             && let Some(pixels) = capture::crop(&snapshot.pixels, rect)
         {
-            self.next_pin += 1;
             let placement = geometry::pin_placement(
                 rect,
                 snapshot.pixel_size(),
@@ -1240,12 +1289,6 @@ impl Snip2Pin {
                 snapshot.display.logical_size(),
             );
             let pixels = Arc::new(pixels);
-            let texture = ctx.load_texture(
-                format!("pin-{}", self.next_pin),
-                pixels.clone(),
-                egui::TextureOptions::LINEAR,
-            );
-            ctx.copy_image((*pixels).clone());
             let displays: Vec<_> = self
                 .layers
                 .values()
@@ -1262,21 +1305,20 @@ impl Snip2Pin {
                     // if its warmed layer is no longer in the topology snapshot.
                     display_areas(std::slice::from_ref(&snapshot.display), self.demo)[0]
                 });
-            let screen_areas = Arc::new(
-                displays
-                    .iter()
-                    .zip(areas)
-                    .map(|(display, area)| {
-                        // Normalize mixed-DPI bounds into the capture's coordinates.
-                        let factor = if cfg!(target_os = "macos") {
-                            1.0
-                        } else {
-                            display.scale / snapshot.display.scale
-                        };
-                        egui::Rect::from_min_max(area.min * factor, area.max * factor)
-                    })
-                    .collect(),
+            let screen_areas = Arc::new(pin_work_areas(&displays, &areas, snapshot.display.scale));
+            // Native work-area queries may deliver another display notification.
+            // Commit the crop only while its frozen coordinate space is valid.
+            if self.applied_display_generation != self.display_generation.load(Ordering::Acquire) {
+                self.cancel_capture(ctx);
+                return;
+            }
+            self.next_pin += 1;
+            let texture = ctx.load_texture(
+                format!("pin-{}", self.next_pin),
+                pixels.clone(),
+                egui::TextureOptions::LINEAR,
             );
+            ctx.copy_image((*pixels).clone());
             self.pins.insert(
                 self.next_pin,
                 Pin {
@@ -1447,7 +1489,9 @@ impl Snip2Pin {
     }
 
     fn show_unlock_hint(&mut self, id: u64, point: Option<[f32; 2]>, ctx: &egui::Context) {
-        if !matches!(self.phase, Phase::Idle) || !self.pins.get(&id).is_some_and(|pin| pin.locked())
+        if !matches!(self.phase, Phase::Idle)
+            || !self.display_layout_is_current()
+            || !self.pins.get(&id).is_some_and(|pin| pin.locked())
         {
             return;
         }
@@ -2742,6 +2786,26 @@ fn display_areas(displays: &[Display], demo: bool) -> Vec<egui::Rect> {
     } else {
         platform::pin_work_areas(displays)
     }
+}
+
+/// Keep work areas in the pin's capture coordinate domain across mixed DPI.
+fn pin_work_areas(
+    displays: &[Display],
+    areas: &[egui::Rect],
+    source_scale: f32,
+) -> Vec<egui::Rect> {
+    displays
+        .iter()
+        .zip(areas)
+        .map(|(display, area)| {
+            let factor = if cfg!(target_os = "macos") {
+                1.0
+            } else {
+                display.scale / source_scale
+            };
+            egui::Rect::from_min_max(area.min * factor, area.max * factor)
+        })
+        .collect()
 }
 
 fn pin_focused(ctx: &egui::Context, id: u64) -> bool {
