@@ -130,13 +130,21 @@ fn capture_paints_hidden_then_mapped_before_accepting_input() {
         let mut input = egui::RawInput {
             viewport_id: layer_id(0),
             screen_rect: Some(bounds),
-            events: vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
+            events: vec![
+                egui::Event::PointerMoved(bounds.center()),
+                egui::Event::PointerButton {
+                    pos: bounds.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: bounds.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
             ..Default::default()
         };
         input
@@ -187,6 +195,53 @@ fn capture_paints_hidden_then_mapped_before_accepting_input() {
     assert!(app.layer_presentation.as_ref().unwrap().until.is_none());
     app.reset_capture(&ctx);
     assert!(app.layer_presentation.is_none());
+}
+
+#[test]
+fn escape_cancels_before_capture_layer_preparation() {
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = app();
+    let request = app.gate.begin().unwrap();
+    app.accept_capture(request, Ok(vec![capture::demo()]), None, &ctx);
+    let viewport = app.layers[&0].viewport_id();
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| app.show_layers(ui.ctx()));
+    root.textures_delta.clear();
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    input
+        .viewports
+        .insert(viewport, egui::ViewportInfo::default());
+    let mut frame = ctx.run_ui(input, |ui| {
+        root.viewport_output[&viewport]
+            .viewport_ui_cb
+            .as_ref()
+            .unwrap()(ui);
+    });
+    frame.textures_delta.clear();
+    assert!(frame.shapes.is_empty());
+    let events = app.events.try_iter().collect::<Vec<_>>();
+    assert!(
+        matches!(events.as_slice(), [Event::Selection {
+        request_id, action: overlay::Action::Cancel, ..
+    }] if *request_id == request),
+        "Escape must cancel instead of acknowledging a preparation frame"
+    );
+    for event in events {
+        app.handle_event(event, &ctx);
+    }
+    assert!(matches!(app.phase, Phase::Idle));
+    assert!(app.layer_presentation.is_none());
+    assert!(app.layers.values().all(|layer| layer.selection.is_none()));
 }
 
 #[test]
